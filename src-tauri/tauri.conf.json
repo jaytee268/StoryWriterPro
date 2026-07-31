@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "StoryMemory",
+  "version": "0.1.0",
+  "identifier": "com.storymemory.desktop",
+  "build": { "beforeDevCommand": "npm run dev", "devUrl": "http://localhost:1420", "beforeBuildCommand": "npm run build", "frontendDist": "../dist" },
+  "app": { "windows": [{ "title": "StoryMemory", "width": 1440, "height": 920, "minWidth": 1100, "minHeight": 680, "resizable": true }], "security": { "csp": "default-src 'self' http://localhost:1420; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ipc: http://ipc.localhost http://localhost:1420" } },
+  "bundle": { "active": true, "targets": "all", "icon": ["icons/icon.icns"] }
+}
