@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { BookOpen, BrainCircuit, FileText, Gauge, MessageCircle, RefreshCw, Settings2, Upload, X } from 'lucide-react';
+import { BookOpen, BrainCircuit, FileText, Gauge, MessageCircle, PanelLeftClose, PanelLeftOpen, RefreshCw, Settings2, Upload, X } from 'lucide-react';
 import { useAppStore } from './stores/useAppStore';
 import { demoEvents, mindEdges, mindNodes } from './services/mockData';
 import { createStoryRepository, type RuntimeMode, type StoryRepository } from './services/storyRepository';
@@ -28,6 +28,7 @@ export function App() {
   const [loadState, setLoadState] = useState<LoadState>({ status: 'loading' });
   const [selectedSceneId, setSelectedSceneId] = useState('');
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('saved');
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: 'welcome', role: 'assistant', content: 'Willkommen. Ich kenne dein Projekt und helfe dir beim Prüfen.', time: '09:42' }, { id: 'question', role: 'user', content: 'Weiß Marek bereits von der veränderten Paketnummer?', time: '09:43' }, { id: 'answer', role: 'assistant', content: 'Ja. Laut Kapitel 3 erfährt Marek davon. Die Szene ist konsistent.', sources: ['Kapitel 3', 'Szene 2'], time: '09:43' }]);
   const [activeModal, setActiveModal] = useState<'bible' | 'research' | 'import' | null>(null);
@@ -72,7 +73,7 @@ export function App() {
   const renderView = () => {
     if (!workspace) return null;
     if (view === 'dashboard') return <Dashboard project={workspace.project} onOpen={() => setView('editor')} onImport={() => setActiveModal('import')} />;
-    if (view === 'editor') return <EditorView chapters={workspace.chapters} scene={currentScene} chapter={currentChapter} onBack={() => setView('dashboard')} onSelectScene={setSelectedSceneId} onSave={saveScene} onCreateChapter={createChapter} onCreateScene={createScene} onListVersions={listSceneVersions} onRestoreVersion={restoreSceneVersion} onGetEditorPreferences={getEditorPreferences} onSaveEditorPreferences={saveEditorPreferences} onSaveStateChange={setSaveStatus} onBibleUpdate={() => setActiveModal('bible')} onResearch={() => setActiveModal('research')} />;
+    if (view === 'editor') return <EditorView chapters={workspace.chapters} scene={currentScene} chapter={currentChapter} onBack={() => setView('dashboard')} onSelectScene={setSelectedSceneId} onSave={saveScene} onCreateChapter={createChapter} onCreateScene={createScene} onListVersions={listSceneVersions} onRestoreVersion={restoreSceneVersion} onGetEditorPreferences={getEditorPreferences} onSaveEditorPreferences={saveEditorPreferences} onSaveStateChange={setSaveStatus} />;
     if (view === 'bible' || view === 'characters' || view === 'threads') return <StoryBibleView entities={workspace.entities} initialFilter={view === 'characters' ? 'character' : view === 'threads' ? 'plot_thread' : undefined} />;
     if (view === 'timeline') return <TimelineView events={demoEvents} />;
     if (view === 'mindmap') return <MindmapView nodes={mindNodes} edges={mindEdges} />;
@@ -84,15 +85,15 @@ export function App() {
   const saveLabel: Record<SaveStatus, string> = { saved: 'Gespeichert', dirty: 'Nicht gespeichert', saving: 'Speichert …', error: 'Speicherfehler' };
   const topLabel = view === 'dashboard' ? 'Übersicht' : view === 'settings' ? 'Einstellungen' : navItems.find((item) => item.view === view)?.label ?? 'Arbeitsbereich';
 
-  return <div className="app-shell simple-mode">
+  return <div className={`app-shell simple-mode ${sidebarOpen ? 'sidebar-open' : 'sidebar-collapsed'}`}>
     <aside className="simple-sidebar">
       <button className="simple-brand" onClick={() => setView('dashboard')} aria-label="Zum Start"><span className="brand-mark">SM</span><span><strong>StoryMemory</strong><small>Dein Buch vergisst nichts.</small></span></button>
       <div className="simple-project"><span className="eyebrow">DEIN PROJEKT</span><strong>{project?.title ?? 'Workspace'}</strong><span>{project ? 'Band 1 · Entwurf' : 'Wird geladen …'}</span></div>
-      <nav className="simple-nav" aria-label="Hauptnavigation">{navItems.map(({ view: target, label, description, icon: Icon }) => <button key={target} className={`simple-nav-button ${view === target ? 'active' : ''}`} onClick={() => setView(target)}><Icon size={21} /><span><strong>{label}</strong><small>{description}</small></span></button>)}</nav>
-      <div className="simple-sidebar-bottom"><button className="simple-nav-button" onClick={() => setActiveModal('import')}><Upload size={21} /><span><strong>Importieren</strong><small>TXT oder Markdown</small></span></button><button className="simple-nav-button" onClick={() => setView('settings')}><Settings2 size={21} /><span><strong>Einstellungen</strong><small>App anpassen</small></span></button><div className="provider-status"><span className="status-dot green" /> {repository.mode === 'desktop' ? 'Lokaler Desktop-Modus' : 'Browser-Demo-Modus'}</div></div>
+      <nav className="simple-nav" aria-label="Hauptnavigation">{navItems.map(({ view: target, label, description, icon: Icon }) => <button key={target} title={sidebarOpen ? undefined : label} className={`simple-nav-button ${view === target ? 'active' : ''}`} onClick={() => setView(target)}><Icon size={21} /><span><strong>{label}</strong><small>{description}</small></span></button>)}</nav>
+      <div className="simple-sidebar-bottom"><button className="simple-nav-button" title={sidebarOpen ? undefined : 'Importieren'} onClick={() => setActiveModal('import')}><Upload size={21} /><span><strong>Importieren</strong><small>TXT oder Markdown</small></span></button><button className="simple-nav-button" title={sidebarOpen ? undefined : 'Einstellungen'} onClick={() => setView('settings')}><Settings2 size={21} /><span><strong>Einstellungen</strong><small>App anpassen</small></span></button><div className="provider-status"><span className="status-dot green" /><span className="provider-label">{repository.mode === 'desktop' ? 'Lokaler Desktop-Modus' : 'Browser-Demo-Modus'}</span></div></div>
     </aside>
     <main className="main-area">
-      <header className="topbar simple-topbar"><div><span className="eyebrow">{view === 'dashboard' ? 'START' : project?.title ?? 'STORYMEMORY'}</span><strong>{topLabel}</strong></div><div className="topbar-actions"><span className={`save-state save-state-${saveStatus}`}><span className="status-dot green" /> {saveLabel[saveStatus]}</span><button className="assistant-button" onClick={() => setAssistantOpen(true)}><MessageCircle size={18} /> Assistent öffnen</button></div></header>
+      <header className="topbar simple-topbar"><div className="topbar-title"><button className="sidebar-toggle" onClick={() => setSidebarOpen((open) => !open)} aria-label={sidebarOpen ? 'Sidebar einklappen' : 'Sidebar öffnen'} title={sidebarOpen ? 'Sidebar einklappen' : 'Sidebar öffnen'}>{sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}</button><div className="topbar-copy"><span className="eyebrow">{view === 'dashboard' ? 'START' : project?.title ?? 'STORYMEMORY'}</span><strong>{topLabel}</strong></div></div><div className="topbar-actions"><span className={`save-state save-state-${saveStatus}`}><span className="status-dot green" /> {saveLabel[saveStatus]}</span><button className="assistant-button" onClick={() => setAssistantOpen(true)}><MessageCircle size={18} /> Assistent öffnen</button></div></header>
       <div className="content-scroll">{loadState.status === 'loading' && <LoadingView mode={repository.mode} />}{loadState.status === 'error' && <ErrorView message={loadState.message} detail={loadState.detail} onRetry={() => void loadWorkspace()} />}{loadState.status === 'ready' && renderView()}</div>
     </main>
     {assistantOpen && <div className="assistant-drawer"><button className="drawer-close" onClick={() => setAssistantOpen(false)} aria-label="Assistent schließen"><X size={20} /></button><ChatPanel messages={messages} onMessagesChange={setMessages} /></div>}

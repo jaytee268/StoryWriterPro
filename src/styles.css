@@ -384,4 +384,39 @@ body { background: var(--bg); color: var(--text); }
 .simple-editor-layout .simple-manuscript .manuscript-page { margin-left: 0; margin-right: auto; }
 .simple-editor-layout .simple-writing-bar { margin-left: 0; margin-right: auto; }
 .simple-editor-layout .simple-tree { border-right: 0; border-radius: 8px 0 0 8px; }
+
+/* The main navigation can disappear when the author wants a clean canvas. */
+.simple-mode { transition: grid-template-columns .22s ease; }
+.simple-mode.sidebar-collapsed { grid-template-columns: 76px minmax(680px, 1fr); }
+.sidebar-collapsed .simple-sidebar { align-items: center; padding: 26px 10px 20px; }
+.sidebar-collapsed .simple-brand { justify-content: center; padding: 0; }
+.sidebar-collapsed .simple-brand > span:last-child,
+.sidebar-collapsed .simple-project,
+.sidebar-collapsed .simple-nav-button > span,
+.sidebar-collapsed .provider-label { display: none; }
+.sidebar-collapsed .simple-nav,
+.sidebar-collapsed .simple-sidebar-bottom { width: 100%; }
+.sidebar-collapsed .simple-nav-button { justify-content: center; padding: 10px 0; }
+.sidebar-collapsed .provider-status { justify-content: center; padding: 12px 0; }
+
+/* The writing surface is intentionally quiet: one paper, one small utility row,
+   and the details drawer only when the writer asks for it. */
+.simple-editor { max-width: 1040px; }
+.simple-editor-head { margin-bottom: 17px; align-items: flex-start; }
+.simple-editor-head h1 { margin-top: 4px; font-size: 24px; letter-spacing: -.02em; }
+.editor-heading .back-button { margin-bottom: 10px; }
+.simple-writing-bar { padding-bottom: 8px; }
+.simple-writing-bar .writing-bar-actions > span { color: #9aa8ba; }
+.simple-manuscript .manuscript-page { max-width: 900px; padding: 54px 84px 34px; }
+.page-kicker { margin-bottom: 30px; }
+.simple-editor-bottom { margin-top: 14px; }
+.simple-editor-bottom .details-toggle { min-height: 48px; }
+.sidebar-toggle { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; flex: none; border: 1px solid #d6dee8; border-radius: 7px; color: #65758a; background: #ffffff; transition: color .18s ease, background .18s ease, border-color .18s ease; }
+.sidebar-toggle:hover { color: #304b8c; border-color: #9db0da; background: #f4f7ff; }
+.simple-topbar .topbar-title { display: flex !important; align-items: center; gap: 14px; }
+.simple-topbar .topbar-copy { display: grid; gap: 5px; }
+
+@media (max-width: 900px) {
+  .simple-mode.sidebar-collapsed { grid-template-columns: 68px minmax(560px, 1fr); }
+}
 .simple-editor-layout.outline-collapsed .simple-manuscript .manuscript-page { border-radius: 0 3px 3px 0; }
