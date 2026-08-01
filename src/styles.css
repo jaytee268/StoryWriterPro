@@ -294,3 +294,27 @@ body { background: var(--bg); color: var(--text); }
 .settings-path { margin-top: 18px; padding: 14px 16px; border: 1px solid #d6dee8; border-radius: 8px; color: #65758a; background: #ffffff; font-size: 12px; }
 .settings-path code { display: block; margin-top: 10px; color: #536579; font: 11px 'DM Mono', monospace; overflow-wrap: anywhere; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Focused writing surface: the outline can disappear without changing the document. */
+.simple-editor-layout { transition: grid-template-columns .22s ease; }
+.simple-editor-layout.outline-collapsed { grid-template-columns: minmax(0, 1fr); }
+.simple-editor-layout.outline-collapsed .simple-tree { display: none; }
+.outline-toggle { display: inline-flex; align-items: center; gap: 7px; margin-top: 14px; padding: 7px 10px; border: 1px solid #d5deea; border-radius: 7px; color: #526bc0; background: #ffffff; font-size: 11px; transition: background .18s ease, border-color .18s ease, transform .18s ease; }
+.outline-toggle:hover { border-color: #91a4d2; background: #f5f8ff; transform: translateY(-1px); }
+.simple-manuscript .manuscript-page { max-width: 860px; min-height: calc(100vh - 290px); margin: 0 auto; border: 1px solid #e0ddd7; border-radius: 3px; background: #fffefa; box-shadow: 0 16px 36px #4056771c; transition: box-shadow .22s ease, max-width .22s ease; }
+.simple-manuscript .manuscript-page:focus-within { box-shadow: 0 20px 42px #40567727; }
+.simple-manuscript .editable { min-height: 520px; resize: none; caret-color: #526bc0; font-size: 18px; line-height: 1.95; letter-spacing: .005em; }
+.simple-writing-bar { max-width: 860px; margin: 0 auto; }
+.simple-editor-bottom { margin: 18px auto 0; max-width: 860px; }
+.scene-details-simple { max-width: 860px; margin: 12px auto 0; }
+.details-toggle strong { display: inline-flex; align-items: center; gap: 7px; }
+
+@media (max-width: 760px) {
+  .simple-editor-head { align-items: flex-start; flex-direction: column; }
+  .simple-editor-actions { flex-wrap: wrap; }
+  .simple-editor-layout { grid-template-columns: minmax(0, 1fr); }
+  .simple-tree { display: none; }
+  .simple-manuscript .manuscript-page { min-height: calc(100vh - 340px); padding: 38px 28px 24px; }
+  .simple-editor-bottom { align-items: stretch; flex-direction: column; }
+  .scene-details-simple { grid-template-columns: 1fr; }
+}
