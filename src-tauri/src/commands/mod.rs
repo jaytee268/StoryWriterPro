@@ -2,8 +2,9 @@ use crate::{
     database::DbState,
     models::{
         validate_entity_status, validate_scene_status, Book, Chapter, CreateChapterInput,
-        CreateProjectInput, CreateSceneInput, DatabaseInfo, Project, ProviderStatus, Scene,
-        SceneInput, StoryEntity, StoryEntityInput, WorkspaceSnapshot,
+        CreateProjectInput, CreateSceneInput, DatabaseInfo, EditorPreferences, Project,
+        ProviderStatus, RestoreSceneVersionInput, Scene, SceneInput, SceneVersion, StoryEntity,
+        StoryEntityInput, WorkspaceSnapshot,
     },
 };
 use chrono::Utc;
@@ -87,6 +88,106 @@ fn scene_from_row(row: &rusqlite::Row<'_>) -> SqlResult<Scene> {
 
 fn load_scene(db: &Connection, scene_id: &str) -> Result<Scene, String> {
     db.query_row("SELECT id, chapter_id, title, order_index, content, pov, location, story_time, status, goal, notes, created_at, updated_at FROM scenes WHERE id=?1", params![scene_id], scene_from_row).map_err(|error| sql_error("Szene konnte nicht geladen werden", error))
+}
+
+fn scene_input_from_scene(scene: &Scene) -> SceneInput {
+    SceneInput {
+        id: scene.id.clone(),
+        chapter_id: scene.chapter_id.clone(),
+        title: scene.title.clone(),
+        order_index: scene.order_index,
+        content: scene.content.clone(),
+        pov: scene.pov.clone(),
+        location: scene.location.clone(),
+        story_time: scene.story_time.clone(),
+        status: scene.status.clone(),
+        goal: scene.goal.clone(),
+        notes: scene.notes.clone(),
+    }
+}
+
+fn save_scene_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    input: &SceneInput,
+    timestamp: &str,
+) -> Result<(), String> {
+    let changed = transaction
+        .execute("UPDATE scenes SET chapter_id=?2, title=?3, order_index=?4, content=?5, pov=?6, location=?7, story_time=?8, status=?9, goal=?10, notes=?11, updated_at=?12 WHERE id=?1", params![input.id, input.chapter_id, input.title.trim(), input.order_index, input.content, input.pov, input.location, input.story_time, input.status, input.goal, input.notes, timestamp])
+        .map_err(|error| sql_error("Szene konnte nicht gespeichert werden", error))?;
+    if changed == 0 {
+        return Err("Die Szene wurde nicht gefunden.".into());
+    }
+    let snapshot_json = serde_json::to_string(input)
+        .map_err(|error| sql_error("Szenenversion konnte nicht vorbereitet werden", error))?;
+    transaction
+        .execute("INSERT INTO scene_versions (id, scene_id, content, created_at, version_number, snapshot_json) VALUES (?1, ?2, ?3, ?4, (SELECT COALESCE(MAX(version_number), 0) + 1 FROM scene_versions WHERE scene_id=?2), ?5)", params![new_id(), input.id, input.content, timestamp, snapshot_json])
+        .map_err(|error| sql_error("Szenenversion konnte nicht gespeichert werden", error))?;
+    transaction
+        .execute(
+            "UPDATE chapters SET updated_at=?1 WHERE id=?2",
+            params![timestamp, input.chapter_id],
+        )
+        .map_err(|error| sql_error("Kapitelzeitpunkt konnte nicht aktualisiert werden", error))?;
+    Ok(())
+}
+
+fn load_scene_versions(db: &Connection, scene_id: &str) -> Result<Vec<SceneVersion>, String> {
+    let current = load_scene(db, scene_id)?;
+    let mut statement = db
+        .prepare("SELECT id, scene_id, content, created_at, version_number, snapshot_json FROM scene_versions WHERE scene_id=?1 ORDER BY created_at DESC, version_number DESC")
+        .map_err(|error| sql_error("Verlauf konnte nicht geladen werden", error))?;
+    let rows = statement
+        .query_map(params![scene_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })
+        .map_err(|error| sql_error("Verlauf konnte nicht geladen werden", error))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|error| sql_error("Verlauf konnte nicht geladen werden", error))?;
+    let total = rows.len();
+    rows.into_iter()
+        .enumerate()
+        .map(
+            |(
+                index,
+                (id, version_scene_id, content, created_at, version_number, snapshot_json),
+            )| {
+                let mut scene = current.clone();
+                if let Ok(snapshot) = serde_json::from_str::<SceneInput>(&snapshot_json) {
+                    scene.id = snapshot.id;
+                    scene.chapter_id = snapshot.chapter_id;
+                    scene.title = snapshot.title;
+                    scene.order_index = snapshot.order_index;
+                    scene.pov = snapshot.pov;
+                    scene.location = snapshot.location;
+                    scene.story_time = snapshot.story_time;
+                    scene.status = snapshot.status;
+                    scene.goal = snapshot.goal;
+                    scene.notes = snapshot.notes;
+                }
+                scene.content = content.clone();
+                scene.updated_at = created_at.clone();
+                Ok(SceneVersion {
+                    id,
+                    scene_id: version_scene_id,
+                    version_number: if version_number > 0 {
+                        version_number
+                    } else {
+                        (total - index) as i64
+                    },
+                    content,
+                    created_at,
+                    scene,
+                })
+            },
+        )
+        .collect()
 }
 
 fn load_chapter(db: &Connection, chapter_id: &str) -> Result<Chapter, String> {
@@ -301,22 +402,7 @@ pub fn update_scene(state: State<'_, DbState>, input: SceneInput) -> Result<Scen
         .unchecked_transaction()
         .map_err(|error| sql_error("Speichertransaktion konnte nicht gestartet werden", error))?;
     let timestamp = now();
-    let changed = transaction.execute("UPDATE scenes SET chapter_id=?2, title=?3, order_index=?4, content=?5, pov=?6, location=?7, story_time=?8, status=?9, goal=?10, notes=?11, updated_at=?12 WHERE id=?1", params![input.id, input.chapter_id, input.title.trim(), input.order_index, input.content, input.pov, input.location, input.story_time, input.status, input.goal, input.notes, timestamp]).map_err(|error| sql_error("Szene konnte nicht gespeichert werden", error))?;
-    if changed == 0 {
-        return Err("Die Szene wurde nicht gefunden.".into());
-    }
-    transaction
-        .execute(
-            "INSERT INTO scene_versions (id, scene_id, content) VALUES (?1, ?2, ?3)",
-            params![new_id(), input.id, input.content],
-        )
-        .map_err(|error| sql_error("Szenenversion konnte nicht gespeichert werden", error))?;
-    transaction
-        .execute(
-            "UPDATE chapters SET updated_at=?1 WHERE id=?2",
-            params![timestamp, input.chapter_id],
-        )
-        .map_err(|error| sql_error("Kapitelzeitpunkt konnte nicht aktualisiert werden", error))?;
+    save_scene_in_transaction(&transaction, &input, &timestamp)?;
     transaction.commit().map_err(|error| {
         sql_error(
             "Speichertransaktion konnte nicht abgeschlossen werden",
@@ -324,6 +410,109 @@ pub fn update_scene(state: State<'_, DbState>, input: SceneInput) -> Result<Scen
         )
     })?;
     load_scene(&db, &input.id)
+}
+
+#[tauri::command]
+pub fn list_scene_versions(
+    state: State<'_, DbState>,
+    scene_id: String,
+) -> Result<Vec<SceneVersion>, String> {
+    let db = lock_db(&state)?;
+    load_scene_versions(&db, &scene_id)
+}
+
+#[tauri::command]
+pub fn restore_scene_version(
+    state: State<'_, DbState>,
+    input: RestoreSceneVersionInput,
+) -> Result<Scene, String> {
+    let db = lock_db(&state)?;
+    let current = load_scene(&db, &input.scene_id)?;
+    let (version_scene_id, content, snapshot_json): (String, String, String) = db
+        .query_row(
+            "SELECT scene_id, content, snapshot_json FROM scene_versions WHERE id=?1 AND scene_id=?2",
+            params![input.version_id, input.scene_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|error| sql_error("Version konnte nicht geladen werden", error))?;
+    if version_scene_id != input.scene_id {
+        return Err("Die Version gehört nicht zu dieser Szene.".into());
+    }
+    let mut restored = scene_input_from_scene(&current);
+    restored.content = content;
+    if let Ok(snapshot) = serde_json::from_str::<SceneInput>(&snapshot_json) {
+        restored = snapshot;
+    }
+    restored.id = input.scene_id.clone();
+    validate_scene_status(&restored.status)?;
+    required(&restored.title, "Der Szenenname")?;
+    let chapter_exists: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM chapters WHERE id=?1)",
+            params![restored.chapter_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| sql_error("Kapitel konnte nicht geprüft werden", error))?;
+    if !chapter_exists {
+        return Err("Das Kapitel der gespeicherten Version wurde nicht gefunden.".into());
+    }
+    let transaction = db
+        .unchecked_transaction()
+        .map_err(|error| sql_error("Wiederherstellung konnte nicht gestartet werden", error))?;
+    let timestamp = now();
+    save_scene_in_transaction(&transaction, &restored, &timestamp)?;
+    transaction
+        .commit()
+        .map_err(|error| sql_error("Wiederherstellung konnte nicht abgeschlossen werden", error))?;
+    load_scene(&db, &input.scene_id)
+}
+
+#[tauri::command]
+pub fn get_editor_preferences(state: State<'_, DbState>) -> Result<EditorPreferences, String> {
+    let db = lock_db(&state)?;
+    let value: Option<String> = db
+        .query_row(
+            "SELECT value_json FROM app_settings WHERE key='editor_preferences'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| sql_error("Editor-Einstellungen konnten nicht geladen werden", error))?;
+    value
+        .map(|json| {
+            serde_json::from_str(&json)
+                .map_err(|error| sql_error("Editor-Einstellungen sind ungültig", error))
+        })
+        .unwrap_or_else(|| {
+            Ok(EditorPreferences {
+                font_family: "serif".into(),
+                font_size: 18,
+                line_height: 1.95,
+            })
+        })
+}
+
+#[tauri::command]
+pub fn save_editor_preferences(
+    state: State<'_, DbState>,
+    mut input: EditorPreferences,
+) -> Result<EditorPreferences, String> {
+    if !matches!(input.font_family.as_str(), "serif" | "sans" | "typewriter") {
+        return Err("Ungültige Manuskript-Schriftart.".into());
+    }
+    input.font_size = input.font_size.clamp(14, 28);
+    input.line_height = input.line_height.clamp(1.3, 2.5);
+    let db = lock_db(&state)?;
+    let json = serde_json::to_string(&input).map_err(|error| {
+        sql_error(
+            "Editor-Einstellungen konnten nicht vorbereitet werden",
+            error,
+        )
+    })?;
+    let timestamp = now();
+    db.execute("INSERT INTO app_settings (key, value_json, created_at, updated_at) VALUES ('editor_preferences', ?1, ?2, ?2) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at", params![json, timestamp])
+        .map_err(|error| sql_error("Editor-Einstellungen konnten nicht gespeichert werden", error))?;
+    Ok(input)
 }
 
 #[tauri::command]
@@ -495,6 +684,34 @@ mod tests {
         assert_eq!(books.len(), 1);
         assert_eq!(chapters.len(), 3);
         assert!(!entities.is_empty());
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn scene_versions_keep_full_scene_snapshot() {
+        let (path, db) = connection("versions");
+        let input = SceneInput {
+            id: "scene-1".into(),
+            chapter_id: "chapter-1".into(),
+            title: "Versionierte Szene".into(),
+            order_index: 1,
+            content: "Älterer Stand\nmit Zeilenumbruch".into(),
+            pov: "Lena".into(),
+            location: "Café".into(),
+            story_time: "Dienstag".into(),
+            status: "revised".into(),
+            goal: "Ein Ziel".into(),
+            notes: "Eine Notiz".into(),
+        };
+        let transaction = db.unchecked_transaction().unwrap();
+        save_scene_in_transaction(&transaction, &input, "2026-07-31T00:00:00+00:00").unwrap();
+        transaction.commit().unwrap();
+        let versions = load_scene_versions(&db, "scene-1").unwrap();
+        assert_eq!(versions.len(), 1);
+        assert_eq!(versions[0].scene.pov, "Lena");
+        assert_eq!(versions[0].scene.content, input.content);
+        assert_eq!(versions[0].version_number, 1);
         drop(db);
         let _ = fs::remove_file(path);
     }

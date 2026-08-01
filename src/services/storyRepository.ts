@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { demoChapters, demoEntities, demoProject } from './mockData';
 import { desktopInvoke, isTauriRuntime } from './desktop';
-import type { Book, Chapter, CreateChapterInput, CreateProjectInput, CreateSceneInput, Project, SaveStoryEntityInput, Scene, StoryEntity, UpdateSceneInput, WorkspaceSnapshot } from '../types/domain';
+import type { Book, Chapter, CreateChapterInput, CreateProjectInput, CreateSceneInput, EditorPreferences, Project, SaveStoryEntityInput, Scene, SceneVersion, StoryEntity, UpdateSceneInput, WorkspaceSnapshot } from '../types/domain';
 
 export type RuntimeMode = 'desktop' | 'browser-demo';
 export type SaveableScene = Scene;
@@ -15,6 +15,10 @@ export interface StoryRepository {
   createChapter(input: CreateChapterInput): Promise<Chapter>;
   createScene(input: CreateSceneInput): Promise<Scene>;
   updateScene(input: UpdateSceneInput): Promise<Scene>;
+  listSceneVersions(sceneId: string): Promise<SceneVersion[]>;
+  restoreSceneVersion(sceneId: string, versionId: string): Promise<Scene>;
+  getEditorPreferences(): Promise<EditorPreferences>;
+  saveEditorPreferences(input: EditorPreferences): Promise<EditorPreferences>;
   saveStoryEntity(input: SaveStoryEntityInput): Promise<StoryEntity>;
   listStoryEntities(projectId: string): Promise<StoryEntity[]>;
   getDatabaseInfo(): Promise<DatabaseInfo>;
@@ -26,6 +30,8 @@ const entityTypeSchema = z.enum(['character', 'relationship', 'place', 'organiza
 const projectSchema = z.object({ id: z.string(), title: z.string(), author: z.string(), description: z.string(), updatedAt: z.string(), createdAt: z.string().optional(), wordCount: z.number(), openWarnings: z.number(), bibleProgress: z.number() });
 const bookSchema = z.object({ id: z.string(), projectId: z.string(), title: z.string(), volume: z.number(), createdAt: z.string().optional(), updatedAt: z.string().optional() });
 const sceneSchema = z.object({ id: z.string(), chapterId: z.string(), title: z.string(), orderIndex: z.number(), content: z.string(), pov: z.string(), location: z.string(), storyTime: z.string(), status: statusSchema, goal: z.string(), notes: z.string(), createdAt: z.string().optional(), updatedAt: z.string().optional() });
+const sceneVersionSchema = z.object({ id: z.string(), sceneId: z.string(), versionNumber: z.number(), content: z.string(), createdAt: z.string(), scene: sceneSchema });
+const editorPreferencesSchema = z.object({ fontFamily: z.enum(['serif', 'sans', 'typewriter']), fontSize: z.number(), lineHeight: z.number() });
 const chapterSchema = z.object({ id: z.string(), bookId: z.string(), title: z.string(), orderIndex: z.number(), scenes: z.array(sceneSchema), createdAt: z.string().optional(), updatedAt: z.string().optional() });
 const entitySchema = z.object({ id: z.string(), projectId: z.string().optional(), name: z.string(), type: entityTypeSchema, description: z.string(), status: entityStatusSchema, confidence: z.number(), source: z.string(), chapter: z.string(), scene: z.string(), authorConfirmed: z.boolean(), updatedAt: z.string(), createdAt: z.string().optional(), tags: z.array(z.string()) });
 const workspaceSchema = z.object({ project: projectSchema, books: z.array(bookSchema), chapters: z.array(chapterSchema), entities: z.array(entitySchema) });
@@ -47,13 +53,19 @@ export class TauriStoryRepository implements StoryRepository {
   async createChapter(input: CreateChapterInput): Promise<Chapter> { return parse(chapterSchema, await desktopInvoke('create_chapter', { input }), 'Kapitel'); }
   async createScene(input: CreateSceneInput): Promise<Scene> { return parse(sceneSchema, await desktopInvoke('create_scene', { input }), 'Szene'); }
   async updateScene(input: UpdateSceneInput): Promise<Scene> { return parse(sceneSchema, await desktopInvoke('update_scene', { input }), 'Szene'); }
+  async listSceneVersions(sceneId: string): Promise<SceneVersion[]> { return parse(z.array(sceneVersionSchema), await desktopInvoke('list_scene_versions', { sceneId }), 'Szenenverlauf'); }
+  async restoreSceneVersion(sceneId: string, versionId: string): Promise<Scene> { return parse(sceneSchema, await desktopInvoke('restore_scene_version', { input: { sceneId, versionId } }), 'Wiederhergestellte Szene'); }
+  async getEditorPreferences(): Promise<EditorPreferences> { return parse(editorPreferencesSchema, await desktopInvoke('get_editor_preferences'), 'Editor-Einstellungen'); }
+  async saveEditorPreferences(input: EditorPreferences): Promise<EditorPreferences> { return parse(editorPreferencesSchema, await desktopInvoke('save_editor_preferences', { input }), 'Editor-Einstellungen'); }
   async saveStoryEntity(input: SaveStoryEntityInput): Promise<StoryEntity> { return parse(entitySchema, await desktopInvoke('save_story_entity', { input }), 'Story-Bible-Eintrag'); }
   async listStoryEntities(projectId: string): Promise<StoryEntity[]> { return parse(z.array(entitySchema), await desktopInvoke('list_story_entities', { projectId }), 'Story-Bible-Liste'); }
   async getDatabaseInfo(): Promise<DatabaseInfo> { return parse(z.object({ path: z.string(), connected: z.boolean(), engine: z.literal('sqlite'), detail: z.string() }), await desktopInvoke('database_info'), 'Datenbankstatus'); }
 }
 
-interface BrowserState { project: Project; books: Book[]; chapters: Chapter[]; entities: StoryEntity[]; }
+interface BrowserState { project: Project; books: Book[]; chapters: Chapter[]; entities: StoryEntity[]; versions: SceneVersion[]; editorPreferences: EditorPreferences; }
 const browserKey = 'storymemory-browser-demo-workspace';
+const browserPreferencesKey = 'storymemory-browser-demo-editor-preferences';
+const defaultEditorPreferences: EditorPreferences = { fontFamily: 'serif', fontSize: 18, lineHeight: 1.95 };
 
 export class BrowserDemoRepository implements StoryRepository {
   readonly mode = 'browser-demo' as const;
@@ -61,9 +73,12 @@ export class BrowserDemoRepository implements StoryRepository {
   private read(): BrowserState {
     try {
       const value = localStorage.getItem(browserKey);
-      if (value) return JSON.parse(value) as BrowserState;
+      if (value) {
+        const state = JSON.parse(value) as Partial<BrowserState>;
+        return { ...state, versions: state.versions ?? [], editorPreferences: state.editorPreferences ?? defaultEditorPreferences } as BrowserState;
+      }
     } catch { /* A broken demo cache is replaced with the safe example workspace. */ }
-    return { project: clone(demoProject), books: [{ id: 'book-1', projectId: demoProject.id, title: demoProject.title, volume: 1 }], chapters: clone(demoChapters), entities: clone(demoEntities) };
+    return { project: clone(demoProject), books: [{ id: 'book-1', projectId: demoProject.id, title: demoProject.title, volume: 1 }], chapters: clone(demoChapters), entities: clone(demoEntities), versions: [], editorPreferences: defaultEditorPreferences };
   }
 
   private write(state: BrowserState): void { localStorage.setItem(browserKey, JSON.stringify(state)); }
@@ -78,6 +93,7 @@ export class BrowserDemoRepository implements StoryRepository {
     state.books = [{ id: crypto.randomUUID(), projectId: project.id, title: input.volumeTitle ?? input.title, volume: input.volume ?? 1, createdAt: timestamp, updatedAt: timestamp }];
     state.chapters = [];
     state.entities = [];
+    state.versions = [];
     this.write(state);
     return clone(project);
   }
@@ -102,8 +118,15 @@ export class BrowserDemoRepository implements StoryRepository {
     if (!chapter) throw new Error('Das Kapitel der Szene wurde nicht gefunden.');
     const index = chapter.scenes.findIndex((item) => item.id === input.id);
     if (index < 0) throw new Error('Die Szene wurde nicht gefunden.');
-    const saved = { ...input, updatedAt: now() }; chapter.scenes[index] = saved; chapter.updatedAt = saved.updatedAt ?? now(); state.project.updatedAt = saved.updatedAt ?? now(); this.write(state); return clone(saved);
+    const saved = { ...input, updatedAt: now() };
+    const version: SceneVersion = { id: crypto.randomUUID(), sceneId: saved.id, versionNumber: state.versions.filter((item) => item.sceneId === saved.id).length + 1, content: saved.content, createdAt: saved.updatedAt ?? now(), scene: clone(saved) };
+    state.versions = [version, ...state.versions];
+    chapter.scenes[index] = saved; chapter.updatedAt = saved.updatedAt ?? now(); state.project.updatedAt = saved.updatedAt ?? now(); this.write(state); return clone(saved);
   }
+  async listSceneVersions(sceneId: string): Promise<SceneVersion[]> { return this.read().versions.filter((version) => version.sceneId === sceneId).map(clone); }
+  async restoreSceneVersion(sceneId: string, versionId: string): Promise<Scene> { const version = this.read().versions.find((item) => item.sceneId === sceneId && item.id === versionId); if (!version) throw new Error('Die Version wurde nicht gefunden.'); return this.updateScene({ ...version.scene, id: sceneId }); }
+  async getEditorPreferences(): Promise<EditorPreferences> { const value = localStorage.getItem(browserPreferencesKey); return value ? editorPreferencesSchema.parse(JSON.parse(value)) : clone(defaultEditorPreferences); }
+  async saveEditorPreferences(input: EditorPreferences): Promise<EditorPreferences> { const saved = editorPreferencesSchema.parse({ ...input, fontSize: Math.max(14, Math.min(28, input.fontSize)), lineHeight: Math.max(1.3, Math.min(2.5, input.lineHeight)) }); localStorage.setItem(browserPreferencesKey, JSON.stringify(saved)); return saved; }
   async saveStoryEntity(input: SaveStoryEntityInput): Promise<StoryEntity> { const state = this.read(); const saved = { ...input, updatedAt: now() }; state.entities = [saved, ...state.entities.filter((item) => item.id !== saved.id)]; this.write(state); return clone(saved); }
   async listStoryEntities(projectId: string): Promise<StoryEntity[]> { return this.read().entities.filter((entity) => !entity.projectId || entity.projectId === projectId).map(clone); }
   async getDatabaseInfo(): Promise<DatabaseInfo> { return { path: 'Browser-Demo: localStorage', connected: true, engine: 'localStorage', detail: 'Nur Vorschau-Daten im Browser. Die Desktop-App verwendet SQLite.' }; }

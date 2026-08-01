@@ -19,6 +19,7 @@ impl DbState {
         let connection = Connection::open(&path)?;
         initialize_connection(&connection)?;
         seed_if_empty(&connection)?;
+        ensure_initial_scene_versions(&connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
             path,
@@ -48,6 +49,17 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
             "../../../migrations/002_workspace_indexes.sql"
         ))?;
         connection.execute("INSERT INTO schema_migrations (version) VALUES (2)", [])?;
+    }
+    let has_scene_versions: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 3",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_scene_versions == 0 {
+        connection.execute_batch(include_str!(
+            "../../../migrations/003_scene_version_snapshots.sql"
+        ))?;
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (3)", [])?;
     }
     Ok(())
 }
@@ -112,6 +124,59 @@ pub fn seed_if_empty(connection: &Connection) -> Result<()> {
     transaction.commit()
 }
 
+pub fn ensure_initial_scene_versions(connection: &Connection) -> Result<()> {
+    let mut statement = connection.prepare("SELECT id, chapter_id, title, order_index, content, pov, location, story_time, status, goal, notes, updated_at FROM scenes WHERE NOT EXISTS (SELECT 1 FROM scene_versions WHERE scene_versions.scene_id = scenes.id)")?;
+    let scenes = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, String>(10)?,
+                row.get::<_, String>(11)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>>>()?;
+    for (
+        id,
+        chapter_id,
+        title,
+        order_index,
+        content,
+        pov,
+        location,
+        story_time,
+        status,
+        goal,
+        notes,
+        updated_at,
+    ) in scenes
+    {
+        let snapshot = serde_json::json!({
+            "id": id,
+            "chapterId": chapter_id,
+            "title": title,
+            "orderIndex": order_index,
+            "content": content,
+            "pov": pov,
+            "location": location,
+            "storyTime": story_time,
+            "status": status,
+            "goal": goal,
+            "notes": notes,
+        });
+        connection.execute("INSERT INTO scene_versions (id, scene_id, content, created_at, version_number, snapshot_json) VALUES (?1, ?2, ?3, ?4, 1, ?5)", params![uuid::Uuid::new_v4().to_string(), id, snapshot["content"].as_str().unwrap_or_default(), updated_at, snapshot.to_string()])?;
+    }
+    Ok(())
+}
+
 pub fn database_path_for_test(path: &Path) -> Result<Connection> {
     let connection = Connection::open(path)?;
     initialize_connection(&connection)?;
@@ -150,6 +215,12 @@ mod tests {
             connection
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
+                .unwrap(),
+            3
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM pragma_table_info('scene_versions') WHERE name IN ('version_number', 'snapshot_json')", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
             2
         );

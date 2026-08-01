@@ -49,6 +49,32 @@ pub struct SceneInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EditorPreferences {
+    pub font_family: String,
+    pub font_size: i64,
+    pub line_height: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneVersion {
+    pub id: String,
+    pub scene_id: String,
+    pub version_number: i64,
+    pub content: String,
+    pub created_at: String,
+    pub scene: Scene,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreSceneVersionInput {
+    pub scene_id: String,
+    pub version_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StoryEntityInput {
     pub id: String,
     pub project_id: String,

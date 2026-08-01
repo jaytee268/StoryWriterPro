@@ -53,6 +53,10 @@ export function App() {
     setLoadState((current) => current.status !== 'ready' ? current : { status: 'ready', workspace: { ...current.workspace, project: { ...current.workspace.project, updatedAt: saved.updatedAt ?? current.workspace.project.updatedAt }, chapters: current.workspace.chapters.map((chapter) => chapter.id === saved.chapterId ? { ...chapter, scenes: chapter.scenes.map((scene) => scene.id === saved.id ? saved : scene) } : chapter) } });
   }, []);
   const saveScene = useCallback(async (scene: Scene): Promise<Scene> => { const saved = await repository.updateScene(scene); replaceScene(saved); return saved; }, [replaceScene]);
+  const listSceneVersions = useCallback((sceneId: string) => repository.listSceneVersions(sceneId), []);
+  const restoreSceneVersion = useCallback(async (sceneId: string, versionId: string): Promise<Scene> => { const restored = await repository.restoreSceneVersion(sceneId, versionId); replaceScene(restored); return restored; }, [replaceScene]);
+  const getEditorPreferences = useCallback(() => repository.getEditorPreferences(), []);
+  const saveEditorPreferences = useCallback((input: Parameters<StoryRepository['saveEditorPreferences']>[0]) => repository.saveEditorPreferences(input), []);
   const createChapter = useCallback(async (title: string): Promise<Chapter> => {
     if (!workspace?.books[0]) throw new Error('Kein Buch für dieses Projekt gefunden.');
     const chapter = await repository.createChapter({ bookId: workspace.books[0].id, title });
@@ -68,7 +72,7 @@ export function App() {
   const renderView = () => {
     if (!workspace) return null;
     if (view === 'dashboard') return <Dashboard project={workspace.project} onOpen={() => setView('editor')} onImport={() => setActiveModal('import')} />;
-    if (view === 'editor') return <EditorView chapters={workspace.chapters} scene={currentScene} chapter={currentChapter} onSelectScene={setSelectedSceneId} onSave={saveScene} onCreateChapter={createChapter} onCreateScene={createScene} onSaveStateChange={setSaveStatus} onBibleUpdate={() => setActiveModal('bible')} onResearch={() => setActiveModal('research')} />;
+    if (view === 'editor') return <EditorView chapters={workspace.chapters} scene={currentScene} chapter={currentChapter} onBack={() => setView('dashboard')} onSelectScene={setSelectedSceneId} onSave={saveScene} onCreateChapter={createChapter} onCreateScene={createScene} onListVersions={listSceneVersions} onRestoreVersion={restoreSceneVersion} onGetEditorPreferences={getEditorPreferences} onSaveEditorPreferences={saveEditorPreferences} onSaveStateChange={setSaveStatus} onBibleUpdate={() => setActiveModal('bible')} onResearch={() => setActiveModal('research')} />;
     if (view === 'bible' || view === 'characters' || view === 'threads') return <StoryBibleView entities={workspace.entities} initialFilter={view === 'characters' ? 'character' : view === 'threads' ? 'plot_thread' : undefined} />;
     if (view === 'timeline') return <TimelineView events={demoEvents} />;
     if (view === 'mindmap') return <MindmapView nodes={mindNodes} edges={mindEdges} />;
