@@ -1,65 +1,372 @@
 use crate::{
     database::DbState,
-    models::{ProviderStatus, SceneInput, StoryEntityInput},
+    models::{
+        validate_entity_status, validate_scene_status, Book, Chapter, CreateChapterInput,
+        CreateProjectInput, CreateSceneInput, DatabaseInfo, Project, ProviderStatus, Scene,
+        SceneInput, StoryEntity, StoryEntityInput, WorkspaceSnapshot,
+    },
 };
 use chrono::Utc;
-use rusqlite::params;
+use rusqlite::{params, Connection, OptionalExtension, Result as SqlResult};
 use tauri::State;
 
-#[tauri::command]
-pub fn get_dashboard_snapshot(state: State<'_, DbState>) -> Result<serde_json::Value, String> {
-    let db = state.connection.lock().map_err(|e| e.to_string())?;
-    let mut stmt = db.prepare("SELECT id, title, author, description, updated_at FROM projects ORDER BY updated_at DESC").map_err(|e| e.to_string())?;
-    let rows = stmt.query_map([], |row| Ok(serde_json::json!({ "id": row.get::<_, String>(0)?, "title": row.get::<_, String>(1)?, "author": row.get::<_, String>(2)?, "description": row.get::<_, String>(3)?, "updatedAt": row.get::<_, String>(4)? }))).map_err(|e| e.to_string())?;
-    let projects: Result<Vec<_>, _> = rows.collect();
-    Ok(serde_json::json!({ "projects": projects.map_err(|e| e.to_string())? }))
+fn lock_db<'a>(
+    state: &'a State<'a, DbState>,
+) -> Result<std::sync::MutexGuard<'a, Connection>, String> {
+    state
+        .connection
+        .lock()
+        .map_err(|error| format!("SQLite-Verbindung konnte nicht gesperrt werden: {error}"))
+}
+fn new_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+fn now() -> String {
+    Utc::now().to_rfc3339()
+}
+fn required(value: &str, label: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        Err(format!("{label} darf nicht leer sein."))
+    } else {
+        Ok(())
+    }
+}
+fn sql_error(context: &str, error: impl std::fmt::Display) -> String {
+    format!("{context}: {error}")
+}
+
+fn project_from_db(db: &Connection, project_id: &str) -> Result<Project, String> {
+    db.query_row(
+        "SELECT id, title, author, description, created_at, updated_at FROM projects WHERE id=?1",
+        params![project_id],
+        |row| {
+            Ok(Project {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                author: row.get(2)?,
+                description: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+                word_count: 0,
+                open_warnings: 0,
+                bible_progress: 0,
+            })
+        },
+    )
+    .map_err(|error| sql_error("Projekt konnte nicht geladen werden", error))
+}
+
+fn book_from_row(row: &rusqlite::Row<'_>) -> SqlResult<Book> {
+    Ok(Book {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        title: row.get(2)?,
+        volume: row.get(3)?,
+        created_at: row.get(4)?,
+        updated_at: row.get(5)?,
+    })
+}
+
+fn scene_from_row(row: &rusqlite::Row<'_>) -> SqlResult<Scene> {
+    Ok(Scene {
+        id: row.get(0)?,
+        chapter_id: row.get(1)?,
+        title: row.get(2)?,
+        order_index: row.get(3)?,
+        content: row.get(4)?,
+        pov: row.get(5)?,
+        location: row.get(6)?,
+        story_time: row.get(7)?,
+        status: row.get(8)?,
+        goal: row.get(9)?,
+        notes: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+    })
+}
+
+fn load_scene(db: &Connection, scene_id: &str) -> Result<Scene, String> {
+    db.query_row("SELECT id, chapter_id, title, order_index, content, pov, location, story_time, status, goal, notes, created_at, updated_at FROM scenes WHERE id=?1", params![scene_id], scene_from_row).map_err(|error| sql_error("Szene konnte nicht geladen werden", error))
+}
+
+fn load_chapter(db: &Connection, chapter_id: &str) -> Result<Chapter, String> {
+    let mut chapter = db.query_row("SELECT id, book_id, title, order_index, created_at, updated_at FROM chapters WHERE id=?1", params![chapter_id], |row| Ok(Chapter { id: row.get(0)?, book_id: row.get(1)?, title: row.get(2)?, order_index: row.get(3)?, scenes: Vec::new(), created_at: row.get(4)?, updated_at: row.get(5)? })).map_err(|error| sql_error("Kapitel konnte nicht geladen werden", error))?;
+    let mut statement = db.prepare("SELECT id, chapter_id, title, order_index, content, pov, location, story_time, status, goal, notes, created_at, updated_at FROM scenes WHERE chapter_id=?1 ORDER BY order_index, created_at").map_err(|error| sql_error("Szenen konnten nicht geladen werden", error))?;
+    chapter.scenes = statement
+        .query_map(params![chapter_id], scene_from_row)
+        .map_err(|error| sql_error("Szenen konnten nicht geladen werden", error))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|error| sql_error("Szenen konnten nicht geladen werden", error))?;
+    Ok(chapter)
+}
+
+fn load_books(db: &Connection, project_id: &str) -> Result<Vec<Book>, String> {
+    let mut statement = db.prepare("SELECT id, project_id, title, volume, created_at, updated_at FROM books WHERE project_id=?1 ORDER BY volume, created_at").map_err(|error| sql_error("Bücher konnten nicht geladen werden", error))?;
+    let result = statement
+        .query_map(params![project_id], book_from_row)
+        .map_err(|error| sql_error("Bücher konnten nicht geladen werden", error))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|error| sql_error("Bücher konnten nicht geladen werden", error));
+    result
+}
+
+fn load_chapters(db: &Connection, books: &[Book]) -> Result<Vec<Chapter>, String> {
+    let mut chapters = Vec::new();
+    for book in books {
+        let mut statement = db
+            .prepare("SELECT id FROM chapters WHERE book_id=?1 ORDER BY order_index, created_at")
+            .map_err(|error| sql_error("Kapitel konnten nicht geladen werden", error))?;
+        let ids = statement
+            .query_map(params![book.id], |row| row.get::<_, String>(0))
+            .map_err(|error| sql_error("Kapitel konnten nicht geladen werden", error))?
+            .collect::<SqlResult<Vec<_>>>()
+            .map_err(|error| sql_error("Kapitel konnten nicht geladen werden", error))?;
+        for id in ids {
+            chapters.push(load_chapter(db, &id)?);
+        }
+    }
+    Ok(chapters)
+}
+
+fn entity_from_row(row: &rusqlite::Row<'_>) -> SqlResult<StoryEntity> {
+    Ok(StoryEntity {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        name: row.get(2)?,
+        entity_type: row.get(3)?,
+        description: row.get(4)?,
+        status: row.get(5)?,
+        confidence: row.get(6)?,
+        source: row.get(7)?,
+        chapter: row.get(8)?,
+        scene: row.get(9)?,
+        author_confirmed: row.get::<_, i64>(10)? != 0,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+        tags: Vec::new(),
+    })
+}
+
+fn load_entities(db: &Connection, project_id: &str) -> Result<Vec<StoryEntity>, String> {
+    let mut statement = db.prepare("SELECT id, project_id, name, entity_type, description, status, confidence, source, chapter, scene, author_confirmed, created_at, updated_at FROM story_entities WHERE project_id=?1 ORDER BY updated_at DESC").map_err(|error| sql_error("Story-Bible-Einträge konnten nicht geladen werden", error))?;
+    let result = statement
+        .query_map(params![project_id], entity_from_row)
+        .map_err(|error| sql_error("Story-Bible-Einträge konnten nicht geladen werden", error))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|error| sql_error("Story-Bible-Einträge konnten nicht geladen werden", error));
+    result
+}
+
+fn word_count(chapters: &[Chapter]) -> i64 {
+    chapters
+        .iter()
+        .flat_map(|chapter| chapter.scenes.iter())
+        .map(|scene| scene.content.split_whitespace().count() as i64)
+        .sum()
 }
 
 #[tauri::command]
-pub fn list_story_entities(state: State<'_, DbState>) -> Result<Vec<serde_json::Value>, String> {
-    let db = state.connection.lock().map_err(|e| e.to_string())?;
-    let mut stmt = db.prepare("SELECT id, name, entity_type, description, status, confidence, source, chapter, scene, author_confirmed, updated_at FROM story_entities ORDER BY updated_at DESC").map_err(|e| e.to_string())?;
-    let rows = stmt.query_map([], |row| Ok(serde_json::json!({ "id": row.get::<_, String>(0)?, "name": row.get::<_, String>(1)?, "type": row.get::<_, String>(2)?, "description": row.get::<_, String>(3)?, "status": row.get::<_, String>(4)?, "confidence": row.get::<_, f64>(5)?, "source": row.get::<_, String>(6)?, "chapter": row.get::<_, String>(7)?, "scene": row.get::<_, String>(8)?, "authorConfirmed": row.get::<_, bool>(9)?, "updatedAt": row.get::<_, String>(10)? }))).map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())
+pub fn load_workspace(state: State<'_, DbState>) -> Result<WorkspaceSnapshot, String> {
+    let db = lock_db(&state)?;
+    let project_id: String = db
+        .query_row(
+            "SELECT id FROM projects ORDER BY updated_at DESC, created_at DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| sql_error("Workspace konnte nicht geladen werden", error))?
+        .ok_or_else(|| "Keine lokale StoryMemory-Datenbank mit Projekt gefunden.".to_string())?;
+    let books = load_books(&db, &project_id)?;
+    let chapters = load_chapters(&db, &books)?;
+    let entities = load_entities(&db, &project_id)?;
+    let mut project = project_from_db(&db, &project_id)?;
+    project.word_count = word_count(&chapters);
+    project.open_warnings = entities
+        .iter()
+        .filter(|entity| entity.status == "contradicted")
+        .count() as i64;
+    project.bible_progress = if entities.is_empty() {
+        0
+    } else {
+        ((entities
+            .iter()
+            .filter(|entity| entity.status == "confirmed")
+            .count() as f64
+            / entities.len() as f64)
+            * 100.0)
+            .round() as i64
+    };
+    Ok(WorkspaceSnapshot {
+        project,
+        books,
+        chapters,
+        entities,
+    })
 }
 
 #[tauri::command]
-pub fn save_scene(state: State<'_, DbState>, scene: SceneInput) -> Result<(), String> {
-    let db = state.connection.lock().map_err(|e| e.to_string())?;
-    db.execute("INSERT INTO scenes (id, chapter_id, title, content, pov, location, story_time, status, goal, notes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) ON CONFLICT(id) DO UPDATE SET title=excluded.title, content=excluded.content, pov=excluded.pov, location=excluded.location, story_time=excluded.story_time, status=excluded.status, goal=excluded.goal, notes=excluded.notes, updated_at=CURRENT_TIMESTAMP", params![scene.id, scene.chapter_id, scene.title, scene.content, scene.pov, scene.location, scene.story_time, scene.status, scene.goal, scene.notes]).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-pub fn create_chapter(state: State<'_, DbState>, title: String) -> Result<String, String> {
-    let id = uuid::Uuid::new_v4().to_string();
-    let db = state.connection.lock().map_err(|e| e.to_string())?;
-    db.execute("INSERT INTO chapters (id, book_id, title, order_index) VALUES (?1, 'book-1', ?2, (SELECT COALESCE(MAX(order_index), 0) + 1 FROM chapters))", params![id, title]).map_err(|e| e.to_string())?;
-    Ok(id)
-}
-
-#[tauri::command]
-pub fn create_scene(
+pub fn create_project(
     state: State<'_, DbState>,
-    chapter_id: String,
-    title: String,
-) -> Result<String, String> {
-    let id = uuid::Uuid::new_v4().to_string();
-    let db = state.connection.lock().map_err(|e| e.to_string())?;
-    db.execute("INSERT INTO scenes (id, chapter_id, title, content, pov, location, story_time, status, goal, notes) VALUES (?1, ?2, ?3, '', '', '', '', 'draft', '', '')", params![id, chapter_id, title]).map_err(|e| e.to_string())?;
-    Ok(id)
+    input: CreateProjectInput,
+) -> Result<Project, String> {
+    required(&input.title, "Der Projekttitel")?;
+    required(&input.author, "Der Autorenname")?;
+    let db = lock_db(&state)?;
+    let transaction = db
+        .unchecked_transaction()
+        .map_err(|error| sql_error("Projekttransaktion konnte nicht gestartet werden", error))?;
+    let project_id = new_id();
+    let book_id = new_id();
+    let timestamp = now();
+    let description = if input.description.trim().is_empty() {
+        "Neues lokales StoryMemory-Projekt"
+    } else {
+        input.description.as_str()
+    };
+    let book_title = if input.volume_title.trim().is_empty() {
+        input.title.as_str()
+    } else {
+        input.volume_title.as_str()
+    };
+    transaction.execute("INSERT INTO projects (id, title, author, description, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)", params![project_id, input.title.trim(), input.author.trim(), description, timestamp]).map_err(|error| sql_error("Projekt konnte nicht gespeichert werden", error))?;
+    transaction.execute("INSERT INTO books (id, project_id, title, volume, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)", params![book_id, project_id, book_title, input.volume.max(1), timestamp]).map_err(|error| sql_error("Band konnte nicht gespeichert werden", error))?;
+    transaction.commit().map_err(|error| {
+        sql_error(
+            "Projekttransaktion konnte nicht abgeschlossen werden",
+            error,
+        )
+    })?;
+    project_from_db(&db, &project_id)
+}
+
+#[tauri::command]
+pub fn create_chapter(
+    state: State<'_, DbState>,
+    input: CreateChapterInput,
+) -> Result<Chapter, String> {
+    required(&input.title, "Der Kapitelname")?;
+    let db = lock_db(&state)?;
+    let timestamp = now();
+    let book_exists: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM books WHERE id=?1)",
+            params![input.book_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| sql_error("Buch konnte nicht geprüft werden", error))?;
+    if !book_exists {
+        return Err("Das ausgewählte Buch wurde nicht gefunden.".into());
+    }
+    let id = new_id();
+    db.execute("INSERT INTO chapters (id, book_id, title, order_index, created_at, updated_at) VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(order_index), 0) + 1 FROM chapters WHERE book_id=?2), ?4, ?4)", params![id, input.book_id, input.title.trim(), timestamp]).map_err(|error| sql_error("Kapitel konnte nicht gespeichert werden", error))?;
+    load_chapter(&db, &id)
+}
+
+#[tauri::command]
+pub fn create_scene(state: State<'_, DbState>, input: CreateSceneInput) -> Result<Scene, String> {
+    required(&input.title, "Der Szenenname")?;
+    let db = lock_db(&state)?;
+    let chapter_exists: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM chapters WHERE id=?1)",
+            params![input.chapter_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| sql_error("Kapitel konnte nicht geprüft werden", error))?;
+    if !chapter_exists {
+        return Err("Das ausgewählte Kapitel wurde nicht gefunden.".into());
+    }
+    let id = new_id();
+    db.execute("INSERT INTO scenes (id, chapter_id, title, order_index, content, pov, location, story_time, status, goal, notes) VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(order_index), 0) + 1 FROM scenes WHERE chapter_id=?2), '', '', '', '', 'draft', '', '')", params![id, input.chapter_id, input.title.trim()]).map_err(|error| sql_error("Szene konnte nicht gespeichert werden", error))?;
+    load_scene(&db, &id)
+}
+
+#[tauri::command]
+pub fn update_scene(state: State<'_, DbState>, input: SceneInput) -> Result<Scene, String> {
+    required(&input.title, "Der Szenenname")?;
+    validate_scene_status(&input.status)?;
+    let db = lock_db(&state)?;
+    let chapter_exists: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM chapters WHERE id=?1)",
+            params![input.chapter_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| sql_error("Kapitel konnte nicht geprüft werden", error))?;
+    if !chapter_exists {
+        return Err("Das Kapitel der Szene wurde nicht gefunden.".into());
+    }
+    let transaction = db
+        .unchecked_transaction()
+        .map_err(|error| sql_error("Speichertransaktion konnte nicht gestartet werden", error))?;
+    let timestamp = now();
+    let changed = transaction.execute("UPDATE scenes SET chapter_id=?2, title=?3, order_index=?4, content=?5, pov=?6, location=?7, story_time=?8, status=?9, goal=?10, notes=?11, updated_at=?12 WHERE id=?1", params![input.id, input.chapter_id, input.title.trim(), input.order_index, input.content, input.pov, input.location, input.story_time, input.status, input.goal, input.notes, timestamp]).map_err(|error| sql_error("Szene konnte nicht gespeichert werden", error))?;
+    if changed == 0 {
+        return Err("Die Szene wurde nicht gefunden.".into());
+    }
+    transaction
+        .execute(
+            "INSERT INTO scene_versions (id, scene_id, content) VALUES (?1, ?2, ?3)",
+            params![new_id(), input.id, input.content],
+        )
+        .map_err(|error| sql_error("Szenenversion konnte nicht gespeichert werden", error))?;
+    transaction
+        .execute(
+            "UPDATE chapters SET updated_at=?1 WHERE id=?2",
+            params![timestamp, input.chapter_id],
+        )
+        .map_err(|error| sql_error("Kapitelzeitpunkt konnte nicht aktualisiert werden", error))?;
+    transaction.commit().map_err(|error| {
+        sql_error(
+            "Speichertransaktion konnte nicht abgeschlossen werden",
+            error,
+        )
+    })?;
+    load_scene(&db, &input.id)
 }
 
 #[tauri::command]
 pub fn save_story_entity(
     state: State<'_, DbState>,
-    entity: StoryEntityInput,
-) -> Result<(), String> {
-    let now = Utc::now().to_rfc3339();
-    let db = state.connection.lock().map_err(|e| e.to_string())?;
-    db.execute("INSERT INTO story_entities (id, name, entity_type, description, status, confidence, source, chapter, scene, author_confirmed, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description, status=excluded.status, confidence=excluded.confidence, updated_at=excluded.updated_at", params![entity.id, entity.name, entity.entity_type, entity.description, entity.status, entity.confidence, entity.source, entity.chapter, entity.scene, entity.author_confirmed, now]).map_err(|e| e.to_string())?;
-    Ok(())
+    input: StoryEntityInput,
+) -> Result<StoryEntity, String> {
+    required(&input.name, "Der Eintragsname")?;
+    validate_entity_status(&input.status)?;
+    let db = lock_db(&state)?;
+    let project_exists: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+            params![input.project_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| sql_error("Projekt konnte nicht geprüft werden", error))?;
+    if !project_exists {
+        return Err("Das Projekt des Story-Bible-Eintrags wurde nicht gefunden.".into());
+    }
+    let timestamp = now();
+    db.execute("INSERT INTO story_entities (id, project_id, name, entity_type, description, status, confidence, source, chapter, scene, author_confirmed, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, name=excluded.name, entity_type=excluded.entity_type, description=excluded.description, status=excluded.status, confidence=excluded.confidence, source=excluded.source, chapter=excluded.chapter, scene=excluded.scene, author_confirmed=excluded.author_confirmed, updated_at=excluded.updated_at", params![input.id, input.project_id, input.name.trim(), input.entity_type, input.description, input.status, input.confidence.clamp(0.0, 1.0), input.source, input.chapter, input.scene, input.author_confirmed, timestamp]).map_err(|error| sql_error("Story-Bible-Eintrag konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT id, project_id, name, entity_type, description, status, confidence, source, chapter, scene, author_confirmed, created_at, updated_at FROM story_entities WHERE id=?1", params![input.id], entity_from_row).map_err(|error| sql_error("Gespeicherter Story-Bible-Eintrag konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn list_story_entities(
+    state: State<'_, DbState>,
+    project_id: String,
+) -> Result<Vec<StoryEntity>, String> {
+    let db = lock_db(&state)?;
+    load_entities(&db, &project_id)
+}
+
+#[tauri::command]
+pub fn database_info(state: State<'_, DbState>) -> Result<DatabaseInfo, String> {
+    let _db = lock_db(&state)?;
+    Ok(DatabaseInfo {
+        path: state.path.display().to_string(),
+        connected: true,
+        engine: "sqlite".into(),
+        detail: "Lokale SQLite-Datenbank der StoryMemory-Desktop-App".into(),
+    })
 }
 
 #[tauri::command]
@@ -88,4 +395,107 @@ pub fn provider_status() -> Vec<ProviderStatus> {
             detail: "Offizieller CLI-Client noch nicht konfiguriert".into(),
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::{database_path_for_test, seed_if_empty};
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn connection(name: &str) -> (std::path::PathBuf, Connection) {
+        let path = std::env::temp_dir().join(format!(
+            "storymemory-command-{name}-{}.sqlite3",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let db = database_path_for_test(&path).unwrap();
+        seed_if_empty(&db).unwrap();
+        (path, db)
+    }
+
+    #[test]
+    fn project_is_returned_after_insert() {
+        let (path, db) = connection("project");
+        let input = CreateProjectInput {
+            title: "Neu".into(),
+            author: "Ada".into(),
+            description: String::new(),
+            volume_title: String::new(),
+            volume: 1,
+        };
+        let tx = db.unchecked_transaction().unwrap();
+        let id = new_id();
+        tx.execute(
+            "INSERT INTO projects (id,title,author,description) VALUES (?1,?2,?3,?4)",
+            params![id, input.title, input.author, "Test"],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        assert_eq!(project_from_db(&db, &id).unwrap().title, "Neu");
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn chapter_has_correct_book_reference() {
+        let (path, db) = connection("chapter");
+        let id = new_id();
+        db.execute(
+            "INSERT INTO chapters (id,book_id,title,order_index) VALUES (?1,'book-1','Neu',4)",
+            params![id],
+        )
+        .unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT book_id FROM chapters WHERE id=?1",
+                params![id],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            "book-1"
+        );
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn scene_has_correct_chapter_reference() {
+        let (path, db) = connection("scene");
+        let id = new_id();
+        db.execute(
+            "INSERT INTO scenes (id,chapter_id,title) VALUES (?1,'chapter-1','Neu')",
+            params![id],
+        )
+        .unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT chapter_id FROM scenes WHERE id=?1",
+                params![id],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            "chapter-1"
+        );
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn workspace_load_has_project_chapters_and_entities() {
+        let (path, db) = connection("workspace");
+        let books = load_books(&db, "project-zugestellt").unwrap();
+        let chapters = load_chapters(&db, &books).unwrap();
+        let entities = load_entities(&db, "project-zugestellt").unwrap();
+        assert_eq!(books.len(), 1);
+        assert_eq!(chapters.len(), 3);
+        assert!(!entities.is_empty());
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
 }

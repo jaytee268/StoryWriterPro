@@ -1,23 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createChapter, createProject, createScene, getLocalState, saveScene, saveStoryEntity } from './localStore';
-import { MockCorrectionService, chunkText } from './correctionService';
-import { MockProvider } from './providerBridge';
-import { demoEntities } from './mockData';
+import { DesktopCommandError, isTauriRuntime, desktopInvoke } from './desktop';
+import { BrowserDemoRepository } from './storyRepository';
+import { SceneSaveQueue } from './sceneSaveQueue';
+import type { Scene } from '../types/domain';
 
 const store = new Map<string, string>();
 vi.stubGlobal('localStorage', { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => store.set(key, value), removeItem: (key: string) => store.delete(key) });
+vi.stubGlobal('crypto', { randomUUID: () => `browser-id-${Math.random().toString(16).slice(2)}` });
 
-beforeEach(() => { store.clear(); });
+beforeEach(() => { store.clear(); vi.stubGlobal('window', {}); });
 
-describe('lokales Projektmodell', () => {
-  it('legt ein Projekt an', async () => { const project = await createProject('Neue Geschichte', 'Ada Autor'); expect(project.title).toBe('Neue Geschichte'); expect(getLocalState().project.author).toBe('Ada Autor'); });
-  it('legt ein Kapitel und eine Szene an', async () => { const chapter = await createChapter('Kapitel 4 – Rückkehr'); const scene = await createScene(chapter.id, 'Die Tür'); expect(scene.chapterId).toBe(chapter.id); expect(getLocalState().chapters.some((item) => item.id === chapter.id && item.scenes[0]?.title === 'Die Tür')).toBe(true); });
-  it('speichert eine Szene lokal', async () => { const chapter = await createChapter('Kapitel 4'); const scene = await createScene(chapter.id, 'Die Tür'); await saveScene({ ...scene, content: 'Lokaler Text.' }); expect(getLocalState().chapters.find((item) => item.id === chapter.id)?.scenes[0]?.content).toBe('Lokaler Text.'); });
-  it('speichert einen Story-Bible-Eintrag', async () => { const entity = { ...demoEntities[0], id: 'local-entity', name: 'Neue Figur' }; await saveStoryEntity(entity); expect(getLocalState().entities[0]?.name).toBe('Neue Figur'); });
+function firstScene(repository: BrowserDemoRepository): Promise<Scene> { return repository.loadWorkspace().then((workspace) => workspace.chapters[0]!.scenes[0]!); }
+
+describe('Runtime und Repository', () => {
+  it('erkennt Browser-Demo und Tauri getrennt', () => { expect(isTauriRuntime()).toBe(false); vi.stubGlobal('window', { __TAURI_INTERNALS__: {} }); expect(isTauriRuntime()).toBe(true); });
+  it('lädt den BrowserDemoRepository isoliert', async () => { const repository = new BrowserDemoRepository(); const workspace = await repository.loadWorkspace(); expect(repository.mode).toBe('browser-demo'); expect(workspace.project.title).toBe('Zugestellt'); expect(workspace.chapters[2]?.scenes[0]?.content).toContain('Marek'); });
+  it('übernimmt IDs und Beziehungen aus Repository-Ergebnissen', async () => { const repository = new BrowserDemoRepository(); const workspace = await repository.loadWorkspace(); const chapter = await repository.createChapter({ bookId: workspace.books[0]!.id, title: 'Kapitel 4' }); const scene = await repository.createScene({ chapterId: chapter.id, title: 'Die Tür' }); expect(chapter.id).not.toBe('chapter-4'); expect(scene.chapterId).toBe(chapter.id); expect((await repository.loadWorkspace()).chapters.find((item) => item.id === chapter.id)?.scenes[0]?.id).toBe(scene.id); });
+  it('speichert Text mit Umlauten und Zeilenumbrüchen', async () => { const repository = new BrowserDemoRepository(); const scene = await firstScene(repository); const text = 'Äpfel „sicher“\n\nZeile zwei.'; await repository.updateScene({ ...scene, content: text }); expect((await repository.loadWorkspace()).chapters[0]?.scenes[0]?.content).toBe(text); });
 });
 
-describe('Provider und Korrektur', () => {
-  it('liefert eine Mock-Provider-Antwort mit Quellen', async () => { const result = await new MockProvider().runTask({ id: 'task', type: 'chat', prompt: 'Prüfe', context: [] }); expect(result.text).toContain('Band 1'); expect(result.sources).toContain('Kapitel 3'); });
-  it('erkennt Korrekturen als Diff und kann sie anwenden', async () => { const service = new MockCorrectionService(); const result = await service.check('Die Szene wiederspiegelt  den Konflikt.'); expect(result.corrections).toHaveLength(2); const fixed = service.apply(result.sourceText, result.corrections[0]!); expect(fixed).toContain('widerspiegelt'); });
-  it('chunked Text an Absatzgrenzen mit Überlappung', () => { const text = Array.from({ length: 40 }, (_, index) => `Absatz ${index} mit ausreichend Inhalt für den lokalen Import.`).join('\n\n'); const chunks = chunkText(text, 40, 8); expect(chunks.length).toBeGreaterThan(1); expect(chunks[0]).toContain('Absatz 0'); expect(chunks.at(-1)).toContain('Absatz 39'); });
+describe('Desktop-Fehler und Autosave', () => {
+  it('verschluckt Tauri-Fehler nicht', async () => { await expect(desktopInvoke('load_workspace')).rejects.toBeInstanceOf(DesktopCommandError); await expect(desktopInvoke('load_workspace')).rejects.toMatchObject({ command: 'load_workspace' }); });
+  it('wechselt sauber zwischen dirty, saving und saved', async () => { const statuses: string[] = []; const scene = { ...(await firstScene(new BrowserDemoRepository())), content: 'Neu' }; const queue = new SceneSaveQueue(async (value) => value, { onStatus: (status) => statuses.push(status), onSaved: vi.fn(), onError: vi.fn() }, 1); queue.schedule(scene); await new Promise((resolve) => setTimeout(resolve, 5)); await queue.flush(); expect(statuses).toEqual(['dirty', 'saving', 'saved']); });
+  it('lässt eine alte Antwort keinen neueren Text überschreiben', async () => { let resolveFirst: (() => void) | undefined; let calls = 0; const saved: string[] = []; const scene = await firstScene(new BrowserDemoRepository()); const queue = new SceneSaveQueue((value) => new Promise<Scene>((resolve) => { calls += 1; if (calls === 1) resolveFirst = () => resolve(value); else resolve(value); }), { onStatus: () => undefined, onSaved: (value) => saved.push(value.content), onError: () => undefined }, 1); queue.schedule({ ...scene, content: 'alt' }); const first = queue.flush(); queue.schedule({ ...scene, content: 'neu' }); resolveFirst?.(); await first; expect(saved).toEqual(['neu']); });
 });

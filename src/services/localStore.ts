@@ -1,14 +1,6 @@
-import { demoChapters, demoEntities, demoProject } from './mockData';
-import { desktopInvoke } from './desktop';
-import type { Chapter, Project, Scene, StoryEntity } from '../types/domain';
-
-const key = 'storymemory-demo-state';
-interface StoredState { project: Project; chapters: Chapter[]; entities: StoryEntity[]; }
-function read(): StoredState { try { const parsed = JSON.parse(localStorage.getItem(key) ?? 'null') as StoredState | null; return parsed ?? { project: demoProject, chapters: demoChapters, entities: demoEntities }; } catch { return { project: demoProject, chapters: demoChapters, entities: demoEntities }; } }
-function write(state: StoredState): void { localStorage.setItem(key, JSON.stringify(state)); }
-export function getLocalState(): StoredState { return read(); }
-export async function createProject(title: string, author = ''): Promise<Project> { const state = read(); const project: Project = { id: crypto.randomUUID(), title, author, description: 'Neues lokales StoryMemory-Projekt', updatedAt: 'gerade eben', wordCount: 0, openWarnings: 0, bibleProgress: 0 }; write({ ...state, project }); await desktopInvoke('create_project', { title, author }); return project; }
-export async function saveScene(scene: Scene): Promise<void> { const state = read(); state.chapters = state.chapters.map((chapter) => ({ ...chapter, scenes: chapter.scenes.map((candidate) => candidate.id === scene.id ? scene : candidate) })); write(state); await desktopInvoke('save_scene', { scene }); }
-export async function saveStoryEntity(entity: StoryEntity): Promise<void> { const state = read(); state.entities = state.entities.some((candidate) => candidate.id === entity.id) ? state.entities.map((candidate) => candidate.id === entity.id ? entity : candidate) : [entity, ...state.entities]; write(state); await desktopInvoke('save_story_entity', { entity }); }
-export async function createChapter(title: string): Promise<Chapter> { const state = read(); const chapter: Chapter = { id: crypto.randomUUID(), bookId: 'book-1', title, orderIndex: state.chapters.length + 1, scenes: [] }; state.chapters.push(chapter); write(state); await desktopInvoke('create_chapter', { title }); return chapter; }
-export async function createScene(chapterId: string, title: string): Promise<Scene> { const state = read(); const chapter = state.chapters.find((item) => item.id === chapterId); const scene: Scene = { id: crypto.randomUUID(), chapterId, title, orderIndex: (chapter?.scenes.length ?? 0) + 1, content: '', pov: 'Marek', location: 'Unbestimmt', storyTime: 'Unbestimmt', status: 'draft', goal: '', notes: '' }; state.chapters = state.chapters.map((item) => item.id === chapterId ? { ...item, scenes: [...item.scenes, scene] } : item); write(state); await desktopInvoke('create_scene', { chapterId, title }); return scene; }
+/**
+ * Compatibility export for older feature code.
+ * The application now uses StoryRepository directly; browser persistence lives
+ * only inside BrowserDemoRepository and is never used by the desktop runtime.
+ */
+export { BrowserDemoRepository } from './storyRepository';

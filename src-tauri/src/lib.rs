@@ -18,12 +18,14 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            commands::get_dashboard_snapshot,
-            commands::list_story_entities,
-            commands::save_scene,
+            commands::load_workspace,
+            commands::create_project,
             commands::create_chapter,
             commands::create_scene,
+            commands::update_scene,
+            commands::list_story_entities,
             commands::save_story_entity,
+            commands::database_info,
             commands::check_local_languagetool,
             commands::provider_status
         ])
