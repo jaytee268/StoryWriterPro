@@ -1,10 +1,10 @@
 use crate::{
     database::DbState,
     models::{
-        validate_entity_status, validate_scene_status, Book, Chapter, CreateChapterInput,
-        CreateProjectInput, CreateSceneInput, DatabaseInfo, EditorPreferences, Project,
-        ProviderStatus, RestoreSceneVersionInput, Scene, SceneInput, SceneVersion, StoryEntity,
-        StoryEntityInput, WorkspaceSnapshot,
+        validate_entity_status, validate_scene_status, validate_scene_version_reason, Book,
+        Chapter, CreateChapterInput, CreateProjectInput, CreateSceneInput, CreateSceneVersionInput,
+        DatabaseInfo, EditorPreferences, Project, ProviderStatus, RestoreSceneVersionInput, Scene,
+        SceneInput, SceneVersion, StoryEntity, StoryEntityInput, WorkspaceSnapshot,
     },
 };
 use chrono::Utc;
@@ -106,7 +106,7 @@ fn scene_input_from_scene(scene: &Scene) -> SceneInput {
     }
 }
 
-fn save_scene_in_transaction(
+fn update_scene_in_transaction(
     transaction: &rusqlite::Transaction<'_>,
     input: &SceneInput,
     timestamp: &str,
@@ -117,24 +117,77 @@ fn save_scene_in_transaction(
     if changed == 0 {
         return Err("Die Szene wurde nicht gefunden.".into());
     }
-    let snapshot_json = serde_json::to_string(input)
-        .map_err(|error| sql_error("Szenenversion konnte nicht vorbereitet werden", error))?;
-    transaction
-        .execute("INSERT INTO scene_versions (id, scene_id, content, created_at, version_number, snapshot_json) VALUES (?1, ?2, ?3, ?4, (SELECT COALESCE(MAX(version_number), 0) + 1 FROM scene_versions WHERE scene_id=?2), ?5)", params![new_id(), input.id, input.content, timestamp, snapshot_json])
-        .map_err(|error| sql_error("Szenenversion konnte nicht gespeichert werden", error))?;
     transaction
         .execute(
             "UPDATE chapters SET updated_at=?1 WHERE id=?2",
             params![timestamp, input.chapter_id],
         )
         .map_err(|error| sql_error("Kapitelzeitpunkt konnte nicht aktualisiert werden", error))?;
+    transaction
+        .execute(
+            "UPDATE projects SET updated_at=?1 WHERE id=(SELECT books.project_id FROM books JOIN chapters ON chapters.book_id=books.id WHERE chapters.id=?2)",
+            params![timestamp, input.chapter_id],
+        )
+        .map_err(|error| sql_error("Projektzeitpunkt konnte nicht aktualisiert werden", error))?;
     Ok(())
+}
+
+fn insert_scene_version_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    scene: &Scene,
+    timestamp: &str,
+    reason: &str,
+) -> Result<(String, i64), String> {
+    validate_scene_version_reason(reason)?;
+    let input = scene_input_from_scene(scene);
+    let snapshot_json = serde_json::to_string(&input)
+        .map_err(|error| sql_error("Szenenversion konnte nicht vorbereitet werden", error))?;
+    let id = new_id();
+    let version_number: i64 = transaction
+        .query_row(
+            "SELECT COALESCE(MAX(version_number), 0) + 1 FROM scene_versions WHERE scene_id=?1",
+            params![scene.id],
+            |row| row.get(0),
+        )
+        .map_err(|error| sql_error("Versionsnummer konnte nicht ermittelt werden", error))?;
+    transaction
+        .execute(
+            "INSERT INTO scene_versions (id, scene_id, content, reason, created_at, version_number, snapshot_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, scene.id, scene.content, reason, timestamp, version_number, snapshot_json],
+        )
+        .map_err(|error| sql_error("Szenenversion konnte nicht gespeichert werden", error))?;
+    Ok((id, version_number))
+}
+
+fn create_scene_version_in_db(
+    db: &Connection,
+    scene_id: &str,
+    reason: &str,
+) -> Result<SceneVersion, String> {
+    validate_scene_version_reason(reason)?;
+    let scene = load_scene(db, scene_id)?;
+    let transaction = db
+        .unchecked_transaction()
+        .map_err(|error| sql_error("Versionsspeicherung konnte nicht gestartet werden", error))?;
+    let timestamp = now();
+    let (version_id, _) =
+        insert_scene_version_in_transaction(&transaction, &scene, &timestamp, reason)?;
+    transaction.commit().map_err(|error| {
+        sql_error(
+            "Versionsspeicherung konnte nicht abgeschlossen werden",
+            error,
+        )
+    })?;
+    load_scene_versions(db, scene_id)?
+        .into_iter()
+        .find(|version| version.id == version_id)
+        .ok_or_else(|| "Die gespeicherte Version konnte nicht geladen werden.".into())
 }
 
 fn load_scene_versions(db: &Connection, scene_id: &str) -> Result<Vec<SceneVersion>, String> {
     let current = load_scene(db, scene_id)?;
     let mut statement = db
-        .prepare("SELECT id, scene_id, content, created_at, version_number, snapshot_json FROM scene_versions WHERE scene_id=?1 ORDER BY created_at DESC, version_number DESC")
+        .prepare("SELECT id, scene_id, content, reason, created_at, version_number, snapshot_json FROM scene_versions WHERE scene_id=?1 ORDER BY created_at DESC, version_number DESC")
         .map_err(|error| sql_error("Verlauf konnte nicht geladen werden", error))?;
     let rows = statement
         .query_map(params![scene_id], |row| {
@@ -143,8 +196,9 @@ fn load_scene_versions(db: &Connection, scene_id: &str) -> Result<Vec<SceneVersi
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, String>(5)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, String>(6)?,
             ))
         })
         .map_err(|error| sql_error("Verlauf konnte nicht geladen werden", error))?
@@ -156,7 +210,7 @@ fn load_scene_versions(db: &Connection, scene_id: &str) -> Result<Vec<SceneVersi
         .map(
             |(
                 index,
-                (id, version_scene_id, content, created_at, version_number, snapshot_json),
+                (id, version_scene_id, content, reason, created_at, version_number, snapshot_json),
             )| {
                 let mut scene = current.clone();
                 if let Ok(snapshot) = serde_json::from_str::<SceneInput>(&snapshot_json) {
@@ -182,6 +236,7 @@ fn load_scene_versions(db: &Connection, scene_id: &str) -> Result<Vec<SceneVersi
                         (total - index) as i64
                     },
                     content,
+                    reason,
                     created_at,
                     scene,
                 })
@@ -306,14 +361,12 @@ pub fn load_workspace(state: State<'_, DbState>) -> Result<WorkspaceSnapshot, St
     })
 }
 
-#[tauri::command]
-pub fn create_project(
-    state: State<'_, DbState>,
+pub(crate) fn create_project_in_db(
+    db: &Connection,
     input: CreateProjectInput,
 ) -> Result<Project, String> {
     required(&input.title, "Der Projekttitel")?;
     required(&input.author, "Der Autorenname")?;
-    let db = lock_db(&state)?;
     let transaction = db
         .unchecked_transaction()
         .map_err(|error| sql_error("Projekttransaktion konnte nicht gestartet werden", error))?;
@@ -338,16 +391,23 @@ pub fn create_project(
             error,
         )
     })?;
-    project_from_db(&db, &project_id)
+    project_from_db(db, &project_id)
 }
 
 #[tauri::command]
-pub fn create_chapter(
+pub fn create_project(
     state: State<'_, DbState>,
+    input: CreateProjectInput,
+) -> Result<Project, String> {
+    let db = lock_db(&state)?;
+    create_project_in_db(&db, input)
+}
+
+pub(crate) fn create_chapter_in_db(
+    db: &Connection,
     input: CreateChapterInput,
 ) -> Result<Chapter, String> {
     required(&input.title, "Der Kapitelname")?;
-    let db = lock_db(&state)?;
     let timestamp = now();
     let book_exists: bool = db
         .query_row(
@@ -359,15 +419,36 @@ pub fn create_chapter(
     if !book_exists {
         return Err("Das ausgewählte Buch wurde nicht gefunden.".into());
     }
+    let transaction = db
+        .unchecked_transaction()
+        .map_err(|error| sql_error("Kapiteltransaktion konnte nicht gestartet werden", error))?;
     let id = new_id();
-    db.execute("INSERT INTO chapters (id, book_id, title, order_index, created_at, updated_at) VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(order_index), 0) + 1 FROM chapters WHERE book_id=?2), ?4, ?4)", params![id, input.book_id, input.title.trim(), timestamp]).map_err(|error| sql_error("Kapitel konnte nicht gespeichert werden", error))?;
-    load_chapter(&db, &id)
+    transaction
+        .execute("INSERT INTO chapters (id, book_id, title, order_index, created_at, updated_at) VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(order_index), 0) + 1 FROM chapters WHERE book_id=?2), ?4, ?4)", params![id, input.book_id, input.title.trim(), timestamp])
+        .map_err(|error| sql_error("Kapitel konnte nicht gespeichert werden", error))?;
+    transaction.commit().map_err(|error| {
+        sql_error(
+            "Kapiteltransaktion konnte nicht abgeschlossen werden",
+            error,
+        )
+    })?;
+    load_chapter(db, &id)
 }
 
 #[tauri::command]
-pub fn create_scene(state: State<'_, DbState>, input: CreateSceneInput) -> Result<Scene, String> {
-    required(&input.title, "Der Szenenname")?;
+pub fn create_chapter(
+    state: State<'_, DbState>,
+    input: CreateChapterInput,
+) -> Result<Chapter, String> {
     let db = lock_db(&state)?;
+    create_chapter_in_db(&db, input)
+}
+
+pub(crate) fn create_scene_in_db(
+    db: &Connection,
+    input: CreateSceneInput,
+) -> Result<Scene, String> {
+    required(&input.title, "Der Szenenname")?;
     let chapter_exists: bool = db
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM chapters WHERE id=?1)",
@@ -378,16 +459,26 @@ pub fn create_scene(state: State<'_, DbState>, input: CreateSceneInput) -> Resul
     if !chapter_exists {
         return Err("Das ausgewählte Kapitel wurde nicht gefunden.".into());
     }
+    let transaction = db
+        .unchecked_transaction()
+        .map_err(|error| sql_error("Szenentransaktion konnte nicht gestartet werden", error))?;
     let id = new_id();
-    db.execute("INSERT INTO scenes (id, chapter_id, title, order_index, content, pov, location, story_time, status, goal, notes) VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(order_index), 0) + 1 FROM scenes WHERE chapter_id=?2), '', '', '', '', 'draft', '', '')", params![id, input.chapter_id, input.title.trim()]).map_err(|error| sql_error("Szene konnte nicht gespeichert werden", error))?;
-    load_scene(&db, &id)
+    transaction.execute("INSERT INTO scenes (id, chapter_id, title, order_index, content, pov, location, story_time, status, goal, notes) VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(order_index), 0) + 1 FROM scenes WHERE chapter_id=?2), '', '', '', '', 'draft', '', '')", params![id, input.chapter_id, input.title.trim()]).map_err(|error| sql_error("Szene konnte nicht gespeichert werden", error))?;
+    transaction
+        .commit()
+        .map_err(|error| sql_error("Szenentransaktion konnte nicht abgeschlossen werden", error))?;
+    load_scene(db, &id)
 }
 
 #[tauri::command]
-pub fn update_scene(state: State<'_, DbState>, input: SceneInput) -> Result<Scene, String> {
+pub fn create_scene(state: State<'_, DbState>, input: CreateSceneInput) -> Result<Scene, String> {
+    let db = lock_db(&state)?;
+    create_scene_in_db(&db, input)
+}
+
+pub(crate) fn update_scene_in_db(db: &Connection, input: SceneInput) -> Result<Scene, String> {
     required(&input.title, "Der Szenenname")?;
     validate_scene_status(&input.status)?;
-    let db = lock_db(&state)?;
     let chapter_exists: bool = db
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM chapters WHERE id=?1)",
@@ -402,14 +493,29 @@ pub fn update_scene(state: State<'_, DbState>, input: SceneInput) -> Result<Scen
         .unchecked_transaction()
         .map_err(|error| sql_error("Speichertransaktion konnte nicht gestartet werden", error))?;
     let timestamp = now();
-    save_scene_in_transaction(&transaction, &input, &timestamp)?;
+    update_scene_in_transaction(&transaction, &input, &timestamp)?;
     transaction.commit().map_err(|error| {
         sql_error(
             "Speichertransaktion konnte nicht abgeschlossen werden",
             error,
         )
     })?;
-    load_scene(&db, &input.id)
+    load_scene(db, &input.id)
+}
+
+#[tauri::command]
+pub fn update_scene(state: State<'_, DbState>, input: SceneInput) -> Result<Scene, String> {
+    let db = lock_db(&state)?;
+    update_scene_in_db(&db, input)
+}
+
+#[tauri::command]
+pub fn create_scene_version(
+    state: State<'_, DbState>,
+    input: CreateSceneVersionInput,
+) -> Result<SceneVersion, String> {
+    let db = lock_db(&state)?;
+    create_scene_version_in_db(&db, &input.scene_id, &input.reason)
 }
 
 #[tauri::command]
@@ -460,7 +566,8 @@ pub fn restore_scene_version(
         .unchecked_transaction()
         .map_err(|error| sql_error("Wiederherstellung konnte nicht gestartet werden", error))?;
     let timestamp = now();
-    save_scene_in_transaction(&transaction, &restored, &timestamp)?;
+    insert_scene_version_in_transaction(&transaction, &current, &timestamp, "manual")?;
+    update_scene_in_transaction(&transaction, &restored, &timestamp)?;
     transaction
         .commit()
         .map_err(|error| sql_error("Wiederherstellung konnte nicht abgeschlossen werden", error))?;
@@ -632,6 +739,61 @@ mod tests {
     }
 
     #[test]
+    fn project_service_creates_project_and_first_book_transactionally() {
+        let (path, db) = connection("project-service");
+        let project = create_project_in_db(
+            &db,
+            CreateProjectInput {
+                title: "Transaktion".into(),
+                author: "Ada".into(),
+                description: String::new(),
+                volume_title: "Band Eins".into(),
+                volume: 1,
+            },
+        )
+        .unwrap();
+        let book: (String, String) = db
+            .query_row(
+                "SELECT id, project_id FROM books WHERE project_id=?1",
+                params![project.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(!project.id.is_empty());
+        assert!(!book.0.is_empty());
+        assert_eq!(book.1, project.id);
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn chapter_and_scene_services_return_backend_ids_and_foreign_keys() {
+        let (path, db) = connection("service-ids");
+        let chapter = create_chapter_in_db(
+            &db,
+            CreateChapterInput {
+                book_id: "book-1".into(),
+                title: "Service-Kapitel".into(),
+            },
+        )
+        .unwrap();
+        let scene = create_scene_in_db(
+            &db,
+            CreateSceneInput {
+                chapter_id: chapter.id.clone(),
+                title: "Service-Szene".into(),
+            },
+        )
+        .unwrap();
+        assert!(!chapter.id.is_empty());
+        assert!(!scene.id.is_empty());
+        assert_eq!(chapter.book_id, "book-1");
+        assert_eq!(scene.chapter_id, chapter.id);
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn chapter_has_correct_book_reference() {
         let (path, db) = connection("chapter");
         let id = new_id();
@@ -704,14 +866,63 @@ mod tests {
             goal: "Ein Ziel".into(),
             notes: "Eine Notiz".into(),
         };
-        let transaction = db.unchecked_transaction().unwrap();
-        save_scene_in_transaction(&transaction, &input, "2026-07-31T00:00:00+00:00").unwrap();
-        transaction.commit().unwrap();
+        update_scene_in_db(&db, input.clone()).unwrap();
+        let version = create_scene_version_in_db(&db, "scene-1", "manual").unwrap();
         let versions = load_scene_versions(&db, "scene-1").unwrap();
         assert_eq!(versions.len(), 1);
         assert_eq!(versions[0].scene.pov, "Lena");
         assert_eq!(versions[0].scene.content, input.content);
         assert_eq!(versions[0].version_number, 1);
+        assert_eq!(version.reason, "manual");
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn autosave_updates_do_not_create_historical_versions() {
+        let (path, db) = connection("autosave-versions");
+        let mut input = scene_input_from_scene(&load_scene(&db, "scene-1").unwrap());
+        for index in 0..20 {
+            input.content = format!("Fassung {index}");
+            update_scene_in_db(&db, input.clone()).unwrap();
+        }
+        assert!(load_scene_versions(&db, "scene-1").unwrap().is_empty());
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn created_version_survives_database_reopen_and_keeps_scene_fk() {
+        let path = std::env::temp_dir().join(format!(
+            "storymemory-command-version-reopen-{}.sqlite3",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        {
+            let db = database_path_for_test(&path).unwrap();
+            seed_if_empty(&db).unwrap();
+            let version = create_scene_version_in_db(&db, "scene-1", "manual").unwrap();
+            assert_eq!(version.scene_id, "scene-1");
+        }
+        let reopened = database_path_for_test(&path).unwrap();
+        let versions = load_scene_versions(&reopened, "scene-1").unwrap();
+        assert_eq!(versions.len(), 1);
+        assert_eq!(versions[0].content, versions[0].scene.content);
+        drop(reopened);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn update_scene_service_rejects_missing_scene_and_invalid_status() {
+        let (path, db) = connection("scene-errors");
+        let mut missing = scene_input_from_scene(&load_scene(&db, "scene-1").unwrap());
+        missing.id = "not-there".into();
+        assert!(update_scene_in_db(&db, missing).is_err());
+        let mut invalid = scene_input_from_scene(&load_scene(&db, "scene-1").unwrap());
+        invalid.status = "unknown".into();
+        assert!(update_scene_in_db(&db, invalid).is_err());
         drop(db);
         let _ = fs::remove_file(path);
     }

@@ -23,6 +23,7 @@ pub fn run() {
             commands::create_chapter,
             commands::create_scene,
             commands::update_scene,
+            commands::create_scene_version,
             commands::list_scene_versions,
             commands::restore_scene_version,
             commands::get_editor_preferences,

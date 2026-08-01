@@ -11,7 +11,8 @@ export interface Project { id: string; title: string; author: string; descriptio
 export interface Book { id: string; projectId: string; title: string; volume: number; createdAt?: string; updatedAt?: string; }
 export interface Chapter { id: string; bookId: string; title: string; orderIndex: number; scenes: Scene[]; createdAt?: string; updatedAt?: string; }
 export interface Scene { id: string; chapterId: string; title: string; orderIndex: number; content: string; pov: string; location: string; storyTime: string; status: SceneStatus; goal: string; notes: string; createdAt?: string; updatedAt?: string; }
-export interface SceneVersion { id: string; sceneId: string; versionNumber: number; content: string; createdAt: string; scene: Scene; }
+export type SceneVersionReason = 'manual' | 'before_correction' | 'before_ai_change' | 'before_import' | 'automatic_checkpoint';
+export interface SceneVersion { id: string; sceneId: string; versionNumber: number; content: string; reason: SceneVersionReason; createdAt: string; scene: Scene; }
 export interface StoryEntity { id: string; projectId?: string; name: string; type: EntityType; description: string; status: EntityStatus; confidence: number; source: string; chapter: string; scene: string; authorConfirmed: boolean; updatedAt: string; createdAt?: string; tags: string[]; }
 export interface TimelineEvent { id: string; title: string; storyTime: string; chapter: string; scene: string; location: string; characters: string[]; pov: string; summary: string; consequences: string; knowledge: string; clue?: string; status: EntityStatus; track: string; }
 export interface MindNode { id: string; label: string; type: string; x: number; y: number; status?: EntityStatus; }
@@ -28,4 +29,5 @@ export interface CreateProjectInput { title: string; author: string; description
 export interface CreateChapterInput { bookId: string; title: string; }
 export interface CreateSceneInput { chapterId: string; title: string; }
 export type UpdateSceneInput = Scene;
+export interface CreateSceneVersionInput { sceneId: string; reason?: SceneVersionReason; }
 export interface SaveStoryEntityInput extends StoryEntity { projectId: string; }

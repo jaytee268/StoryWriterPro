@@ -411,6 +411,12 @@ body { background: var(--bg); color: var(--text); }
 .page-kicker { margin-bottom: 30px; }
 .simple-editor-bottom { margin-top: 14px; }
 .simple-editor-bottom .details-toggle { min-height: 48px; }
+.status-dot-saving { background: #526bc0; box-shadow: 0 0 0 3px #526bc022; animation: save-pulse 1.1s ease-in-out infinite; }
+.status-dot-dirty { background: #c28a2c; box-shadow: 0 0 0 3px #c28a2c22; }
+.status-dot-error { background: #b04f45; box-shadow: 0 0 0 3px #b04f4522; }
+@keyframes save-pulse { 50% { opacity: .45; transform: scale(.82); } }
+.workspace-save-error { max-width: 1040px; margin: 0 auto 14px; }
+.close-save-actions { display: flex; flex-direction: column; gap: 10px; }
 .sidebar-toggle { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; flex: none; border: 1px solid #d6dee8; border-radius: 7px; color: #65758a; background: #ffffff; transition: color .18s ease, background .18s ease, border-color .18s ease; }
 .sidebar-toggle:hover { color: #304b8c; border-color: #9db0da; background: #f4f7ff; }
 .simple-topbar .topbar-title { display: flex !important; align-items: center; gap: 14px; }

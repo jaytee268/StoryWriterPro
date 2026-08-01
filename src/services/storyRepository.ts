@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { demoChapters, demoEntities, demoProject } from './mockData';
 import { desktopInvoke, isTauriRuntime } from './desktop';
-import type { Book, Chapter, CreateChapterInput, CreateProjectInput, CreateSceneInput, EditorPreferences, Project, SaveStoryEntityInput, Scene, SceneVersion, StoryEntity, UpdateSceneInput, WorkspaceSnapshot } from '../types/domain';
+import type { Book, Chapter, CreateChapterInput, CreateProjectInput, CreateSceneInput, CreateSceneVersionInput, EditorPreferences, Project, SaveStoryEntityInput, Scene, SceneVersion, StoryEntity, UpdateSceneInput, WorkspaceSnapshot } from '../types/domain';
 
 export type RuntimeMode = 'desktop' | 'browser-demo';
 export type SaveableScene = Scene;
@@ -15,6 +15,7 @@ export interface StoryRepository {
   createChapter(input: CreateChapterInput): Promise<Chapter>;
   createScene(input: CreateSceneInput): Promise<Scene>;
   updateScene(input: UpdateSceneInput): Promise<Scene>;
+  createSceneVersion(input: CreateSceneVersionInput): Promise<SceneVersion>;
   listSceneVersions(sceneId: string): Promise<SceneVersion[]>;
   restoreSceneVersion(sceneId: string, versionId: string): Promise<Scene>;
   getEditorPreferences(): Promise<EditorPreferences>;
@@ -30,7 +31,7 @@ const entityTypeSchema = z.enum(['character', 'relationship', 'place', 'organiza
 const projectSchema = z.object({ id: z.string(), title: z.string(), author: z.string(), description: z.string(), updatedAt: z.string(), createdAt: z.string().optional(), wordCount: z.number(), openWarnings: z.number(), bibleProgress: z.number() });
 const bookSchema = z.object({ id: z.string(), projectId: z.string(), title: z.string(), volume: z.number(), createdAt: z.string().optional(), updatedAt: z.string().optional() });
 const sceneSchema = z.object({ id: z.string(), chapterId: z.string(), title: z.string(), orderIndex: z.number(), content: z.string(), pov: z.string(), location: z.string(), storyTime: z.string(), status: statusSchema, goal: z.string(), notes: z.string(), createdAt: z.string().optional(), updatedAt: z.string().optional() });
-const sceneVersionSchema = z.object({ id: z.string(), sceneId: z.string(), versionNumber: z.number(), content: z.string(), createdAt: z.string(), scene: sceneSchema });
+const sceneVersionSchema = z.object({ id: z.string(), sceneId: z.string(), versionNumber: z.number(), content: z.string(), reason: z.enum(['manual', 'before_correction', 'before_ai_change', 'before_import', 'automatic_checkpoint']), createdAt: z.string(), scene: sceneSchema });
 const editorPreferencesSchema = z.object({ fontFamily: z.enum(['serif', 'sans', 'typewriter']), fontSize: z.number(), lineHeight: z.number() });
 const chapterSchema = z.object({ id: z.string(), bookId: z.string(), title: z.string(), orderIndex: z.number(), scenes: z.array(sceneSchema), createdAt: z.string().optional(), updatedAt: z.string().optional() });
 const entitySchema = z.object({ id: z.string(), projectId: z.string().optional(), name: z.string(), type: entityTypeSchema, description: z.string(), status: entityStatusSchema, confidence: z.number(), source: z.string(), chapter: z.string(), scene: z.string(), authorConfirmed: z.boolean(), updatedAt: z.string(), createdAt: z.string().optional(), tags: z.array(z.string()) });
@@ -53,6 +54,7 @@ export class TauriStoryRepository implements StoryRepository {
   async createChapter(input: CreateChapterInput): Promise<Chapter> { return parse(chapterSchema, await desktopInvoke('create_chapter', { input }), 'Kapitel'); }
   async createScene(input: CreateSceneInput): Promise<Scene> { return parse(sceneSchema, await desktopInvoke('create_scene', { input }), 'Szene'); }
   async updateScene(input: UpdateSceneInput): Promise<Scene> { return parse(sceneSchema, await desktopInvoke('update_scene', { input }), 'Szene'); }
+  async createSceneVersion(input: CreateSceneVersionInput): Promise<SceneVersion> { return parse(sceneVersionSchema, await desktopInvoke('create_scene_version', { input }), 'Szenenversion'); }
   async listSceneVersions(sceneId: string): Promise<SceneVersion[]> { return parse(z.array(sceneVersionSchema), await desktopInvoke('list_scene_versions', { sceneId }), 'Szenenverlauf'); }
   async restoreSceneVersion(sceneId: string, versionId: string): Promise<Scene> { return parse(sceneSchema, await desktopInvoke('restore_scene_version', { input: { sceneId, versionId } }), 'Wiederhergestellte Szene'); }
   async getEditorPreferences(): Promise<EditorPreferences> { return parse(editorPreferencesSchema, await desktopInvoke('get_editor_preferences'), 'Editor-Einstellungen'); }
@@ -119,9 +121,15 @@ export class BrowserDemoRepository implements StoryRepository {
     const index = chapter.scenes.findIndex((item) => item.id === input.id);
     if (index < 0) throw new Error('Die Szene wurde nicht gefunden.');
     const saved = { ...input, updatedAt: now() };
-    const version: SceneVersion = { id: crypto.randomUUID(), sceneId: saved.id, versionNumber: state.versions.filter((item) => item.sceneId === saved.id).length + 1, content: saved.content, createdAt: saved.updatedAt ?? now(), scene: clone(saved) };
-    state.versions = [version, ...state.versions];
     chapter.scenes[index] = saved; chapter.updatedAt = saved.updatedAt ?? now(); state.project.updatedAt = saved.updatedAt ?? now(); this.write(state); return clone(saved);
+  }
+  async createSceneVersion(input: CreateSceneVersionInput): Promise<SceneVersion> {
+    const state = this.read();
+    const scene = state.chapters.flatMap((chapter) => chapter.scenes).find((item) => item.id === input.sceneId);
+    if (!scene) throw new Error('Die Szene wurde nicht gefunden.');
+    const reason = input.reason ?? 'manual';
+    const version: SceneVersion = { id: crypto.randomUUID(), sceneId: scene.id, versionNumber: state.versions.filter((item) => item.sceneId === scene.id).length + 1, content: scene.content, reason, createdAt: now(), scene: clone(scene) };
+    state.versions = [version, ...state.versions]; this.write(state); return clone(version);
   }
   async listSceneVersions(sceneId: string): Promise<SceneVersion[]> { return this.read().versions.filter((version) => version.sceneId === sceneId).map(clone); }
   async restoreSceneVersion(sceneId: string, versionId: string): Promise<Scene> { const version = this.read().versions.find((item) => item.sceneId === sceneId && item.id === versionId); if (!version) throw new Error('Die Version wurde nicht gefunden.'); return this.updateScene({ ...version.scene, id: sceneId }); }

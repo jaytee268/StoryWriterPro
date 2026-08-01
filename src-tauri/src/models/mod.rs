@@ -62,6 +62,7 @@ pub struct SceneVersion {
     pub scene_id: String,
     pub version_number: i64,
     pub content: String,
+    pub reason: String,
     pub created_at: String,
     pub scene: Scene,
 }
@@ -71,6 +72,29 @@ pub struct SceneVersion {
 pub struct RestoreSceneVersionInput {
     pub scene_id: String,
     pub version_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSceneVersionInput {
+    pub scene_id: String,
+    #[serde(default = "default_scene_version_reason")]
+    pub reason: String,
+}
+
+fn default_scene_version_reason() -> String {
+    "manual".into()
+}
+
+pub fn validate_scene_version_reason(value: &str) -> Result<(), String> {
+    match value {
+        "manual"
+        | "before_correction"
+        | "before_ai_change"
+        | "before_import"
+        | "automatic_checkpoint" => Ok(()),
+        _ => Err(format!("Ungültiger Versionsgrund: {value}")),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -6,14 +6,16 @@ interface VersionHistoryProps {
   scene: Scene;
   onClose: () => void;
   onLoad: (sceneId: string) => Promise<SceneVersion[]>;
+  onCreate: (sceneId: string) => Promise<SceneVersion>;
   onRestore: (sceneId: string, versionId: string) => Promise<Scene>;
 }
 
-export function VersionHistory({ scene, onClose, onLoad, onRestore }: VersionHistoryProps) {
+export function VersionHistory({ scene, onClose, onLoad, onCreate, onRestore }: VersionHistoryProps) {
   const [versions, setVersions] = useState<SceneVersion[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [restoring, setRestoring] = useState('');
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -43,9 +45,20 @@ export function VersionHistory({ scene, onClose, onLoad, onRestore }: VersionHis
     finally { setRestoring(''); }
   };
 
+  const saveVersion = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      const created = await onCreate(scene.id);
+      setVersions((current) => [created, ...current.filter((version) => version.id !== created.id)]);
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : 'Die Version konnte nicht gespeichert werden.');
+    } finally { setSaving(false); }
+  };
+
   return <div className="history-backdrop" role="dialog" aria-modal="true" aria-labelledby="history-title">
     <section className="history-panel">
-      <header className="history-head"><div><span className="eyebrow">SICHER GESPEICHERT</span><h2 id="history-title">Verlauf</h2><p>{scene.title} · Jede Speicherung ist eine eigene Version.</p></div><button className="history-close" onClick={onClose} aria-label="Verlauf schließen"><X size={20} /></button></header>
+      <header className="history-head"><div><span className="eyebrow">SICHER GESPEICHERT</span><h2 id="history-title">Verlauf</h2><p>{scene.title} · Nur bewusst gesicherte Stände erscheinen hier.</p></div><div className="history-head-actions"><button className="primary-button" onClick={() => void saveVersion()} disabled={saving}><Clock3 size={16} /> {saving ? 'Sichert …' : 'Version sichern'}</button><button className="history-close" onClick={onClose} aria-label="Verlauf schließen"><X size={20} /></button></div></header>
       {loading && <div className="history-state"><LoaderCircle className="spin" size={20} /> Verlauf wird geladen …</div>}
       {!loading && error && <div className="history-error" role="alert">{error}</div>}
       {!loading && !error && versions.length === 0 && <div className="history-state"><Clock3 size={21} /> Noch keine gespeicherten Versionen. Die erste erscheint nach dem nächsten Speichern.</div>}

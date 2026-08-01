@@ -40,9 +40,9 @@ Das erzeugt `StoryMemory.app`. Der DMG-Schritt kann auf diesem Volume beim Nachb
 
 ## Lokale Datenhaltung
 
-Die kanonische Datenhaltung läuft in SQLite im Rust/Tauri-Layer. Die Datenbank wird bei der ersten App-Ausführung im Tauri-App-Datenverzeichnis unter `storymemory.sqlite3` angelegt. Migrationen liegen in `migrations/001_initial.sql`. Der Browser-Preview nutzt zusätzlich einen kleinen `localStorage`-Fallback, damit die UI ohne Desktop-Runtime navigierbar bleibt.
+Die kanonische Datenhaltung läuft in SQLite im Rust/Tauri-Layer. Die Datenbank wird bei der ersten App-Ausführung im Tauri-App-Datenverzeichnis unter `storymemory.sqlite3` angelegt. Die versionierten Migrationen liegen in `migrations/001_initial.sql` bis `migrations/005_normalize_scene_version_numbers.sql`. Der Browser-Preview nutzt zusätzlich einen kleinen `localStorage`-Fallback, damit die UI ohne Desktop-Runtime navigierbar bleibt.
 
-Die Datenbank enthält Projekte, Bücher, Kapitel, Szenen, Versionen, Story-Entitäten, Relationen, Fakten, Figurenwissen, Timeline-Ereignisse, Handlungsstränge, Hinweise, Geheimnisse, Korrekturresultate, Analysejobs, Provider-Einstellungen und App-Einstellungen. Provider-Tokens werden nicht in SQLite gespeichert.
+Die Datenbank enthält Projekte, Bücher, Kapitel, Szenen, Versionen, Story-Entitäten, Relationen, Fakten, Figurenwissen, Timeline-Ereignisse, Handlungsstränge, Hinweise, Geheimnisse, Korrekturresultate, Analysejobs, Provider-Einstellungen und App-Einstellungen. Provider-Tokens werden nicht in SQLite gespeichert. Story-Bible-Altlasten werden in Migration 004 nur bei genau einem vorhandenen Projekt automatisch zugeordnet; mehrdeutige Zeilen bleiben sichtbar unzugeordnet und werden nicht geraten.
 
 ## Architektur
 
@@ -71,6 +71,7 @@ Die UI kennt keine SQL-Abfragen. Sie verwendet Service-Funktionen, die im Deskto
 - Dashboard mit Beispielprojekt „Zugestellt“
 - navigierbarer Manuskripteditor mit Kapitel-/Szenenbaum, Autosave und Metadaten
 - lokale SQLite-Migration und Rust-Commands für Projekte, Szenen und Story-Bible-Einträge
+- getrennte Szenen-Historie: Autosave erzeugt keine Version pro Tastaturpause; bewusste Versionen werden lokal mit Grund gespeichert
 - Chat-Prototyp mit Mock-Antworten und Quellenchips
 - Story-Bible-Liste, Suche, Filter, Status, Vertrauen und Quelldetail
 - Timeline mit Spuren, Filtern, Zoom, Auswahl und Detailpanel
@@ -84,9 +85,9 @@ Echte KI-Provider, DOCX/EPUB-Import, vollständige Rich-Text-Formatierung, seman
 
 ## Nächste Schritte
 
-1. SQLite-Repositorys mit vollständigem Readback in die UI verdrahten.
+1. mehrdeutige alte Story-Bible-Einträge mit einem manuellen Zuordnungsdialog absichern.
 2. echten lokalen LanguageTool-Healthcheck und Diff-Review ergänzen.
 3. Tauri-Provider-Prozessrunner mit Freigabe-Snapshot und strukturierten JSON-Patches bauen.
-4. Editor-Versionshistorie, Volltextsuche und Dateiimport vertiefen.
+4. automatische Checkpoints nur als deutlich langsamen, optionalen Mechanismus ergänzen.
 
 Weitere Architektur- und Modellnotizen stehen unter `docs/`.

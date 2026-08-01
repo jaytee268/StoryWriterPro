@@ -61,6 +61,26 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
         ))?;
         connection.execute("INSERT INTO schema_migrations (version) VALUES (3)", [])?;
     }
+    let has_data_safety: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 4",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_data_safety == 0 {
+        connection.execute_batch(include_str!("../../../migrations/004_data_safety.sql"))?;
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (4)", [])?;
+    }
+    let has_normalized_versions: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 5",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_normalized_versions == 0 {
+        connection.execute_batch(include_str!(
+            "../../../migrations/005_normalize_scene_version_numbers.sql"
+        ))?;
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (5)", [])?;
+    }
     Ok(())
 }
 
@@ -172,7 +192,7 @@ pub fn ensure_initial_scene_versions(connection: &Connection) -> Result<()> {
             "goal": goal,
             "notes": notes,
         });
-        connection.execute("INSERT INTO scene_versions (id, scene_id, content, created_at, version_number, snapshot_json) VALUES (?1, ?2, ?3, ?4, 1, ?5)", params![uuid::Uuid::new_v4().to_string(), id, snapshot["content"].as_str().unwrap_or_default(), updated_at, snapshot.to_string()])?;
+        connection.execute("INSERT INTO scene_versions (id, scene_id, content, created_at, version_number, snapshot_json, reason) VALUES (?1, ?2, ?3, ?4, 1, ?5, 'automatic_checkpoint')", params![uuid::Uuid::new_v4().to_string(), id, snapshot["content"].as_str().unwrap_or_default(), updated_at, snapshot.to_string()])?;
     }
     Ok(())
 }
@@ -216,13 +236,13 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            3
+            5
         );
         assert_eq!(
             connection
-                .query_row("SELECT COUNT(*) FROM pragma_table_info('scene_versions') WHERE name IN ('version_number', 'snapshot_json')", [], |row| row.get::<_, i64>(0))
+                .query_row("SELECT COUNT(*) FROM pragma_table_info('scene_versions') WHERE name IN ('version_number', 'snapshot_json', 'reason')", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            2
+            3
         );
         drop(connection);
         let _ = fs::remove_file(path);
@@ -335,6 +355,90 @@ mod tests {
             "Bleibt erhalten"
         );
         drop(reopened);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn legacy_story_entities_are_backfilled_only_when_unambiguous() {
+        let path = temp_path("legacy-entities");
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(include_str!("../../../migrations/001_initial.sql"))
+                .unwrap();
+            connection
+                .execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP); INSERT INTO schema_migrations (version) VALUES (1);")
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO projects (id, title, author) VALUES ('legacy-project', 'Alt', 'Autor')",
+                    [],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO story_entities (id, name, entity_type) VALUES ('legacy-entity', 'Alte Figur', 'character')",
+                    [],
+                )
+                .unwrap();
+            initialize_connection(&connection).unwrap();
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT project_id FROM story_entities WHERE id='legacy-entity'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap(),
+                "legacy-project"
+            );
+            assert_eq!(
+                connection
+                    .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                5
+            );
+            // Running startup migrations again must not change the assignment
+            // or fail on the ALTER TABLE statement.
+            initialize_connection(&connection).unwrap();
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT project_id FROM story_entities WHERE id='legacy-entity'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap(),
+                "legacy-project"
+            );
+        }
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn ambiguous_legacy_story_entities_are_not_assigned() {
+        let path = temp_path("ambiguous-entities");
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(include_str!("../../../migrations/001_initial.sql"))
+            .unwrap();
+        connection
+            .execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP); INSERT INTO schema_migrations (version) VALUES (1);")
+            .unwrap();
+        connection
+            .execute_batch("INSERT INTO projects (id, title, author) VALUES ('p1', 'Eins', 'Autor'), ('p2', 'Zwei', 'Autor'); INSERT INTO story_entities (id, name, entity_type) VALUES ('orphan', 'Unklar', 'character');")
+            .unwrap();
+        initialize_connection(&connection).unwrap();
+        let project_id: Option<String> = connection
+            .query_row(
+                "SELECT project_id FROM story_entities WHERE id='orphan'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(project_id.is_none());
+        drop(connection);
         let _ = fs::remove_file(path);
     }
 }
