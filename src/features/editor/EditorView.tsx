@@ -3,6 +3,7 @@ import { AlignCenter, AlignLeft, AlignRight, ArrowLeft, Bold, Check, ChevronDown
 import type { Chapter, EditorPreferences, PendingSourceNavigation, Scene, SceneVersion, UpdateChapterInput } from '../../types/domain';
 import { SceneSaveQueue, type SceneSaveStatus } from '../../services/sceneSaveQueue';
 import { editorContentToHtml, editorContentToPlainText } from '../../utils/editorContent';
+import { unicodeIndexOf, unicodeSlice } from '../../utils/aiText';
 import { VersionHistory } from './VersionHistory';
 
 interface EditorProps {
@@ -125,25 +126,38 @@ export function EditorView({ chapters, scene, chapter, pendingSourceNavigation, 
     const plainText = editorContentToPlainText(scene?.content ?? draftScene?.content ?? '');
     let start = pendingSourceNavigation.startOffset;
     let end = pendingSourceNavigation.endOffset;
-    const offsetsValid = start !== undefined && end !== undefined && start >= 0 && end >= start && end <= plainText.length && (!pendingSourceNavigation.excerpt || plainText.slice(start, end).includes(pendingSourceNavigation.excerpt) || pendingSourceNavigation.excerpt.includes(plainText.slice(start, end)));
+    const offsetsValid = start !== undefined && end !== undefined && start >= 0 && end >= start && end <= Array.from(plainText).length && (!pendingSourceNavigation.excerpt || unicodeSlice(plainText, start, end).includes(pendingSourceNavigation.excerpt) || pendingSourceNavigation.excerpt.includes(unicodeSlice(plainText, start, end)));
     if (!offsetsValid && pendingSourceNavigation.excerpt) {
-      const fallback = plainText.indexOf(pendingSourceNavigation.excerpt);
-      if (fallback >= 0) { start = fallback; end = fallback + pendingSourceNavigation.excerpt.length; }
+      const fallback = unicodeIndexOf(plainText, pendingSourceNavigation.excerpt);
+      if (fallback >= 0) { start = fallback; end = fallback + Array.from(pendingSourceNavigation.excerpt).length; }
       else { start = undefined; end = undefined; setSourceNavigationNotice('Die Quellenstelle wurde seit der Erfassung möglicherweise verschoben.'); }
     }
     if (start !== undefined && end !== undefined) {
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-      const textNodes: Text[] = [];
-      let node: Node | null;
-      while ((node = walker.nextNode())) textNodes.push(node as Text);
+      const segments: Array<{ node: Text; start: number; end: number }> = [];
       let cursor = 0;
+      const collect = (node: Node) => {
+        if (node.nodeType === Node.TEXT_NODE) {
+          const textNode = node as Text;
+          const length = Array.from(textNode.nodeValue ?? '').length;
+          segments.push({ node: textNode, start: cursor, end: cursor + length });
+          cursor += length;
+          return;
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+        const element = node as HTMLElement;
+        if (element.tagName === 'BR') { cursor += 1; return; }
+        for (const child of Array.from(element.childNodes)) collect(child);
+        if (/^(P|DIV|LI|BLOCKQUOTE)$/.test(element.tagName)) cursor += 1;
+      };
+      for (const child of Array.from(root.childNodes)) collect(child);
       const range = document.createRange();
       let startSet = false;
-      for (const textNode of textNodes) {
-        const nextCursor = cursor + (textNode.nodeValue?.length ?? 0);
-        if (!startSet && start >= cursor && start <= nextCursor) { range.setStart(textNode, Math.max(0, start - cursor)); startSet = true; }
-        if (startSet && end <= nextCursor) { range.setEnd(textNode, Math.max(0, end - cursor)); break; }
-        cursor = nextCursor;
+      for (const segment of segments) {
+        const textNode = segment.node;
+        const nodeText = textNode.nodeValue ?? '';
+        const toDomOffset = (offset: number) => unicodeSlice(nodeText, 0, offset).length;
+        if (!startSet && start >= segment.start && start <= segment.end) { range.setStart(textNode, toDomOffset(Math.max(0, start - segment.start))); startSet = true; }
+        if (startSet && end <= segment.end) { range.setEnd(textNode, toDomOffset(Math.max(0, end - segment.start))); break; }
       }
       if (startSet) { const selection = document.getSelection(); selection?.removeAllRanges(); selection?.addRange(range); root.focus(); }
     }

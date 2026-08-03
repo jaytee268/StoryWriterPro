@@ -22,6 +22,8 @@ const MAX_CHAT_SNAPSHOT: usize = 3 * 1024 * 1024;
 const MAX_SCENE_TEXT: usize = 1024 * 1024;
 const MAX_STDOUT: usize = 8 * 1024 * 1024;
 const MAX_STDERR: usize = 64 * 1024;
+const MAX_JSONL_EVENTS: usize = 10_000;
+const MAX_JSONL_LINE: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -96,6 +98,7 @@ pub struct CodexTaskResult {
     pub result: Value,
     pub warnings: Vec<String>,
     pub prompt_template_version: String,
+    pub turn_completed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,6 +110,8 @@ pub struct AiProviderSettings {
     pub bible_update_timeout_seconds: u64,
     pub chat_timeout_seconds: u64,
     pub allow_local_fallback: bool,
+    #[serde(default)]
+    pub codex_privacy_acknowledged_at: Option<String>,
 }
 
 impl Default for AiProviderSettings {
@@ -118,8 +123,28 @@ impl Default for AiProviderSettings {
             bible_update_timeout_seconds: 120,
             chat_timeout_seconds: 90,
             allow_local_fallback: true,
+            codex_privacy_acknowledged_at: None,
         }
     }
+}
+
+pub fn validate_codex_privacy(settings: &AiProviderSettings) -> Result<(), CodexError> {
+    if settings.active_provider != "codex-cli" {
+        return Ok(());
+    }
+    let Some(timestamp) = settings.codex_privacy_acknowledged_at.as_deref() else {
+        return Err(CodexError::new(
+            "CODEX_PRIVACY_NOT_ACKNOWLEDGED",
+            "Bitte bestätige zuerst die lokale Codex-Zugriffsgrenze.",
+        ));
+    };
+    if timestamp.trim().is_empty() || chrono::DateTime::parse_from_rfc3339(timestamp).is_err() {
+        return Err(CodexError::new(
+            "CODEX_PRIVACY_NOT_ACKNOWLEDGED",
+            "Die Datenschutzbestätigung ist ungültig. Bitte bestätige sie erneut.",
+        ));
+    }
+    Ok(())
 }
 
 pub struct CodexRuntimeState {
@@ -315,8 +340,8 @@ const CHAT_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/s
 
 fn prompt_for(kind: &CodexTaskKind) -> (&'static str, &'static str) {
     match kind {
-        CodexTaskKind::ExtractBiblePatch => (BIBLE_PROMPT_VERSION, "Du analysierst ein Romanmanuskript für eine kontrollierte Story Bible. Verändere keine Dateien, führe keine Shell-Befehle aus und erfinde keine Informationen. Lies ausschließlich request.json und context.md. Liefere ausschließlich JSON nach output-schema.json. Trenne beobachtbare Fakten, Interpretationen, offene Fragen, mögliche Widersprüche und Autorennotizen. Verwende bei entityType ausschließlich character, relationship, place, organization, world_rule, object, event, fact, clue, secret, plot_thread, retcon oder author_note. Wenn keine sicher belegte Information vorliegt, liefere proposals als leeres Array. Ein bestätigter Kanon darf nie still überschrieben werden; nutze bei Konflikten mark_contradiction und targetEntityId. Optionale Werte targetEntityId, startOffset und endOffset müssen als null ausgegeben werden, wenn sie nicht gelten."),
-        CodexTaskKind::AnswerWithProjectContext => (CHAT_PROMPT_VERSION, "Du bist ein projektbezogener Roman-Assistent. Antworte ausschließlich aus request.json und context.md. Erfinde keine Quellen oder IDs. Verwende nur vorhandene Entity- und Source-IDs und liefere ausschließlich JSON nach output-schema.json. Trenne bestätigten Kanon, Vermutungen, Widersprüche und fehlende Informationen."),
+        CodexTaskKind::ExtractBiblePatch => (BIBLE_PROMPT_VERSION, "Du analysierst ein Romanmanuskript für eine kontrollierte Story Bible. Verändere keine Dateien, führe keine Shell-Befehle aus und erfinde keine Informationen. Lies ausschließlich request.json. Liefere ausschließlich JSON nach output-schema.json. Trenne beobachtbare Fakten, Interpretationen, offene Fragen, mögliche Widersprüche und Autorennotizen. Verwende bei entityType ausschließlich character, relationship, place, organization, world_rule, object, event, fact, clue, secret, plot_thread, retcon oder author_note. Wenn keine sicher belegte Information vorliegt, liefere proposals als leeres Array. Ein bestätigter Kanon darf nie still überschrieben werden; nutze bei Konflikten mark_contradiction und targetEntityId. Optionale Werte targetEntityId, startOffset und endOffset müssen als null ausgegeben werden, wenn sie nicht gelten. AI-Offsets sind Unicode-Zeichenpositionen im normalisierten Klartext aus request.json.scene.content."),
+        CodexTaskKind::AnswerWithProjectContext => (CHAT_PROMPT_VERSION, "Du bist ein projektbezogener Roman-Assistent. Antworte ausschließlich aus request.json. Erfinde keine Quellen oder IDs. Verwende nur vorhandene Entity- und Source-IDs und liefere ausschließlich JSON nach output-schema.json. Trenne bestätigten Kanon, Vermutungen, Widersprüche und fehlende Informationen."),
     }
 }
 
@@ -491,12 +516,6 @@ fn create_snapshot(input: &RunCodexTaskInput) -> Result<CodexSnapshotGuard, Code
     let result = (|| {
         write_read_only(&directory.join("request.json"), &serialized)?;
         write_read_only(
-            &directory.join("context.md"),
-            serde_json::to_string_pretty(&input.request_json)
-                .unwrap_or_default()
-                .as_bytes(),
-        )?;
-        write_read_only(
             &directory.join("output-schema.json"),
             if input.task_kind == CodexTaskKind::ExtractBiblePatch {
                 BIBLE_SCHEMA.as_bytes()
@@ -506,7 +525,7 @@ fn create_snapshot(input: &RunCodexTaskInput) -> Result<CodexSnapshotGuard, Code
         )?;
         write_read_only(
             &directory.join("TASK.md"),
-            format!("Prompt-Version: {version}\n\n{instructions}\n").as_bytes(),
+            format!("Prompt-Version: {version}\n\n{instructions}\n\nLies ausschließlich request.json und output-schema.json.\n").as_bytes(),
         )?;
         #[cfg(unix)]
         {
@@ -633,13 +652,27 @@ fn bounded_diagnostic(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn extract_final_json(stdout: &[u8]) -> Result<(Value, Vec<String>), CodexError> {
+fn extract_final_json(stdout: &[u8]) -> Result<(Value, Vec<String>, bool), CodexError> {
     let text = String::from_utf8(stdout.to_vec())
         .map_err(|_| CodexError::new("CODEX_INVALID_JSONL", "Codex lieferte ungültiges UTF-8."))?;
     let mut final_value = None;
     let mut warnings = Vec::new();
     let mut completed = false;
+    let mut event_count = 0;
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        event_count += 1;
+        if event_count > MAX_JSONL_EVENTS {
+            return Err(CodexError::new(
+                "CODEX_INVALID_JSONL",
+                "Codex lieferte mehr als 10.000 JSONL-Events.",
+            ));
+        }
+        if line.len() > MAX_JSONL_LINE {
+            return Err(CodexError::new(
+                "CODEX_INVALID_JSONL",
+                "Eine Codex-JSONL-Zeile überschreitet das 1-MB-Limit.",
+            ));
+        }
         let event: Value = serde_json::from_str(line).map_err(|error| {
             CodexError::new(
                 "CODEX_INVALID_JSONL",
@@ -650,17 +683,18 @@ fn extract_final_json(stdout: &[u8]) -> Result<(Value, Vec<String>), CodexError>
             .get("type")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if kind.contains("failed") {
-            return Err(CodexError::new(
-                "CODEX_PROCESS_FAILED",
-                "Codex meldete einen fehlgeschlagenen Turn.",
-            ));
-        }
-        if kind.contains("warning") {
-            warnings.push("Codex meldete eine Warnung.".into());
-        }
-        if kind == "turn.completed" {
-            completed = true;
+        match kind {
+            "turn.failed" | "error" | "fatal" => {
+                return Err(CodexError::new(
+                    "CODEX_PROCESS_FAILED",
+                    "Codex meldete einen fehlgeschlagenen Turn.",
+                ));
+            }
+            "item.failed" | "tool.failed" | "warning" | "diagnostic" => {
+                warnings.push(format!("Codex meldete das nicht-fatal Event {kind}."));
+            }
+            "turn.completed" => completed = true,
+            _ => {}
         }
         let candidates = [
             event.get("result"),
@@ -688,18 +722,20 @@ fn extract_final_json(stdout: &[u8]) -> Result<(Value, Vec<String>), CodexError>
             final_value = Some(event);
         }
     }
-    if !completed && final_value.is_none() {
+    if !completed {
         return Err(CodexError::new(
             "CODEX_PROCESS_FAILED",
             "Codex lieferte keinen abgeschlossenen Turn.",
         ));
     }
-    final_value.map(|value| (value, warnings)).ok_or_else(|| {
-        CodexError::new(
-            "CODEX_PROCESS_FAILED",
-            "Codex lieferte kein strukturiertes Ergebnis.",
-        )
-    })
+    final_value
+        .map(|value| (value, warnings, completed))
+        .ok_or_else(|| {
+            CodexError::new(
+                "CODEX_PROCESS_FAILED",
+                "Codex lieferte kein strukturiertes Ergebnis.",
+            )
+        })
 }
 
 fn string_set(request: &Value, pointer: &str) -> std::collections::HashSet<String> {
@@ -957,6 +993,7 @@ pub struct CodexInvocation {
 pub struct CodexProcessResult {
     pub result: Value,
     pub warnings: Vec<String>,
+    pub turn_completed: bool,
 }
 
 pub trait CodexProcessRunner: Send + Sync {
@@ -966,6 +1003,50 @@ pub trait CodexProcessRunner: Send + Sync {
         invocation: CodexInvocation,
         cancellation: Arc<AtomicBool>,
     ) -> Result<CodexProcessResult, CodexError>;
+}
+
+pub fn sanitized_codex_environment(
+    source: impl Iterator<Item = (OsString, OsString)>,
+) -> Vec<(OsString, OsString)> {
+    const ALLOWLIST: &[&str] = &[
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "PATH",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TERM",
+        "TMPDIR",
+        "CODEX_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "ALL_PROXY",
+    ];
+    source
+        .filter(|(key, _)| {
+            let Some(name) = key.to_str() else {
+                return false;
+            };
+            let upper = name.to_ascii_uppercase();
+            ALLOWLIST.contains(&name)
+                && ![
+                    "SECRET",
+                    "TOKEN",
+                    "PASSWORD",
+                    "CREDENTIAL",
+                    "PRIVATE_KEY",
+                    "DATABASE",
+                ]
+                .iter()
+                .any(|part| upper.contains(part))
+        })
+        .collect()
 }
 
 pub struct SystemCodexProcessRunner;
@@ -984,17 +1065,12 @@ impl CodexProcessRunner for SystemCodexProcessRunner {
         command
             .args(invocation.args)
             .current_dir(&invocation.snapshot)
+            .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        // Keep Codex's official HOME-based authentication working, but never
-        // pass app-specific secret variables into the child process.
-        for key in [
-            "STORYMEMORY_DB_PATH",
-            "STORYMEMORY_APP_DATA",
-            "STORYMEMORY_AUTH_TOKEN",
-        ] {
-            command.env_remove(key);
+        for (key, value) in sanitized_codex_environment(env::vars_os()) {
+            command.env(key, value);
         }
         let mut child = command.spawn().map_err(|error| {
             CodexError::new(
@@ -1070,11 +1146,15 @@ impl CodexProcessRunner for SystemCodexProcessRunner {
                 ),
             ));
         }
-        let (result, mut warnings) = extract_final_json(&stdout)?;
+        let (result, mut warnings, turn_completed) = extract_final_json(&stdout)?;
         if !stderr.is_empty() {
             warnings.push("Codex hat zusätzliche Diagnoseausgaben geschrieben.".into());
         }
-        Ok(CodexProcessResult { result, warnings })
+        Ok(CodexProcessResult {
+            result,
+            warnings,
+            turn_completed,
+        })
     }
 }
 
@@ -1095,11 +1175,15 @@ impl CodexProcessRunner for FakeCodexProcessRunner {
         _invocation: CodexInvocation,
         _cancellation: Arc<AtomicBool>,
     ) -> Result<CodexProcessResult, CodexError> {
-        let (result, mut warnings) = extract_final_json(&self.stdout)?;
+        let (result, mut warnings, turn_completed) = extract_final_json(&self.stdout)?;
         if !self.stderr.is_empty() {
             warnings.push("Codex hat zusätzliche Diagnoseausgaben geschrieben.".into());
         }
-        Ok(CodexProcessResult { result, warnings })
+        Ok(CodexProcessResult {
+            result,
+            warnings,
+            turn_completed,
+        })
     }
 }
 
@@ -1107,7 +1191,7 @@ fn run_process(
     input: &RunCodexTaskInput,
     settings: &AiProviderSettings,
     cancel: Arc<AtomicBool>,
-) -> Result<(Value, Vec<String>), CodexError> {
+) -> Result<(Value, Vec<String>, bool), CodexError> {
     let mut snapshot = create_snapshot(input)?;
     let result = {
         let (binary, args) = invocation("codex", settings, snapshot.path())?;
@@ -1122,7 +1206,7 @@ fn run_process(
                 },
                 cancel,
             )
-            .map(|result| (result.result, result.warnings))
+            .map(|result| (result.result, result.warnings, result.turn_completed))
     };
     match (result, snapshot.cleanup()) {
         (Ok(value), Ok(())) => Ok(value),
@@ -1140,6 +1224,7 @@ pub fn run_task(
     input: RunCodexTaskInput,
     settings: AiProviderSettings,
 ) -> Result<CodexTaskResult, CodexError> {
+    validate_codex_privacy(&settings)?;
     if input.task_id.is_empty() {
         return Err(CodexError::new("CODEX_UNKNOWN_ERROR", "Task-ID fehlt."));
     }
@@ -1160,7 +1245,7 @@ pub fn run_task(
     if let Ok(mut tasks) = state.tasks.lock() {
         tasks.remove(&input.task_id);
     }
-    let (raw, mut warnings) = result?;
+    let (raw, mut warnings, turn_completed) = result?;
     let validated = match input.task_kind {
         CodexTaskKind::ExtractBiblePatch => validate_bible_result(&raw, &input.request_json)?,
         CodexTaskKind::AnswerWithProjectContext => validate_chat_result(&raw, &input.request_json)?,
@@ -1175,6 +1260,7 @@ pub fn run_task(
         result: validated,
         warnings,
         prompt_template_version: prompt_for(&input.task_kind).0.into(),
+        turn_completed,
     })
 }
 
@@ -1198,7 +1284,7 @@ pub fn task_audit_payload(
     status: &str,
     error_code: Option<&str>,
 ) -> Value {
-    json!({"taskId":input.task_id,"projectId":input.request_json.get("projectId"),"sceneId":input.request_json.get("sceneId"),"taskKind":input.task_kind,"providerId":"codex-cli","promptTemplateVersion":prompt_for(&input.task_kind).0,"inputHash":format!("{:x}", md_hash(&serde_json::to_vec(&input.request_json).unwrap_or_default())),"status":status,"errorCode":error_code})
+    json!({"taskId":input.task_id,"projectId":input.request_json.get("projectId"),"sceneId":input.request_json.get("sceneId"),"taskKind":input.task_kind,"providerId":"codex-cli","requestedProvider":"codex-cli","actualProvider":"codex-cli","usedFallback":false,"fallbackReasonCode":null,"promptTemplateVersion":prompt_for(&input.task_kind).0,"inputHash":format!("{:x}", md_hash(&serde_json::to_vec(&input.request_json).unwrap_or_default())),"status":status,"errorCode":error_code})
 }
 fn md_hash(bytes: &[u8]) -> u64 {
     bytes.iter().fold(1469598103934665603_u64, |hash, byte| {
@@ -1286,6 +1372,7 @@ mod tests {
         let mut guard = create_snapshot(&synthetic_input("guard-test")).expect("snapshot");
         let path = guard.path().to_path_buf();
         assert!(path.join("request.json").is_file());
+        assert!(!path.join("context.md").exists());
         guard.cleanup().expect("cleanup");
         assert!(!path.exists());
         guard.cleanup().expect("second cleanup");
@@ -1320,14 +1407,103 @@ mod tests {
     }
 
     #[test]
+    fn environment_uses_only_the_safe_allowlist() {
+        let values = vec![
+            (OsString::from("HOME"), OsString::from("/tmp/home")),
+            (OsString::from("PATH"), OsString::from("/bin")),
+            (OsString::from("CODEX_HOME"), OsString::from("/tmp/codex")),
+            (OsString::from("OPENAI_API_KEY"), OsString::from("secret")),
+            (OsString::from("GITHUB_TOKEN"), OsString::from("secret")),
+            (OsString::from("DATABASE_URL"), OsString::from("secret")),
+            (
+                OsString::from("STORYMEMORY_PRIVATE_TOKEN"),
+                OsString::from("secret"),
+            ),
+            (
+                OsString::from("SOMETHING_PASSWORD"),
+                OsString::from("secret"),
+            ),
+            (OsString::from("HARMLESS_UNKNOWN"), OsString::from("no")),
+        ];
+        let environment = sanitized_codex_environment(values.into_iter());
+        let names: Vec<_> = environment
+            .iter()
+            .filter_map(|(key, _)| key.to_str())
+            .collect();
+        assert!(names.contains(&"HOME"));
+        assert!(names.contains(&"PATH"));
+        assert!(names.contains(&"CODEX_HOME"));
+        assert!(!names.iter().any(|name| name.contains("TOKEN")
+            || name.contains("DATABASE")
+            || name.contains("PASSWORD")));
+        assert!(!names.contains(&"HARMLESS_UNKNOWN"));
+    }
+
+    #[test]
+    fn privacy_acknowledgement_is_required_only_for_codex() {
+        assert!(validate_codex_privacy(&AiProviderSettings::default()).is_ok());
+        assert_eq!(
+            validate_codex_privacy(&AiProviderSettings {
+                active_provider: "codex-cli".into(),
+                ..AiProviderSettings::default()
+            })
+            .unwrap_err()
+            .code,
+            "CODEX_PRIVACY_NOT_ACKNOWLEDGED"
+        );
+        assert!(validate_codex_privacy(&AiProviderSettings {
+            active_provider: "codex-cli".into(),
+            codex_privacy_acknowledged_at: Some("2026-08-03T00:00:00Z".into()),
+            ..AiProviderSettings::default()
+        })
+        .is_ok());
+    }
+
+    #[test]
+    fn jsonl_event_failures_are_classified_precisely() {
+        let warning = br#"{"type":"item.failed"}
+{"type":"tool.failed"}
+{"type":"turn.completed","result":{"answer":"ok","usedEntityIds":[],"usedSourceIds":[],"uncertainty":"low","warnings":[]}}"#;
+        let (_, warnings, completed) = extract_final_json(warning).expect("non-fatal item events");
+        assert_eq!(warnings.len(), 2);
+        assert!(completed);
+        for fatal in ["turn.failed", "error", "fatal"] {
+            let input = format!(r#"{{"type":"{fatal}"}}"#);
+            assert!(extract_final_json(input.as_bytes()).is_err());
+        }
+        let incomplete = br#"{"type":"message","result":{"answer":"ok"}}"#;
+        assert!(extract_final_json(incomplete).is_err());
+    }
+
+    #[test]
+    fn jsonl_limits_are_enforced() {
+        let long_line = format!(
+            r#"{{"type":"unknown","payload":"{}"}}"#,
+            "x".repeat(MAX_JSONL_LINE)
+        );
+        assert_eq!(
+            extract_final_json(long_line.as_bytes()).unwrap_err().code,
+            "CODEX_INVALID_JSONL"
+        );
+        let many = (0..=MAX_JSONL_EVENTS)
+            .map(|_| r#"{"type":"unknown"}"#)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            extract_final_json(many.as_bytes()).unwrap_err().code,
+            "CODEX_INVALID_JSONL"
+        );
+    }
+
+    #[test]
     fn live_codex_e2e_is_opt_in_and_uses_only_synthetic_scene() {
         if env::var("STORYMEMORY_RUN_CODEX_E2E").ok().as_deref() != Some("1") {
             return;
         }
         let input = synthetic_input(&format!("live-e2e-{}", std::process::id()));
         let codex_binary_path = [
-            "/Applications/ChatGPT.app/Contents/Resources/codex",
             "/Users/juliantows/.local/bin/codex",
+            "/Applications/ChatGPT.app/Contents/Resources/codex",
         ]
         .into_iter()
         .find(|path| Path::new(path).is_file())
@@ -1338,11 +1514,13 @@ mod tests {
             AiProviderSettings {
                 active_provider: "codex-cli".into(),
                 codex_binary_path,
+                codex_privacy_acknowledged_at: Some("2026-08-03T00:00:00Z".into()),
                 ..AiProviderSettings::default()
             },
         )
         .expect("synthetic Codex task should complete");
         assert_eq!(result.status, "completed");
+        assert!(result.turn_completed);
         assert!(result.result.get("proposals").is_some());
         assert!(!env::temp_dir()
             .join(format!("storymemory-codex-live-e2e-{}", std::process::id()))

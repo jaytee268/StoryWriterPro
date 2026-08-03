@@ -3,9 +3,10 @@ import { desktopInvoke, isTauriRuntime } from './desktop';
 import { LocalPrototypeBibleExtractor } from './bibleExtractor';
 import { answerFromProjectContext } from './providerBridge';
 import type { AiProviderSettings, BibleExtractionInput, BibleExtractionResult, ChatSource, CodexCliCapabilities, GroundedChatResult, ProjectContext } from '../types/domain';
+import { canonicalizeSceneForAi } from '../utils/aiText';
 
 const defaultSettings: AiProviderSettings = { activeProvider: 'local-prototype', bibleUpdateTimeoutSeconds: 120, chatTimeoutSeconds: 90, allowLocalFallback: true };
-const settingsSchema = z.object({ activeProvider: z.enum(['local-prototype', 'codex-cli']), codexBinaryPath: z.string().optional(), codexModelOverride: z.string().optional(), bibleUpdateTimeoutSeconds: z.number().int().min(1).max(900), chatTimeoutSeconds: z.number().int().min(1).max(900), allowLocalFallback: z.boolean() });
+const settingsSchema = z.object({ activeProvider: z.enum(['local-prototype', 'codex-cli']), codexBinaryPath: z.string().optional(), codexModelOverride: z.string().optional(), bibleUpdateTimeoutSeconds: z.number().int().min(1).max(900), chatTimeoutSeconds: z.number().int().min(1).max(900), allowLocalFallback: z.boolean(), codexPrivacyAcknowledgedAt: z.string().optional() });
 const capabilitiesSchema = z.object({ installed: z.boolean(), binaryPath: z.string().optional(), version: z.string().optional(), supportsExec: z.boolean(), supportsJson: z.boolean(), supportsEphemeral: z.boolean(), supportsOutputSchema: z.boolean(), supportsReadOnlySandbox: z.boolean(), supportsSkipGitCheck: z.boolean(), supportsModel: z.boolean(), supportsDisableFeatures: z.boolean(), authentication: z.enum(['authenticated', 'notAuthenticated', 'unknown']), compatible: z.boolean(), detail: z.string() });
 const bibleResultSchema = z.object({ proposals: z.array(z.object({ targetEntityId: z.string().nullable().optional(), proposalAction: z.enum(['create_entity', 'update_entity', 'add_source', 'mark_contradiction', 'create_open_question', 'create_author_note']), entityType: z.enum(['character', 'relationship', 'place', 'organization', 'world_rule', 'object', 'event', 'fact', 'clue', 'secret', 'plot_thread', 'retcon', 'author_note']), candidateName: z.string().min(1), candidateDescription: z.string(), candidateStatus: z.enum(['confirmed', 'proposed', 'uncertain', 'contradicted', 'retconned']), confidence: z.number().min(0).max(1), classification: z.enum(['observable_fact', 'interpretation', 'open_question', 'possible_contradiction', 'author_note']), evidenceExcerpt: z.string(), startOffset: z.number().int().nonnegative().nullable().optional(), endOffset: z.number().int().nonnegative().nullable().optional(), reason: z.string() })), warnings: z.array(z.string()) });
 const chatResultSchema = z.object({ answer: z.string().min(1), usedEntityIds: z.array(z.string()), usedSourceIds: z.array(z.string()).max(8), uncertainty: z.enum(['low', 'medium', 'high']), warnings: z.array(z.string()) });
@@ -13,11 +14,22 @@ const chatResultSchema = z.object({ answer: z.string().min(1), usedEntityIds: z.
 export interface StoryAiProvider { readonly id: 'local-prototype' | 'codex-cli'; getStatus(): Promise<ProviderStatusView>; extractBiblePatch(input: BibleExtractionInput, timeoutSeconds: number): Promise<BibleExtractionResult>; answerWithProjectContext(question: string, context: ProjectContext, timeoutSeconds: number): Promise<GroundedChatResult>; cancel(taskId: string): Promise<void>; cancelActive(): Promise<void>; }
 export interface ProviderStatusView { id: string; available: boolean; label: string; detail: string; capabilities?: CodexCliCapabilities; }
 
+function canonicalizeContextForAi(context: ProjectContext): ProjectContext {
+  const currentScene = context.currentScene ? canonicalizeSceneForAi(context.currentScene).scene : undefined;
+  const currentChapter = context.currentChapter ? { ...context.currentChapter, scenes: context.currentChapter.scenes.map((scene) => canonicalizeSceneForAi(scene).scene) } : undefined;
+  return { ...context, currentScene, currentChapter };
+}
+
+export function buildCodexBibleRequest(input: BibleExtractionInput) {
+  const canonical = canonicalizeSceneForAi(input.scene);
+  return { projectId: input.project.id, sceneId: canonical.scene.id, project: { id: input.project.id, title: input.project.title, author: input.project.author }, chapter: { ...input.chapter, scenes: input.chapter.scenes.map((scene) => canonicalizeSceneForAi(scene).scene) }, scene: canonical.scene, changedRange: input.changedRange, existingEntities: input.existingEntities.map(({ id: entityId, projectId, name, type, description, status, confidence, authorConfirmed, tags }) => ({ id: entityId, projectId, name, type, description, status, confidence, authorConfirmed, tags })), relevantSources: input.relevantSources ?? [] };
+}
+
 export class LocalPrototypeProvider implements StoryAiProvider {
   readonly id = 'local-prototype' as const;
   async getStatus(): Promise<ProviderStatusView> { return { id: this.id, available: true, label: 'Lokaler Prototyp bereit', detail: 'Offline-Heuristiken, kein Netzwerkzugriff' }; }
-  async extractBiblePatch(input: BibleExtractionInput): Promise<BibleExtractionResult> { return new LocalPrototypeBibleExtractor().extract(input); }
-  async answerWithProjectContext(question: string, context: ProjectContext): Promise<GroundedChatResult> { const answer = answerFromProjectContext(question, context); return { answer: answer.text, usedEntityIds: context.relevantEntities.filter((entity) => answer.sources.some((source) => source.entityId === entity.id)).map((entity) => entity.id), usedSourceIds: answer.sources.map((source) => source.id), uncertainty: answer.sources.length ? 'low' : 'high', warnings: [] }; }
+  async extractBiblePatch(input: BibleExtractionInput): Promise<BibleExtractionResult> { return new LocalPrototypeBibleExtractor().extract({ ...input, scene: canonicalizeSceneForAi(input.scene).scene }); }
+  async answerWithProjectContext(question: string, context: ProjectContext): Promise<GroundedChatResult> { const canonicalContext = canonicalizeContextForAi(context); const answer = answerFromProjectContext(question, canonicalContext); return { answer: answer.text, usedEntityIds: canonicalContext.relevantEntities.filter((entity) => answer.sources.some((source) => source.entityId === entity.id)).map((entity) => entity.id), usedSourceIds: answer.sources.map((source) => source.id), uncertainty: answer.sources.length ? 'low' : 'high', warnings: [] }; }
   async cancel(): Promise<void> { return Promise.resolve(); }
   async cancelActive(): Promise<void> { return Promise.resolve(); }
 }
@@ -39,7 +51,7 @@ export class CodexCliProvider implements StoryAiProvider {
     const settings = await this.getSettings();
     const id = taskId('bible');
     this.activeTaskId = id;
-    const request = { projectId: input.project.id, sceneId: input.scene.id, project: { id: input.project.id, title: input.project.title, author: input.project.author }, chapter: { id: input.chapter.id, title: input.chapter.title }, scene: input.scene, changedRange: input.changedRange, existingEntities: input.existingEntities.map(({ id: entityId, projectId, name, type, description, status, confidence, authorConfirmed, tags }) => ({ id: entityId, projectId, name, type, description, status, confidence, authorConfirmed, tags })), relevantSources: input.relevantSources ?? [] };
+    const request = buildCodexBibleRequest(input);
     try {
       const result = await desktopInvoke<{ result: unknown; warnings: string[] }>('run_codex_task', { input: { taskId: id, taskKind: 'extractBiblePatch', requestJson: request, timeoutSeconds: timeoutSeconds || settings.bibleUpdateTimeoutSeconds } });
       const parsed = bibleResultSchema.parse(result.result);
@@ -50,7 +62,7 @@ export class CodexCliProvider implements StoryAiProvider {
     const settings = await this.getSettings();
     const id = taskId('chat');
     this.activeTaskId = id;
-    const request = { projectId: context.projectId, sceneId: context.currentScene?.id, userQuestion: question, projectContext: context };
+    const request = { projectId: context.projectId, sceneId: context.currentScene?.id, userQuestion: question, projectContext: canonicalizeContextForAi(context) };
     try {
       const result = await desktopInvoke<{ result: unknown; warnings: string[] }>('run_codex_task', { input: { taskId: id, taskKind: 'answerWithProjectContext', requestJson: request, timeoutSeconds: timeoutSeconds || settings.chatTimeoutSeconds } });
       return chatResultSchema.parse(result.result);
@@ -64,7 +76,7 @@ export class ProviderRouter {
   private readonly local = new LocalPrototypeProvider();
   private readonly codex = new CodexCliProvider(() => this.getSettings());
   async getSettings(): Promise<AiProviderSettings> { if (!isTauriRuntime()) return { ...defaultSettings }; return settingsSchema.parse(await desktopInvoke('get_ai_provider_settings')); }
-  async saveSettings(settings: AiProviderSettings): Promise<AiProviderSettings> { if (!isTauriRuntime()) return settingsSchema.parse(settings); return settingsSchema.parse(await desktopInvoke('save_ai_provider_settings', { input: settings })); }
+  async saveSettings(settings: AiProviderSettings): Promise<AiProviderSettings> { const parsed = settingsSchema.parse(settings); if (parsed.activeProvider === 'codex-cli' && !parsed.codexPrivacyAcknowledgedAt) throw new Error('Bitte bestätige zuerst die lokale Codex-Zugriffsgrenze.'); if (!isTauriRuntime()) return parsed; return settingsSchema.parse(await desktopInvoke('save_ai_provider_settings', { input: parsed })); }
   async getProviderStatus(providerId: AiProviderSettings['activeProvider']): Promise<ProviderStatusView> { return providerId === 'codex-cli' ? this.codex.getStatus() : this.local.getStatus(); }
   async getActiveProvider(): Promise<{ provider: StoryAiProvider; settings: AiProviderSettings }> { const settings = await this.getSettings(); return { provider: settings.activeProvider === 'codex-cli' ? this.codex : this.local, settings }; }
   async getLocalProvider(): Promise<LocalPrototypeProvider> { return this.local; }

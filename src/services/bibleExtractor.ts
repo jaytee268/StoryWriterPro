@@ -1,20 +1,14 @@
 import type { BibleExtractionInput, BibleExtractionResult, BibleExtractor, BibleProposalDraft } from '../types/domain';
 import { editorContentToPlainText } from '../utils/editorContent';
-
-export function contentHash(content: string): string {
-  content = editorContentToPlainText(content);
-  let hash = 2166136261;
-  for (const character of content) {
-    hash ^= character.codePointAt(0) ?? 0;
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16).padStart(8, '0');
-}
+import { unicodeSlice } from '../utils/aiText';
+export { contentHash } from '../utils/aiText';
 
 export function excerptFor(text: string, needle: string): { excerpt: string; startOffset?: number; endOffset?: number } {
-  const startOffset = text.indexOf(needle);
+  const textChars = Array.from(text);
+  const needleChars = Array.from(needle);
+  const startOffset = needleChars.length === 0 ? 0 : textChars.findIndex((_, index) => needleChars.every((character, offset) => textChars[index + offset] === character));
   if (startOffset < 0) return { excerpt: needle };
-  return { excerpt: needle, startOffset, endOffset: startOffset + needle.length };
+  return { excerpt: needle, startOffset, endOffset: startOffset + needleChars.length };
 }
 
 function knownEntityProposals(input: BibleExtractionInput): BibleProposalDraft[] {
@@ -89,10 +83,14 @@ export class LocalPrototypeBibleExtractor implements BibleExtractor {
 
 export function changedRange(previous: string | undefined, current: string): { start: number; end: number } | undefined {
   if (previous === undefined || previous === current) return undefined;
+  const previousChars = Array.from(previous);
+  const currentChars = Array.from(current);
   let start = 0;
-  while (start < previous.length && start < current.length && previous[start] === current[start]) start += 1;
-  let previousEnd = previous.length;
-  let currentEnd = current.length;
-  while (previousEnd > start && currentEnd > start && previous[previousEnd - 1] === current[currentEnd - 1]) { previousEnd -= 1; currentEnd -= 1; }
+  while (start < previousChars.length && start < currentChars.length && previousChars[start] === currentChars[start]) start += 1;
+  let previousEnd = previousChars.length;
+  let currentEnd = currentChars.length;
+  while (previousEnd > start && currentEnd > start && previousChars[previousEnd - 1] === currentChars[currentEnd - 1]) { previousEnd -= 1; currentEnd -= 1; }
   return { start, end: currentEnd };
 }
+
+export { unicodeSlice };

@@ -37,7 +37,7 @@ export interface AiTask { id: string; type: AiTaskType; prompt: string; context:
 export interface ProviderStatus { available: boolean; label: string; detail: string; }
 export type CodexAuthenticationState = 'authenticated' | 'notAuthenticated' | 'unknown';
 export interface CodexCliCapabilities { installed: boolean; binaryPath?: string; version?: string; supportsExec: boolean; supportsJson: boolean; supportsEphemeral: boolean; supportsOutputSchema: boolean; supportsReadOnlySandbox: boolean; supportsSkipGitCheck: boolean; supportsModel: boolean; supportsDisableFeatures: boolean; authentication: CodexAuthenticationState; compatible: boolean; detail: string; }
-export interface AiProviderSettings { activeProvider: 'local-prototype' | 'codex-cli'; codexBinaryPath?: string; codexModelOverride?: string; bibleUpdateTimeoutSeconds: number; chatTimeoutSeconds: number; allowLocalFallback: boolean; }
+export interface AiProviderSettings { activeProvider: 'local-prototype' | 'codex-cli'; codexBinaryPath?: string; codexModelOverride?: string; bibleUpdateTimeoutSeconds: number; chatTimeoutSeconds: number; allowLocalFallback: boolean; codexPrivacyAcknowledgedAt?: string; }
 export type CodexTaskKind = 'extractBiblePatch' | 'answerWithProjectContext';
 export interface GroundedChatResult { answer: string; usedEntityIds: string[]; usedSourceIds: string[]; uncertainty: 'low' | 'medium' | 'high'; warnings: string[]; }
 export interface Correction { id: string; kind: CorrectionKind; from: string; to: string; reason: string; start: number; end: number; }

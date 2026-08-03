@@ -6,7 +6,9 @@ import type { ProjectContext, Scene } from '../types/domain';
 import { LocalPrototypeBibleExtractor, changedRange, contentHash, excerptFor } from './bibleExtractor';
 import { DeterministicProjectContextBuilder } from './contextBuilder';
 import { answerFromProjectContext } from './providerBridge';
-import { providerRouter } from './aiProviderService';
+import { buildCodexBibleRequest, providerRouter } from './aiProviderService';
+import { canonicalizeSceneForAi, contentHash as canonicalContentHash, unicodeIndexOf, unicodeSlice } from '../utils/aiText';
+import { editorContentToPlainText } from '../utils/editorContent';
 
 const store = new Map<string, string>();
 vi.stubGlobal('localStorage', { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => store.set(key, value), removeItem: (key: string) => store.delete(key) });
@@ -36,6 +38,29 @@ describe('Desktop-Fehler und Autosave', () => {
 });
 
 describe('Story-Bible-Review und grounded context', () => {
+  it('normalisiert Rich Text für AI und hält Unicode-Offsets stabil', async () => {
+    expect(editorContentToPlainText('<p>Marek <strong>lief</strong>.</p>')).toBe('Marek lief.');
+    expect(editorContentToPlainText('<p>Erste Zeile<br>Zweite Zeile</p><p>Äpfel 😀</p>')).toBe('Erste Zeile\nZweite Zeile\nÄpfel 😀');
+    const scene = { ...(await firstScene(new BrowserDemoRepository())), content: '<p>Äpfel <strong>😀</strong> liefen.</p>' };
+    const canonical = canonicalizeSceneForAi(scene);
+    expect(canonical.text).toBe('Äpfel 😀 liefen.');
+    expect(unicodeSlice(canonical.text, 6, 7)).toBe('😀');
+    expect(unicodeIndexOf(canonical.text, '😀')).toBe(6);
+    expect(canonical.hash).toBe(canonicalContentHash(canonical.text));
+    expect(changedRange('Äpfel 😀 grün.', 'Äpfel 😀 blau.')).toEqual({ start: 8, end: 12 });
+  });
+
+  it('übergibt beiden Extractor-Pfaden dieselbe kanonische Szene ohne HTML', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const chapter = workspace.chapters[0]!;
+    const scene = { ...chapter.scenes[0]!, content: '<p>Marek <strong>lief</strong>.</p>' };
+    const input = { project: workspace.project, chapter, scene, existingEntities: workspace.entities };
+    expect(buildCodexBibleRequest(input).scene.content).toBe('Marek lief.');
+    const local = await new LocalPrototypeBibleExtractor().extract(input);
+    expect(local.warnings[0]).toContain('gespeicherte Szenenfassung');
+  });
+
   it('ProviderRouter verwendet im Browser ausschließlich den lokalen Provider', async () => {
     const { provider, settings } = await providerRouter.getActiveProvider();
     expect(provider.id).toBe('local-prototype');

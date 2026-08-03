@@ -11,10 +11,20 @@ export function editorContentToHtml(content: string): string {
 
 export function editorContentToPlainText(content: string): string {
   if (!editorTags.test(content)) return content;
-  if (typeof document === 'undefined') return content.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>|<\/div>/gi, '\n').replace(/<[^>]+>/g, '');
+  if (typeof document === 'undefined') return content.replace(/<br\s*\/?>/gi, '\n').replace(/<\/(?:p|div|li|blockquote)>/gi, '\n').replace(/<[^>]+>/g, '').replace(/\n+$/g, '');
   const container = document.createElement('div');
   container.innerHTML = content;
-  return (container.innerText || container.textContent || '').replace(/\u00a0/g, ' ');
+  const output: string[] = [];
+  const visit = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) { output.push(node.textContent ?? ''); return; }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const element = node as HTMLElement;
+    if (element.tagName === 'BR') { output.push('\n'); return; }
+    for (const child of Array.from(element.childNodes)) visit(child);
+    if (/^(P|DIV|LI|BLOCKQUOTE)$/.test(element.tagName)) output.push('\n');
+  };
+  for (const child of Array.from(container.childNodes)) visit(child);
+  return output.join('').replace(/\u00a0/g, ' ').replace(/\n{3,}/g, '\n\n').replace(/\n+$/g, '');
 }
 
 function escapeHtml(value: string): string {

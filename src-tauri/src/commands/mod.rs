@@ -1449,6 +1449,7 @@ fn validate_ai_provider_settings(settings: &AiProviderSettings) -> Result<(), St
     {
         return Err("Die optionale Modellkennung ist ungültig.".into());
     }
+    codex::validate_codex_privacy(settings).map_err(|error| error.to_string())?;
     Ok(())
 }
 

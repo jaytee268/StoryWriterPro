@@ -6,7 +6,7 @@ import { demoEvents, mindEdges, mindNodes } from './services/mockData';
 import { createStoryRepository, type RuntimeMode, type StoryRepository } from './services/storyRepository';
 import type { AiProviderSettings, AppView, BibleProposal, BibleUpdateRun, ChatMessage, Chapter, PendingSourceNavigation, ReviewBibleProposalInput, Scene, StoryEntity, StorySourceReference, UpdateChapterInput, WorkspaceSnapshot } from './types/domain';
 import { DeterministicProjectContextBuilder } from './services/contextBuilder';
-import { changedRange, contentHash } from './services/bibleExtractor';
+import { changedRange } from './services/bibleExtractor';
 import { Dashboard } from './features/projects/Dashboard';
 import { EditorView, type EditorSaveController } from './features/editor/EditorView';
 import { ChatPanel } from './features/chat/ChatPanel';
@@ -14,7 +14,7 @@ import { StoryBibleView } from './features/story-bible/StoryBibleView';
 import { TimelineView } from './features/timeline/TimelineView';
 import { MindmapView } from './features/mindmap/MindmapView';
 import { SettingsView } from './features/settings/SettingsView';
-import { editorContentToPlainText } from './utils/editorContent';
+import { canonicalizeSceneForAi } from './utils/aiText';
 import { defaultAiProviderSettings, providerRouter, type StoryAiProvider } from './services/aiProviderService';
 
 const repository: StoryRepository = createStoryRepository();
@@ -197,28 +197,43 @@ export function App() {
     const controller = editorSaveController.current;
     if (controller) { await controller.flush(); if (controller.getStatus() === 'error') throw new Error('Die Szene konnte vor dem Bible Update nicht gespeichert werden.'); }
     const savedScene = controller?.getDraft() ?? currentScene;
+    const canonical = canonicalizeSceneForAi(savedScene);
     const { provider, settings } = await providerRouter.getActiveProvider();
     setBibleUpdateProvider(provider);
     try {
-      const extractorId = settings.activeProvider === 'codex-cli' ? 'codex-cli' : 'local-prototype-extractor';
       const existingRuns = await repository.listBibleUpdateRuns(workspace.project.id, savedScene.id);
-      const currentText = editorContentToPlainText(savedScene.content);
-      const previousRun = existingRuns.find((run) => run.extractorId === extractorId && ['completed', 'reviewed'].includes(run.status));
-      const run = await repository.createBibleUpdateRun({ projectId: workspace.project.id, sceneId: savedScene.id, sceneUpdatedAt: savedScene.updatedAt ?? '', contentHash: contentHash(currentText), extractorId, analyzedContent: currentText });
-      let proposals = await repository.listBibleProposals(run.id);
-      const runWasReused = run.status === 'completed' || run.status === 'reviewed';
-      if (!runWasReused || !proposals.length) {
-        const input = { project: workspace.project, chapter: currentChapter, scene: savedScene, existingEntities: workspace.entities, relevantSources: await repository.listSourceReferences(workspace.project.id), previousAnalyzedContent: previousRun?.analyzedContent || undefined, changedRange: changedRange(previousRun?.analyzedContent || undefined, currentText) };
-        let extraction;
+      const requestedExtractor = settings.activeProvider === 'codex-cli' ? 'codex-cli' : 'local-prototype-extractor';
+      const findReusableRun = (extractorId: string) => existingRuns.find((candidate) => candidate.extractorId === extractorId && candidate.contentHash === canonical.hash && ['completed', 'reviewed'].includes(candidate.status));
+      let run = findReusableRun(requestedExtractor);
+      let proposals: BibleProposal[] = [];
+      if (run) {
+        proposals = await repository.listBibleProposals(run.id);
+        setProviderNotice('Angefordert: ' + (settings.activeProvider === 'codex-cli' ? 'Codex CLI' : 'Lokaler Prototyp') + ' · Verwendet: ' + (run.extractorId === 'codex-cli' ? 'Codex CLI' : 'Lokaler Prototyp') + '. Vorhandenes Ergebnis wiederverwendet.');
+      } else {
+        const previousRun = existingRuns.find((candidate) => candidate.extractorId === requestedExtractor && ['completed', 'reviewed'].includes(candidate.status));
+        const input = { project: workspace.project, chapter: currentChapter, scene: canonical.scene, existingEntities: workspace.entities, relevantSources: await repository.listSourceReferences(workspace.project.id), previousAnalyzedContent: previousRun?.analyzedContent || undefined, changedRange: changedRange(previousRun?.analyzedContent || undefined, canonical.text) };
+        let extraction: Awaited<ReturnType<StoryAiProvider['extractBiblePatch']>> | undefined;
+        let actualExtractor = requestedExtractor;
         try {
           extraction = await provider.extractBiblePatch(input, settings.bibleUpdateTimeoutSeconds);
-          setProviderNotice(settings.activeProvider === 'codex-cli' ? 'Codex-Analyse abgeschlossen. Vorschläge bleiben bis zur Prüfung unbestätigt.' : 'Lokaler Prototype-Extractor verwendet.');
+          setProviderNotice('Angefordert: ' + (settings.activeProvider === 'codex-cli' ? 'Codex CLI' : 'Lokaler Prototyp') + ' · Verwendet: ' + (requestedExtractor === 'codex-cli' ? 'Codex CLI' : 'Lokaler Prototyp') + '. Vorschläge bleiben bis zur Prüfung unbestätigt.');
         } catch (error) {
           if (settings.activeProvider !== 'codex-cli' || !settings.allowLocalFallback) throw error;
-          extraction = await providerRouter.getLocalProvider().then((local) => local.extractBiblePatch(input));
-          setProviderNotice(`Codex-Analyse nicht verfügbar – lokaler Fallback verwendet: ${error instanceof Error ? error.message : 'unbekannter Fehler'}`);
+          actualExtractor = 'local-prototype-extractor';
+          const localInput = { ...input, previousAnalyzedContent: existingRuns.find((candidate) => candidate.extractorId === actualExtractor && ['completed', 'reviewed'].includes(candidate.status))?.analyzedContent || undefined };
+          const localRun = findReusableRun(actualExtractor);
+          if (localRun) {
+            run = localRun;
+            proposals = await repository.listBibleProposals(localRun.id);
+          } else {
+            extraction = await providerRouter.getLocalProvider().then((local) => local.extractBiblePatch(localInput));
+          }
+          setProviderNotice('Angefordert: Codex CLI · Verwendet: Lokaler Prototyp · Grund: ' + (error instanceof Error ? error.message : 'unbekannter Codex-Fehler'));
         }
-        proposals = await repository.saveBibleProposals(run.id, extraction.proposals, workspace.project.id, savedScene.id);
+        if (!run) {
+          run = await repository.createBibleUpdateRun({ projectId: workspace.project.id, sceneId: savedScene.id, sceneUpdatedAt: savedScene.updatedAt ?? '', contentHash: canonical.hash, extractorId: actualExtractor, analyzedContent: canonical.text });
+          proposals = await repository.saveBibleProposals(run.id, extraction?.proposals ?? [], workspace.project.id, savedScene.id);
+        }
       }
       setActiveReviewRun(run);
       setReviewProposals(proposals);
