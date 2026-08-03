@@ -489,10 +489,10 @@ body { background: var(--bg); color: var(--text); }
 .timeline-paper-column .timeline-paper-card > span:last-child { font-size: 12px; }
 
 /* The writing view is a dedicated, calm document workspace. */
-.simple-mode.writing-mode { grid-template-columns: minmax(0, 1fr); background: #ffffff; }
-.writing-mode .simple-sidebar, .writing-mode .simple-topbar { display: none; }
-.writing-mode .main-area { min-width: 0; background: #ffffff; }
-.writing-mode .content-scroll { padding: 0; background: #ffffff; overflow: auto; }
+.simple-mode.writing-mode { background: #eef2f6; }
+.writing-mode .simple-sidebar, .writing-mode .simple-topbar { display: flex; }
+.writing-mode .main-area { min-width: 0; background: #eef2f6; }
+.writing-mode .content-scroll { padding: 0; background: #eef2f6; overflow: auto; }
 .writing-workspace { min-width: 860px; min-height: calc(100vh - 32px); margin: 16px 20px; overflow: hidden; border: 1px solid #e1e6ed; border-radius: 11px; color: #253247; background: #ffffff; box-shadow: 0 4px 18px #4056770d; }
 .writing-workspace-header { display: grid; grid-template-columns: 34px 160px 1px minmax(260px, 1fr) auto; align-items: center; gap: 16px; min-height: 136px; padding: 0 26px; border-bottom: 1px solid #e1e6ed; }
 .writing-back-button, .writing-icon-button { display: inline-flex; align-items: center; justify-content: center; border: 1px solid #d8e0ea; color: #65758b; background: #ffffff; transition: color .18s ease, border-color .18s ease, background .18s ease; }

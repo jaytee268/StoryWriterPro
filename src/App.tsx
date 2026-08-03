@@ -31,7 +31,7 @@ export function App() {
   const [loadState, setLoadState] = useState<LoadState>({ status: 'loading' });
   const [selectedSceneId, setSelectedSceneId] = useState('');
   const [assistantOpen, setAssistantOpen] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('saved');
   const editorSaveController = useRef<EditorSaveController | null>(null);
   const allowNextClose = useRef(false);
