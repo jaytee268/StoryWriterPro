@@ -1072,6 +1072,215 @@ pub struct ReviewCharacterMemoryProposalInput {
     pub payload: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryDirection {
+    pub project_id: String,
+    pub premise: String,
+    pub current_story_phase: String,
+    pub book_goal: String,
+    pub planned_ending: String,
+    pub ending_status: String,
+    pub central_twist: String,
+    pub thematic_goal: String,
+    pub must_happen: Vec<String>,
+    pub must_not_happen: Vec<String>,
+    pub next_turning_point: String,
+    pub reveal_constraints: Vec<serde_json::Value>,
+    pub author_notes: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveStoryDirectionInput {
+    pub project_id: String,
+    pub premise: String,
+    pub current_story_phase: String,
+    pub book_goal: String,
+    pub planned_ending: String,
+    pub ending_status: String,
+    pub central_twist: String,
+    pub thematic_goal: String,
+    pub must_happen: Vec<String>,
+    pub must_not_happen: Vec<String>,
+    pub next_turning_point: String,
+    pub reveal_constraints: Vec<serde_json::Value>,
+    pub author_notes: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WritingPreferences {
+    pub project_id: String,
+    pub words_per_page: i64,
+    pub preferred_section_words: i64,
+    pub maximum_section_words: i64,
+    pub default_scene_count: i64,
+    pub require_plan_confirmation: bool,
+    pub require_final_confirmation: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveWritingPreferencesInput {
+    pub project_id: String,
+    pub words_per_page: i64,
+    pub preferred_section_words: i64,
+    pub maximum_section_words: i64,
+    pub default_scene_count: i64,
+    pub require_plan_confirmation: bool,
+    pub require_final_confirmation: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterGenerationJob {
+    pub id: String,
+    pub project_id: String,
+    pub target_book_id: String,
+    pub target_after_chapter_id: Option<String>,
+    pub requested_pages: Option<f64>,
+    pub target_words: i64,
+    pub requested_scene_count: Option<i64>,
+    pub user_instruction: String,
+    pub status: String,
+    pub active_provider: String,
+    pub content_context_hash: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateChapterGenerationJobInput {
+    pub project_id: String,
+    pub target_book_id: String,
+    pub target_after_chapter_id: Option<String>,
+    pub requested_pages: Option<f64>,
+    pub target_words: i64,
+    pub requested_scene_count: Option<i64>,
+    pub user_instruction: String,
+    pub active_provider: String,
+    pub content_context_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterPlanBeat {
+    pub id: String,
+    pub order_index: i64,
+    pub title: String,
+    pub purpose: String,
+    pub location: Option<String>,
+    pub pov_character_id: Option<String>,
+    pub participating_character_ids: Vec<String>,
+    pub starting_state: String,
+    pub event: String,
+    pub conflict: String,
+    pub new_information: Vec<String>,
+    pub knowledge_changes: Vec<serde_json::Value>,
+    pub relationship_changes: Vec<serde_json::Value>,
+    pub clues_used: Vec<String>,
+    pub lore_entity_ids: Vec<String>,
+    pub ending_hook: String,
+    pub target_words: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterGenerationPlan {
+    pub id: String,
+    pub job_id: String,
+    pub chapter_title: String,
+    pub chapter_goal: String,
+    pub pov_character_id: Option<String>,
+    pub starting_state: String,
+    pub ending_state: String,
+    pub chapter_summary: String,
+    pub ending_connection: String,
+    pub new_information: Vec<String>,
+    pub withheld_information: Vec<String>,
+    pub beats: Vec<ChapterPlanBeat>,
+    pub review_status: String,
+    pub reviewed_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveChapterGenerationPlanInput {
+    pub job_id: String,
+    pub chapter_title: String,
+    pub chapter_goal: String,
+    pub pov_character_id: Option<String>,
+    pub starting_state: String,
+    pub ending_state: String,
+    pub chapter_summary: String,
+    pub ending_connection: String,
+    pub new_information: Vec<String>,
+    pub withheld_information: Vec<String>,
+    pub beats: Vec<ChapterPlanBeat>,
+    pub review_status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterGenerationSection {
+    pub id: String,
+    pub job_id: String,
+    pub plan_beat_id: String,
+    pub order_index: i64,
+    pub target_words: i64,
+    pub actual_words: i64,
+    pub content: String,
+    pub continuation_summary: String,
+    pub continuity_state: serde_json::Value,
+    pub status: String,
+    pub provider_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveChapterGenerationSectionInput {
+    pub job_id: String,
+    pub plan_beat_id: String,
+    pub order_index: i64,
+    pub target_words: i64,
+    pub content: String,
+    pub continuation_summary: String,
+    pub continuity_state: serde_json::Value,
+    pub status: String,
+    pub provider_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterGenerationReview {
+    pub id: String,
+    pub job_id: String,
+    pub section_id: Option<String>,
+    pub review_scope: String,
+    pub issue_type: String,
+    pub severity: String,
+    pub title: String,
+    pub description: String,
+    pub related_entity_ids: Vec<String>,
+    pub related_source_ids: Vec<String>,
+    pub suggested_action: String,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 pub fn validate_scene_status(value: &str) -> Result<(), String> {
     match value {
         "draft" | "revised" | "final" => Ok(()),

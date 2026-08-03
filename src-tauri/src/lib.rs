@@ -94,7 +94,20 @@ pub fn run() {
             commands::save_character_memory_proposals,
             commands::list_character_memory_proposals,
             commands::review_character_memory_proposal,
-            commands::complete_character_memory_review
+            commands::complete_character_memory_review,
+            commands::get_story_direction,
+            commands::save_story_direction,
+            commands::get_writing_preferences,
+            commands::save_writing_preferences,
+            commands::create_chapter_generation_job,
+            commands::list_chapter_generation_jobs,
+            commands::update_chapter_generation_job_status,
+            commands::get_chapter_generation_plan,
+            commands::save_chapter_generation_plan,
+            commands::list_chapter_generation_sections,
+            commands::save_chapter_generation_section,
+            commands::list_chapter_generation_reviews,
+            commands::accept_chapter_generation_job
         ])
         .run(tauri::generate_context!())
         .expect("error while running StoryMemory");

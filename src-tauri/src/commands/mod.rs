@@ -14,22 +14,26 @@ use crate::{
         validate_relation_type, validate_relationship_memory_type, validate_review_status,
         validate_scene_status, validate_scene_version_reason, validate_style_reference_category,
         validate_truthfulness, AddCharacterMemoryEvidenceInput, BibleProposal, BibleProposalInput,
-        BibleUpdateRun, Book, Chapter, CharacterDialogueMemory, CharacterExperience,
-        CharacterKnowledgeState, CharacterMemoryEvidence, CharacterMemoryProposal,
-        CharacterMemoryProposalDraft, CharacterMemoryUpdateRun, CharacterProfile,
-        CharacterSceneState, CharacterVoicePattern, CreateBibleUpdateRunInput, CreateChapterInput,
+        BibleUpdateRun, Book, Chapter, ChapterGenerationJob, ChapterGenerationPlan,
+        ChapterGenerationReview, ChapterGenerationSection, ChapterPlanBeat,
+        CharacterDialogueMemory, CharacterExperience, CharacterKnowledgeState,
+        CharacterMemoryEvidence, CharacterMemoryProposal, CharacterMemoryProposalDraft,
+        CharacterMemoryUpdateRun, CharacterProfile, CharacterSceneState, CharacterVoicePattern,
+        CreateBibleUpdateRunInput, CreateChapterGenerationJobInput, CreateChapterInput,
         CreateCharacterMemoryUpdateRunInput, CreateLoreEntryInput, CreateProjectInput,
         CreateSceneInput, CreateSceneVersionInput, CreateSourceReferenceInput,
         CreateStoryEntityInput, CreateStoryEntityRelationInput, CreateStyleReferenceInput,
         DatabaseInfo, DialogueMemoryParticipant, EditorPreferences, LoreEntry, LoreMetadata,
         Project, ProjectStyle, ProviderStatus, RelationshipMemory, RestoreSceneVersionInput,
         ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput,
+        SaveChapterGenerationPlanInput, SaveChapterGenerationSectionInput,
         SaveCharacterDialogueMemoryInput, SaveCharacterExperienceInput,
         SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput, SaveCharacterSceneStateInput,
         SaveCharacterVoicePatternInput, SaveLoreMetadataInput, SaveProjectStyleInput,
-        SaveRelationshipMemoryInput, Scene, SceneInput, SceneVersion, StoryEntity,
-        StoryEntityInput, StoryEntityRelation, StorySourceReference, StyleReference,
-        UpdateChapterInput, UpdateStoryEntityInput, UpdateStyleReferenceInput, WorkspaceSnapshot,
+        SaveRelationshipMemoryInput, SaveStoryDirectionInput, SaveWritingPreferencesInput, Scene,
+        SceneInput, SceneVersion, StoryDirection, StoryEntity, StoryEntityInput,
+        StoryEntityRelation, StorySourceReference, StyleReference, UpdateChapterInput,
+        UpdateStoryEntityInput, UpdateStyleReferenceInput, WorkspaceSnapshot, WritingPreferences,
     },
 };
 use chrono::Utc;
@@ -2881,6 +2885,460 @@ pub fn complete_character_memory_review(
     db.query_row("SELECT id,project_id,scene_id,content_hash,extractor_id,status,created_at,completed_at,error_message FROM character_memory_update_runs WHERE id=?1",params![run_id],memory_run_from_row).map_err(|e|sql_error("Character-Memory-Run konnte nicht geladen werden",e))
 }
 
+fn json_array<T: serde::de::DeserializeOwned>(value: String) -> Result<Vec<T>, String> {
+    serde_json::from_str(&value).map_err(|error| sql_error("Longform-Daten sind ungültig", error))
+}
+
+fn direction_from_row(row: &rusqlite::Row<'_>) -> SqlResult<StoryDirection> {
+    Ok(StoryDirection {
+        project_id: row.get(0)?,
+        premise: row.get(1)?,
+        current_story_phase: row.get(2)?,
+        book_goal: row.get(3)?,
+        planned_ending: row.get(4)?,
+        ending_status: row.get(5)?,
+        central_twist: row.get(6)?,
+        thematic_goal: row.get(7)?,
+        must_happen: json_array(row.get(8)?).unwrap_or_default(),
+        must_not_happen: json_array(row.get(9)?).unwrap_or_default(),
+        next_turning_point: row.get(10)?,
+        reveal_constraints: json_array(row.get(11)?).unwrap_or_default(),
+        author_notes: row.get(12)?,
+        created_at: row.get(13)?,
+        updated_at: row.get(14)?,
+    })
+}
+
+fn preferences_from_row(row: &rusqlite::Row<'_>) -> SqlResult<WritingPreferences> {
+    Ok(WritingPreferences {
+        project_id: row.get(0)?,
+        words_per_page: row.get(1)?,
+        preferred_section_words: row.get(2)?,
+        maximum_section_words: row.get(3)?,
+        default_scene_count: row.get(4)?,
+        require_plan_confirmation: row.get::<_, i64>(5)? != 0,
+        require_final_confirmation: row.get::<_, i64>(6)? != 0,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+    })
+}
+
+fn validate_direction(input: &SaveStoryDirectionInput) -> Result<(), String> {
+    if !matches!(input.ending_status.as_str(), "fixed" | "preferred" | "open") {
+        return Err("Ungültiger Status des geplanten Endes.".into());
+    }
+    if input.premise.len() > 10_000 || input.planned_ending.len() > 10_000 {
+        return Err("Story-Richtung ist zu lang.".into());
+    }
+    Ok(())
+}
+
+fn validate_preferences(input: &SaveWritingPreferencesInput) -> Result<(), String> {
+    if !(150..=500).contains(&input.words_per_page)
+        || !(400..=1500).contains(&input.preferred_section_words)
+        || !(600..=2000).contains(&input.maximum_section_words)
+        || !(1..=12).contains(&input.default_scene_count)
+    {
+        return Err("Schreibpräferenzen liegen außerhalb der erlaubten Grenzen.".into());
+    }
+    if input.maximum_section_words < input.preferred_section_words {
+        return Err(
+            "Die maximale Abschnittslänge muss mindestens der bevorzugten Länge entsprechen."
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_story_direction(
+    state: State<'_, DbState>,
+    project_id: String,
+) -> Result<Option<StoryDirection>, String> {
+    let db = lock_db(&state)?;
+    db.query_row("SELECT project_id,premise,current_story_phase,book_goal,planned_ending,ending_status,central_twist,thematic_goal,must_happen_json,must_not_happen_json,next_turning_point,reveal_constraints_json,author_notes,created_at,updated_at FROM project_story_direction WHERE project_id=?1", params![project_id], direction_from_row).optional().map_err(|error| sql_error("Story-Richtung konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn save_story_direction(
+    state: State<'_, DbState>,
+    input: SaveStoryDirectionInput,
+) -> Result<StoryDirection, String> {
+    validate_direction(&input)?;
+    let db = lock_db(&state)?;
+    let stamp = now();
+    let project_exists: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+            params![input.project_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| sql_error("Projekt konnte nicht geprüft werden", e))?;
+    if !project_exists {
+        return Err("Das Projekt wurde nicht gefunden.".into());
+    }
+    let must = serde_json::to_string(&input.must_happen)
+        .map_err(|e| sql_error("Story-Richtung konnte nicht serialisiert werden", e))?;
+    let must_not = serde_json::to_string(&input.must_not_happen)
+        .map_err(|e| sql_error("Story-Richtung konnte nicht serialisiert werden", e))?;
+    let reveal = serde_json::to_string(&input.reveal_constraints)
+        .map_err(|e| sql_error("Enthüllungsgrenzen konnten nicht serialisiert werden", e))?;
+    db.execute("INSERT INTO project_story_direction(project_id,premise,current_story_phase,book_goal,planned_ending,ending_status,central_twist,thematic_goal,must_happen_json,must_not_happen_json,next_turning_point,reveal_constraints_json,author_notes,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,COALESCE((SELECT created_at FROM project_story_direction WHERE project_id=?1),?14),?14) ON CONFLICT(project_id) DO UPDATE SET premise=excluded.premise,current_story_phase=excluded.current_story_phase,book_goal=excluded.book_goal,planned_ending=excluded.planned_ending,ending_status=excluded.ending_status,central_twist=excluded.central_twist,thematic_goal=excluded.thematic_goal,must_happen_json=excluded.must_happen_json,must_not_happen_json=excluded.must_not_happen_json,next_turning_point=excluded.next_turning_point,reveal_constraints_json=excluded.reveal_constraints_json,author_notes=excluded.author_notes,updated_at=excluded.updated_at", params![input.project_id,input.premise,input.current_story_phase,input.book_goal,input.planned_ending,input.ending_status,input.central_twist,input.thematic_goal,must,must_not,input.next_turning_point,reveal,input.author_notes,stamp]).map_err(|e| sql_error("Story-Richtung konnte nicht gespeichert werden", e))?;
+    db.query_row("SELECT project_id,premise,current_story_phase,book_goal,planned_ending,ending_status,central_twist,thematic_goal,must_happen_json,must_not_happen_json,next_turning_point,reveal_constraints_json,author_notes,created_at,updated_at FROM project_story_direction WHERE project_id=?1", params![input.project_id], direction_from_row).map_err(|e| sql_error("Story-Richtung konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn get_writing_preferences(
+    state: State<'_, DbState>,
+    project_id: String,
+) -> Result<WritingPreferences, String> {
+    let db = lock_db(&state)?;
+    if let Some(value) = db.query_row("SELECT project_id,words_per_page,preferred_section_words,maximum_section_words,default_scene_count,require_plan_confirmation,require_final_confirmation,created_at,updated_at FROM project_writing_preferences WHERE project_id=?1", params![project_id], preferences_from_row).optional().map_err(|e| sql_error("Schreibpräferenzen konnten nicht geladen werden", e))? { return Ok(value); }
+    let stamp = now();
+    db.execute("INSERT INTO project_writing_preferences(project_id,words_per_page,preferred_section_words,maximum_section_words,default_scene_count,require_plan_confirmation,require_final_confirmation,created_at,updated_at) VALUES(?1,250,850,1200,4,1,1,?2,?2)", params![project_id, stamp]).map_err(|e| sql_error("Standard-Schreibpräferenzen konnten nicht gespeichert werden", e))?;
+    db.query_row("SELECT project_id,words_per_page,preferred_section_words,maximum_section_words,default_scene_count,require_plan_confirmation,require_final_confirmation,created_at,updated_at FROM project_writing_preferences WHERE project_id=?1", params![project_id], preferences_from_row).map_err(|e| sql_error("Standard-Schreibpräferenzen konnten nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn save_writing_preferences(
+    state: State<'_, DbState>,
+    input: SaveWritingPreferencesInput,
+) -> Result<WritingPreferences, String> {
+    validate_preferences(&input)?;
+    let db = lock_db(&state)?;
+    let stamp = now();
+    db.execute("INSERT INTO project_writing_preferences(project_id,words_per_page,preferred_section_words,maximum_section_words,default_scene_count,require_plan_confirmation,require_final_confirmation,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,COALESCE((SELECT created_at FROM project_writing_preferences WHERE project_id=?1),?8),?8) ON CONFLICT(project_id) DO UPDATE SET words_per_page=excluded.words_per_page,preferred_section_words=excluded.preferred_section_words,maximum_section_words=excluded.maximum_section_words,default_scene_count=excluded.default_scene_count,require_plan_confirmation=excluded.require_plan_confirmation,require_final_confirmation=excluded.require_final_confirmation,updated_at=excluded.updated_at", params![input.project_id,input.words_per_page,input.preferred_section_words,input.maximum_section_words,input.default_scene_count,input.require_plan_confirmation as i64,input.require_final_confirmation as i64,stamp]).map_err(|e| sql_error("Schreibpräferenzen konnten nicht gespeichert werden", e))?;
+    db.query_row("SELECT project_id,words_per_page,preferred_section_words,maximum_section_words,default_scene_count,require_plan_confirmation,require_final_confirmation,created_at,updated_at FROM project_writing_preferences WHERE project_id=?1", params![input.project_id], preferences_from_row).map_err(|e| sql_error("Schreibpräferenzen konnten nicht geladen werden", e))
+}
+
+fn job_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ChapterGenerationJob> {
+    Ok(ChapterGenerationJob {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        target_book_id: row.get(2)?,
+        target_after_chapter_id: row.get(3)?,
+        requested_pages: row.get(4)?,
+        target_words: row.get(5)?,
+        requested_scene_count: row.get(6)?,
+        user_instruction: row.get(7)?,
+        status: row.get(8)?,
+        active_provider: row.get(9)?,
+        content_context_hash: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+        completed_at: row.get(13)?,
+        error_message: row.get(14)?,
+    })
+}
+
+fn load_job(db: &Connection, id: &str) -> Result<ChapterGenerationJob, String> {
+    db.query_row("SELECT id,project_id,target_book_id,target_after_chapter_id,requested_pages,target_words,requested_scene_count,user_instruction,status,active_provider,content_context_hash,created_at,updated_at,completed_at,error_message FROM chapter_generation_jobs WHERE id=?1", params![id], job_from_row).map_err(|e| sql_error("Schreibauftrag konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn create_chapter_generation_job(
+    state: State<'_, DbState>,
+    input: CreateChapterGenerationJobInput,
+) -> Result<ChapterGenerationJob, String> {
+    if input.target_words < 1 {
+        return Err("Der Zielumfang muss größer als 0 sein.".into());
+    }
+    let db = lock_db(&state)?;
+    let exists: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM books WHERE id=?1 AND project_id=?2)",
+            params![input.target_book_id, input.project_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| sql_error("Zielbuch konnte nicht geprüft werden", e))?;
+    if !exists {
+        return Err("Das Zielbuch wurde nicht gefunden.".into());
+    }
+    if let Some(chapter) = &input.target_after_chapter_id {
+        let valid: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM chapters WHERE id=?1 AND book_id=?2)",
+                params![chapter, input.target_book_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| sql_error("Kapitelposition konnte nicht geprüft werden", e))?;
+        if !valid {
+            return Err("Die Zielposition gehört nicht zum Zielbuch.".into());
+        }
+    }
+    let id = new_id();
+    let stamp = now();
+    db.execute("INSERT INTO chapter_generation_jobs(id,project_id,target_book_id,target_after_chapter_id,requested_pages,target_words,requested_scene_count,user_instruction,status,active_provider,content_context_hash,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'preparing',?9,?10,?11,?11)", params![id,input.project_id,input.target_book_id,input.target_after_chapter_id,input.requested_pages,input.target_words,input.requested_scene_count,input.user_instruction,input.active_provider,input.content_context_hash,stamp]).map_err(|e| sql_error("Schreibauftrag konnte nicht gespeichert werden", e))?;
+    load_job(&db, &id)
+}
+
+#[tauri::command]
+pub fn list_chapter_generation_jobs(
+    state: State<'_, DbState>,
+    project_id: String,
+) -> Result<Vec<ChapterGenerationJob>, String> {
+    let db = lock_db(&state)?;
+    let mut statement=db.prepare("SELECT id,project_id,target_book_id,target_after_chapter_id,requested_pages,target_words,requested_scene_count,user_instruction,status,active_provider,content_context_hash,created_at,updated_at,completed_at,error_message FROM chapter_generation_jobs WHERE project_id=?1 ORDER BY updated_at DESC").map_err(|e|sql_error("Schreibaufträge konnten nicht geladen werden",e))?;
+    let rows = statement
+        .query_map(params![project_id], job_from_row)
+        .map_err(|e| sql_error("Schreibaufträge konnten nicht geladen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Schreibaufträge konnten nicht geladen werden", e))?;
+    Ok(rows)
+}
+
+#[tauri::command]
+pub fn update_chapter_generation_job_status(
+    state: State<'_, DbState>,
+    job_id: String,
+    status: String,
+    error_message: Option<String>,
+) -> Result<ChapterGenerationJob, String> {
+    if !matches!(
+        status.as_str(),
+        "preparing"
+            | "needs_input"
+            | "planning"
+            | "plan_ready"
+            | "generating"
+            | "reviewing"
+            | "draft_ready"
+            | "accepted"
+            | "cancelled"
+            | "failed"
+    ) {
+        return Err("Ungültiger Schreibauftragsstatus.".into());
+    }
+    let db = lock_db(&state)?;
+    let stamp = now();
+    db.execute("UPDATE chapter_generation_jobs SET status=?1,error_message=?2,updated_at=?3,completed_at=CASE WHEN ?1 IN ('accepted','cancelled','failed') THEN COALESCE(completed_at,?3) ELSE completed_at END WHERE id=?4",params![status,error_message,stamp,job_id]).map_err(|e|sql_error("Schreibauftragsstatus konnte nicht aktualisiert werden",e))?;
+    load_job(&db, &job_id)
+}
+
+fn plan_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ChapterGenerationPlan> {
+    let new_information: Vec<String> = json_array(row.get(9)?).unwrap_or_default();
+    let withheld_information: Vec<String> = json_array(row.get(10)?).unwrap_or_default();
+    let beats: Vec<ChapterPlanBeat> =
+        serde_json::from_str(&row.get::<_, String>(11)?).unwrap_or_default();
+    Ok(ChapterGenerationPlan {
+        id: row.get(0)?,
+        job_id: row.get(1)?,
+        chapter_title: row.get(2)?,
+        chapter_goal: row.get(3)?,
+        pov_character_id: row.get(4)?,
+        starting_state: row.get(5)?,
+        ending_state: row.get(6)?,
+        chapter_summary: row.get(7)?,
+        ending_connection: row.get(8)?,
+        new_information,
+        withheld_information,
+        beats,
+        review_status: row.get(12)?,
+        reviewed_at: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
+    })
+}
+
+fn plan_select() -> &'static str {
+    "SELECT id,job_id,chapter_title,chapter_goal,pov_character_id,starting_state,ending_state,chapter_summary,ending_connection,new_information,withheld_information,plan_json,review_status,reviewed_at,created_at,updated_at FROM chapter_generation_plans WHERE job_id=?1"
+}
+
+#[tauri::command]
+pub fn get_chapter_generation_plan(
+    state: State<'_, DbState>,
+    job_id: String,
+) -> Result<Option<ChapterGenerationPlan>, String> {
+    let db = lock_db(&state)?;
+    db.query_row(plan_select(), params![job_id], plan_from_row)
+        .optional()
+        .map_err(|e| sql_error("Kapitelplan konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn save_chapter_generation_plan(
+    state: State<'_, DbState>,
+    input: SaveChapterGenerationPlanInput,
+) -> Result<ChapterGenerationPlan, String> {
+    if input.chapter_title.trim().is_empty()
+        || input.chapter_goal.trim().is_empty()
+        || input.beats.is_empty()
+    {
+        return Err("Ein Kapitelplan benötigt Titel, Ziel und mindestens einen Beat.".into());
+    }
+    let db = lock_db(&state)?;
+    let job = load_job(&db, &input.job_id)?;
+    if let Some(pov) = &input.pov_character_id {
+        let valid: bool=db.query_row("SELECT EXISTS(SELECT 1 FROM story_entities WHERE id=?1 AND project_id=?2 AND entity_type='character')",params![pov,job.project_id],|row|row.get(0)).map_err(|e|sql_error("POV-Figur konnte nicht geprüft werden",e))?;
+        if !valid {
+            return Err("Die POV-Figur gehört nicht zum Projekt.".into());
+        }
+    }
+    let plan_id = new_id();
+    let stamp = now();
+    let new_info = serde_json::to_string(&input.new_information)
+        .map_err(|e| sql_error("Plan konnte nicht serialisiert werden", e))?;
+    let withheld = serde_json::to_string(&input.withheld_information)
+        .map_err(|e| sql_error("Plan konnte nicht serialisiert werden", e))?;
+    let beats = serde_json::to_string(&input.beats)
+        .map_err(|e| sql_error("Planbeats konnten nicht serialisiert werden", e))?;
+    db.execute("INSERT INTO chapter_generation_plans(id,job_id,chapter_title,chapter_goal,pov_character_id,starting_state,ending_state,chapter_summary,ending_connection,new_information,withheld_information,plan_json,review_status,reviewed_at,created_at,updated_at) VALUES(COALESCE((SELECT id FROM chapter_generation_plans WHERE job_id=?1),?2),?1,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,CASE WHEN ?13='accepted' THEN ?14 ELSE NULL END,COALESCE((SELECT created_at FROM chapter_generation_plans WHERE job_id=?1),?14),?14) ON CONFLICT(job_id) DO UPDATE SET chapter_title=excluded.chapter_title,chapter_goal=excluded.chapter_goal,pov_character_id=excluded.pov_character_id,starting_state=excluded.starting_state,ending_state=excluded.ending_state,chapter_summary=excluded.chapter_summary,ending_connection=excluded.ending_connection,new_information=excluded.new_information,withheld_information=excluded.withheld_information,plan_json=excluded.plan_json,review_status=excluded.review_status,reviewed_at=excluded.reviewed_at,updated_at=excluded.updated_at",params![input.job_id,plan_id,input.chapter_title,input.chapter_goal,input.pov_character_id,input.starting_state,input.ending_state,input.chapter_summary,input.ending_connection,new_info,withheld,beats,input.review_status,stamp]).map_err(|e|sql_error("Kapitelplan konnte nicht gespeichert werden",e))?;
+    db.execute(
+        "UPDATE chapter_generation_jobs SET status='plan_ready',updated_at=?1 WHERE id=?2",
+        params![stamp, input.job_id],
+    )
+    .map_err(|e| sql_error("Schreibauftrag konnte nicht aktualisiert werden", e))?;
+    db.query_row(plan_select(), params![input.job_id], plan_from_row)
+        .map_err(|e| sql_error("Gespeicherter Kapitelplan konnte nicht geladen werden", e))
+}
+
+fn section_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ChapterGenerationSection> {
+    Ok(ChapterGenerationSection {
+        id: row.get(0)?,
+        job_id: row.get(1)?,
+        plan_beat_id: row.get(2)?,
+        order_index: row.get(3)?,
+        target_words: row.get(4)?,
+        actual_words: row.get(5)?,
+        content: row.get(6)?,
+        continuation_summary: row.get(7)?,
+        continuity_state: serde_json::from_str(&row.get::<_, String>(8)?)
+            .unwrap_or_else(|_| serde_json::json!({})),
+        status: row.get(9)?,
+        provider_id: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+    })
+}
+
+#[tauri::command]
+pub fn list_chapter_generation_sections(
+    state: State<'_, DbState>,
+    job_id: String,
+) -> Result<Vec<ChapterGenerationSection>, String> {
+    let db = lock_db(&state)?;
+    let mut s=db.prepare("SELECT id,job_id,plan_beat_id,order_index,target_words,actual_words,content,continuation_summary,continuity_state_json,status,provider_id,created_at,updated_at FROM chapter_generation_sections WHERE job_id=?1 ORDER BY order_index").map_err(|e|sql_error("Kapitelabschnitte konnten nicht geladen werden",e))?;
+    let rows = s
+        .query_map(params![job_id], section_from_row)
+        .map_err(|e| sql_error("Kapitelabschnitte konnten nicht geladen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Kapitelabschnitte konnten nicht geladen werden", e))?;
+    Ok(rows)
+}
+
+#[tauri::command]
+pub fn save_chapter_generation_section(
+    state: State<'_, DbState>,
+    input: SaveChapterGenerationSectionInput,
+) -> Result<ChapterGenerationSection, String> {
+    if input.order_index < 0 || input.target_words < 1 {
+        return Err("Ungültiger Abschnitt.".into());
+    }
+    let db = lock_db(&state)?;
+    let _ = load_job(&db, &input.job_id)?;
+    let stamp = now();
+    let id = new_id();
+    let actual = input.content.split_whitespace().count() as i64;
+    let state_json = serde_json::to_string(&input.continuity_state)
+        .map_err(|e| sql_error("Continuity State konnte nicht serialisiert werden", e))?;
+    db.execute("INSERT INTO chapter_generation_sections(id,job_id,plan_beat_id,order_index,target_words,actual_words,content,continuation_summary,continuity_state_json,status,provider_id,created_at,updated_at) VALUES(COALESCE((SELECT id FROM chapter_generation_sections WHERE job_id=?1 AND order_index=?2),?3),?1,?4,?2,?5,?6,?7,?8,?9,?10,?11,COALESCE((SELECT created_at FROM chapter_generation_sections WHERE job_id=?1 AND order_index=?2),?12),?12) ON CONFLICT(job_id,order_index) DO UPDATE SET plan_beat_id=excluded.plan_beat_id,target_words=excluded.target_words,actual_words=excluded.actual_words,content=excluded.content,continuation_summary=excluded.continuation_summary,continuity_state_json=excluded.continuity_state_json,status=excluded.status,provider_id=excluded.provider_id,updated_at=excluded.updated_at",params![input.job_id,input.order_index,id,input.plan_beat_id,input.target_words,actual,input.content,input.continuation_summary,state_json,input.status,input.provider_id,stamp]).map_err(|e|sql_error("Kapitelabschnitt konnte nicht gespeichert werden",e))?;
+    db.query_row("SELECT id,job_id,plan_beat_id,order_index,target_words,actual_words,content,continuation_summary,continuity_state_json,status,provider_id,created_at,updated_at FROM chapter_generation_sections WHERE job_id=?1 AND order_index=?2",params![input.job_id,input.order_index],section_from_row).map_err(|e|sql_error("Gespeicherter Kapitelabschnitt konnte nicht geladen werden",e))
+}
+
+fn review_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ChapterGenerationReview> {
+    Ok(ChapterGenerationReview {
+        id: row.get(0)?,
+        job_id: row.get(1)?,
+        section_id: row.get(2)?,
+        review_scope: row.get(3)?,
+        issue_type: row.get(4)?,
+        severity: row.get(5)?,
+        title: row.get(6)?,
+        description: row.get(7)?,
+        related_entity_ids: json_array(row.get(8)?).unwrap_or_default(),
+        related_source_ids: json_array(row.get(9)?).unwrap_or_default(),
+        suggested_action: row.get(10)?,
+        status: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
+    })
+}
+
+#[tauri::command]
+pub fn list_chapter_generation_reviews(
+    state: State<'_, DbState>,
+    job_id: String,
+) -> Result<Vec<ChapterGenerationReview>, String> {
+    let db = lock_db(&state)?;
+    let mut s=db.prepare("SELECT id,job_id,section_id,review_scope,issue_type,severity,title,description,related_entity_ids_json,related_source_ids_json,suggested_action,status,created_at,updated_at FROM chapter_generation_reviews WHERE job_id=?1 ORDER BY created_at").map_err(|e|sql_error("Kapitelprüfungen konnten nicht geladen werden",e))?;
+    let rows = s
+        .query_map(params![job_id], review_from_row)
+        .map_err(|e| sql_error("Kapitelprüfungen konnten nicht geladen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Kapitelprüfungen konnten nicht geladen werden", e))?;
+    Ok(rows)
+}
+
+#[tauri::command]
+pub fn accept_chapter_generation_job(
+    state: State<'_, DbState>,
+    job_id: String,
+) -> Result<ChapterGenerationJob, String> {
+    let db = lock_db(&state)?;
+    let job = load_job(&db, &job_id)?;
+    if !matches!(
+        job.status.as_str(),
+        "draft_ready" | "reviewing" | "plan_ready"
+    ) {
+        return Err("Der Entwurf ist noch nicht zur Übernahme bereit.".into());
+    }
+    let plan = db
+        .query_row(plan_select(), params![job_id], plan_from_row)
+        .map_err(|e| sql_error("Kapitelplan fehlt", e))?;
+    let sections = list_chapter_generation_sections_from_db(&db, &job.id)?;
+    if sections.is_empty() {
+        return Err("Der Entwurf enthält noch keine Abschnitte.".into());
+    }
+    let tx = db
+        .unchecked_transaction()
+        .map_err(|e| sql_error("Übernahmetransaktion konnte nicht gestartet werden", e))?;
+    let title = plan.chapter_title.trim();
+    let order: i64 = tx
+        .query_row(
+            "SELECT COALESCE(MAX(order_index),0)+1 FROM chapters WHERE book_id=?1",
+            params![job.target_book_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| sql_error("Kapitelposition konnte nicht ermittelt werden", e))?;
+    let chapter_id = new_id();
+    tx.execute(
+        "INSERT INTO chapters(id,book_id,title,order_index) VALUES(?1,?2,?3,?4)",
+        params![chapter_id, job.target_book_id, title, order],
+    )
+    .map_err(|e| sql_error("Kapitel konnte nicht übernommen werden", e))?;
+    for (index, section) in sections.iter().enumerate() {
+        let scene_id = new_id();
+        tx.execute("INSERT INTO scenes(id,chapter_id,title,order_index,content,pov,location,story_time,status,goal,notes) VALUES(?1,?2,?3,?4,?5,?6,'','','draft',?7,'')",params![scene_id,chapter_id,format!("Szene {}",index+1),index as i64+1,section.content,plan.pov_character_id.clone().unwrap_or_default(),plan.chapter_goal]).map_err(|e|sql_error("Szene konnte nicht übernommen werden",e))?;
+    }
+    tx.execute("UPDATE chapter_generation_jobs SET status='accepted',completed_at=?1,updated_at=?1 WHERE id=?2",params![now(),job.id]).map_err(|e|sql_error("Schreibauftrag konnte nicht abgeschlossen werden",e))?;
+    tx.commit()
+        .map_err(|e| sql_error("Kapitelübernahme konnte nicht abgeschlossen werden", e))?;
+    load_job(&db, &job.id)
+}
+
+fn list_chapter_generation_sections_from_db(
+    db: &Connection,
+    job_id: &str,
+) -> Result<Vec<ChapterGenerationSection>, String> {
+    let mut s=db.prepare("SELECT id,job_id,plan_beat_id,order_index,target_words,actual_words,content,continuation_summary,continuity_state_json,status,provider_id,created_at,updated_at FROM chapter_generation_sections WHERE job_id=?1 ORDER BY order_index").map_err(|e|sql_error("Kapitelabschnitte konnten nicht geladen werden",e))?;
+    let rows = s
+        .query_map(params![job_id], section_from_row)
+        .map_err(|e| sql_error("Kapitelabschnitte konnten nicht geladen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Kapitelabschnitte konnten nicht geladen werden", e))?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3416,7 +3874,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            10
+            11
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);

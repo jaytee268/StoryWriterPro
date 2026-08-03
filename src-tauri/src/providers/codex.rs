@@ -79,6 +79,14 @@ pub enum CodexTaskKind {
     ExtractBiblePatch,
     ExtractCharacterMemoryPatch,
     AnswerWithProjectContext,
+    AnalyzeProjectStyle,
+    SummarizeScene,
+    SummarizeChapter,
+    SummarizeBook,
+    PlanChapterDraft,
+    DraftChapterSection,
+    ReviewChapterSection,
+    ReviewCompleteChapter,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -339,12 +347,18 @@ const BIBLE_SCHEMA: &str = r#"{
 }"#;
 const CHAT_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["answer","usedEntityIds","usedSourceIds","uncertainty","warnings"],"properties":{"answer":{"type":"string","minLength":1,"maxLength":6000},"usedEntityIds":{"type":"array","maxItems":100,"items":{"type":"string"}},"usedSourceIds":{"type":"array","maxItems":8,"items":{"type":"string"}},"uncertainty":{"enum":["low","medium","high"]},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
 const CHARACTER_MEMORY_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["proposals","warnings"],"properties":{"proposals":{"type":"array","maxItems":100,"items":{"type":"object","required":["proposalKind","subjectCharacterId","relatedCharacterId","targetEntityId","payload","classification","confidence","evidenceExcerpt","startOffset","endOffset","reason"],"properties":{"proposalKind":{"enum":["voice_pattern","experience","dialogue_memory","relationship_memory","knowledge_change","profile_observation","character_relation"]},"subjectCharacterId":{"type":["string","null"]},"relatedCharacterId":{"type":["string","null"]},"targetEntityId":{"type":["string","null"]},"payload":{"type":"object"},"classification":{"enum":["observable","interpretation","author_decision_required","possible_contradiction"]},"confidence":{"type":"number","minimum":0,"maximum":1},"evidenceExcerpt":{"type":"string","maxLength":1000},"startOffset":{"type":["integer","null"],"minimum":0},"endOffset":{"type":["integer","null"],"minimum":0},"reason":{"type":"string","maxLength":1000}}}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
+const LONGFORM_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["warnings"],"properties":{"warnings":{"type":"array","items":{"type":"string","maxLength":500}},"chapterTitle":{"type":"string","maxLength":300},"chapterGoal":{"type":"string","maxLength":2000},"chapterSummary":{"type":"string","maxLength":6000},"content":{"type":"string","maxLength":50000},"continuationSummary":{"type":"string","maxLength":2000},"observations":{"type":"array","maxItems":100},"issues":{"type":"array","maxItems":100},"beats":{"type":"array","maxItems":12}}}"#;
 
 fn prompt_for(kind: &CodexTaskKind) -> (&'static str, &'static str) {
     match kind {
         CodexTaskKind::ExtractBiblePatch => (BIBLE_PROMPT_VERSION, "Du analysierst ein Romanmanuskript für eine kontrollierte Story Bible. Verändere keine Dateien, führe keine Shell-Befehle aus und erfinde keine Informationen. Lies ausschließlich request.json. Liefere ausschließlich JSON nach output-schema.json. Trenne beobachtbare Fakten, Interpretationen, offene Fragen, mögliche Widersprüche und Autorennotizen. Verwende bei entityType ausschließlich character, relationship, place, organization, world_rule, object, event, fact, clue, secret, plot_thread, retcon oder author_note. Wenn keine sicher belegte Information vorliegt, liefere proposals als leeres Array. Ein bestätigter Kanon darf nie still überschrieben werden; nutze bei Konflikten mark_contradiction und targetEntityId. Optionale Werte targetEntityId, startOffset und endOffset müssen als null ausgegeben werden, wenn sie nicht gelten. AI-Offsets sind Unicode-Zeichenpositionen im normalisierten Klartext aus request.json.scene.content."),
         CodexTaskKind::ExtractCharacterMemoryPatch => ("storymemory-character-memory-v1", "Analysiere ausschließlich request.json für quellengebundene Charakterbeobachtungen. Verändere keine Dateien und erfinde keine Figuren, Teilnehmer, Psychologie oder Wissensstände. Trenne beobachtbares Verhalten von Interpretation. Liefere ausschließlich JSON nach output-schema.json. Verwende nur vorhandene Character-IDs. Keine dauerhafte Speicherung, keine vollständigen Dialogkopien. Eine einmalige Formulierung ist nur ein proposed Muster. AI-Offsets sind Unicode-Zeichenpositionen aus request.json.scene.content."),
         CodexTaskKind::AnswerWithProjectContext => (CHAT_PROMPT_VERSION, "Du bist ein projektbezogener Roman-Assistent. Antworte ausschließlich aus request.json. Erfinde keine Quellen oder IDs. Verwende nur vorhandene Entity- und Source-IDs und liefere ausschließlich JSON nach output-schema.json. Trenne bestätigten Kanon, Vermutungen, Widersprüche und fehlende Informationen."),
+        CodexTaskKind::AnalyzeProjectStyle => ("storymemory-style-v1", "Analysiere ausschließlich request.json und liefere strukturierte, quellengebundene Stilbeobachtungen. Überschreibe keine Autorregeln."),
+        CodexTaskKind::SummarizeScene | CodexTaskKind::SummarizeChapter | CodexTaskKind::SummarizeBook => ("storymemory-summary-v1", "Fasse ausschließlich den übergebenen Projektkontext zusammen. Trenne Ereignisse, Wissensänderungen und offene Handlungsstränge."),
+        CodexTaskKind::PlanChapterDraft => ("storymemory-plan-v1", "Erstelle ausschließlich einen überprüfbaren Kapitelplan. Erzeuge noch keinen Manuskripttext und mache Annahmen sichtbar."),
+        CodexTaskKind::DraftChapterSection => ("storymemory-section-v1", "Erzeuge nur den angeforderten Abschnitt aus dem bestätigten Plan und Kontext. Verändere keine Dateien."),
+        CodexTaskKind::ReviewChapterSection | CodexTaskKind::ReviewCompleteChapter => ("storymemory-review-v1", "Prüfe den Entwurf ausschließlich auf strukturierte Issues. Verändere den Text nicht."),
     }
 }
 
@@ -527,6 +541,18 @@ fn create_snapshot(input: &RunCodexTaskInput) -> Result<CodexSnapshotGuard, Code
                 BIBLE_SCHEMA.as_bytes()
             } else if input.task_kind == CodexTaskKind::ExtractCharacterMemoryPatch {
                 CHARACTER_MEMORY_SCHEMA.as_bytes()
+            } else if matches!(
+                input.task_kind,
+                CodexTaskKind::AnalyzeProjectStyle
+                    | CodexTaskKind::SummarizeScene
+                    | CodexTaskKind::SummarizeChapter
+                    | CodexTaskKind::SummarizeBook
+                    | CodexTaskKind::PlanChapterDraft
+                    | CodexTaskKind::DraftChapterSection
+                    | CodexTaskKind::ReviewChapterSection
+                    | CodexTaskKind::ReviewCompleteChapter
+            ) {
+                LONGFORM_SCHEMA.as_bytes()
             } else {
                 CHAT_SCHEMA.as_bytes()
             },
@@ -1041,6 +1067,32 @@ pub fn validate_character_memory_result(
     Ok(result.clone())
 }
 
+pub fn validate_longform_result(result: &Value) -> Result<Value, CodexError> {
+    let object = result.as_object().ok_or_else(|| {
+        CodexError::new(
+            "CODEX_SCHEMA_VALIDATION_FAILED",
+            "Langformergebnis ist kein Objekt.",
+        )
+    })?;
+    if object.get("warnings").and_then(Value::as_array).is_none() {
+        return Err(CodexError::new(
+            "CODEX_SCHEMA_VALIDATION_FAILED",
+            "Langformergebnis benötigt warnings.",
+        ));
+    }
+    if object
+        .get("content")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value.chars().count() > 50_000)
+    {
+        return Err(CodexError::new(
+            "CODEX_SCHEMA_VALIDATION_FAILED",
+            "Langformabschnitt überschreitet das sichere Größenlimit.",
+        ));
+    }
+    Ok(result.clone())
+}
+
 pub fn validate_chat_result(result: &Value, request: &Value) -> Result<Value, CodexError> {
     let object = result.as_object().ok_or_else(|| {
         CodexError::new(
@@ -1375,6 +1427,14 @@ pub fn run_task(
             validate_character_memory_result(&raw, &input.request_json)?
         }
         CodexTaskKind::AnswerWithProjectContext => validate_chat_result(&raw, &input.request_json)?,
+        CodexTaskKind::AnalyzeProjectStyle
+        | CodexTaskKind::SummarizeScene
+        | CodexTaskKind::SummarizeChapter
+        | CodexTaskKind::SummarizeBook
+        | CodexTaskKind::PlanChapterDraft
+        | CodexTaskKind::DraftChapterSection
+        | CodexTaskKind::ReviewChapterSection
+        | CodexTaskKind::ReviewCompleteChapter => validate_longform_result(&raw)?,
     };
     if let Some(extra) = validated.get("warnings").and_then(Value::as_array) {
         warnings.extend(extra.iter().filter_map(Value::as_str).map(str::to_owned));

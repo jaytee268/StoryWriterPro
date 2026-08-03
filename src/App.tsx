@@ -16,8 +16,11 @@ import { MindmapView } from './features/mindmap/MindmapView';
 import { SettingsView } from './features/settings/SettingsView';
 import { canonicalizeSceneForAi } from './utils/aiText';
 import { defaultAiProviderSettings, providerRouter, type StoryAiProvider } from './services/aiProviderService';
+import { createLongformRepository } from './services/longformRepository';
+import { LongformDraftView } from './features/longform/LongformDraftView';
 
 const repository: StoryRepository = createStoryRepository();
+const longformRepository = createLongformRepository();
 type LoadState = { status: 'loading' } | { status: 'ready'; workspace: WorkspaceSnapshot } | { status: 'error'; message: string; detail?: string };
 export type SaveStatus = 'saved' | 'dirty' | 'saving' | 'error';
 
@@ -49,6 +52,7 @@ export function App() {
   const registerSaveController = useCallback((controller: EditorSaveController | null) => { editorSaveController.current = controller; }, []);
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: 'welcome', role: 'assistant', content: 'Willkommen. Stelle eine Frage zu deiner aktuellen Szene oder zur bestätigten Story Bible.', time: 'Jetzt' }]);
   const [activeModal, setActiveModal] = useState<'bible' | 'research' | 'import' | null>(null);
+  const [longformInstruction, setLongformInstruction] = useState<string>();
 
   const loadWorkspace = useCallback(async () => {
     setLoadState({ status: 'loading' });
@@ -284,7 +288,8 @@ export function App() {
       <header className="topbar simple-topbar"><div className="topbar-title"><button className="sidebar-toggle" onClick={() => setSidebarOpen((open) => !open)} aria-label={sidebarOpen ? 'Sidebar einklappen' : 'Sidebar öffnen'} title={sidebarOpen ? 'Sidebar einklappen' : 'Sidebar öffnen'}>{sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}</button><div className="topbar-copy"><span className="eyebrow">{view === 'dashboard' ? 'START' : project?.title ?? 'STORYMEMORY'}</span><strong>{topLabel}</strong></div></div><div className="topbar-actions"><span className={`save-state save-state-${saveStatus}`}><span className={`status-dot status-dot-${saveStatus}`} /> {saveLabel[saveStatus]}</span><button className="assistant-button" onClick={() => setAssistantOpen(true)}><MessageCircle size={18} /> Assistent öffnen</button></div></header>
       <div className="content-scroll">{providerNotice && <div className="provider-notice" role="status"><span>{providerNotice}</span><button className="text-button" onClick={() => setProviderNotice('')}>Ausblenden</button></div>}{viewError && <div className="save-error workspace-save-error" role="alert"><strong>Speichern erforderlich</strong><span>{viewError}</span><button className="text-button" onClick={() => void retryEditorSave()}>Erneut versuchen</button></div>}{loadState.status === 'loading' && <LoadingView mode={repository.mode} />}{loadState.status === 'error' && <ErrorView message={loadState.message} detail={loadState.detail} onRetry={() => void loadWorkspace()} />}{loadState.status === 'ready' && renderView()}</div>
     </main>
-    {assistantOpen && <div className="assistant-drawer"><button className="drawer-close" onClick={() => setAssistantOpen(false)} aria-label="Assistent schließen"><X size={20} /></button>{workspace && <ChatPanel messages={messages} onMessagesChange={setMessages} contextBuilder={contextBuilder} contextRequest={{ projectId: workspace.project.id, currentChapterId: currentChapter?.id, currentSceneId: currentScene?.id }} onOpenSourceReference={(reference) => void openSourceReference(reference)} providerRouter={providerRouter} />}</div>}
+    {assistantOpen && <div className="assistant-drawer"><button className="drawer-close" onClick={() => setAssistantOpen(false)} aria-label="Assistent schließen"><X size={20} /></button>{workspace && <ChatPanel messages={messages} onMessagesChange={setMessages} contextBuilder={contextBuilder} contextRequest={{ projectId: workspace.project.id, currentChapterId: currentChapter?.id, currentSceneId: currentScene?.id }} onOpenSourceReference={(reference) => void openSourceReference(reference)} providerRouter={providerRouter} onLongformRequest={(instruction) => { setLongformInstruction(instruction); setAssistantOpen(false); }} />}</div>}
+    {longformInstruction && workspace && <div className="longform-overlay"><LongformDraftView project={workspace.project} chapters={workspace.chapters} entities={workspace.entities} repository={longformRepository} instruction={longformInstruction} activeProvider={providerSettings.activeProvider} onClose={() => setLongformInstruction(undefined)} onAccepted={async (plan, sections) => { if (longformRepository.mode === 'browser-demo') { const chapter = await createChapter(plan.chapterTitle); for (const section of sections) { const scene = await createScene(chapter.id, `Szene ${section.orderIndex + 1}`); await saveScene({ ...scene, content: section.content, pov: plan.povCharacterId ?? '', goal: plan.chapterGoal }); } } setLongformInstruction(undefined); await loadWorkspace(); await requestViewChange('editor'); }} /></div>}
     {activeModal && <Modal type={activeModal} onClose={() => setActiveModal(null)} />}
     {closePrompt && <ClosePrompt message={closePrompt} onRetry={() => void finishClose(false)} onForceClose={() => void finishClose(true)} onCancel={() => setClosePrompt('')} />}
   </div>;

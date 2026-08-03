@@ -3,6 +3,7 @@ import { AtSign, Send, WandSparkles } from 'lucide-react';
 import type { ChatMessage, ContextRequest, StorySourceReference } from '../../types/domain';
 import type { ProjectContextBuilder } from '../../services/contextBuilder';
 import type { ProviderRouter, StoryAiProvider } from '../../services/aiProviderService';
+import { parseLongformIntent } from '../../services/longformWorkflow';
 
 interface ChatPanelProps {
   messages: ChatMessage[];
@@ -11,15 +12,17 @@ interface ChatPanelProps {
   contextRequest: Omit<ContextRequest, 'userQuestion'>;
   onOpenSourceReference: (reference: StorySourceReference) => void;
   providerRouter: ProviderRouter;
+  onLongformRequest: (instruction: string) => void;
 }
 
-export function ChatPanel({ messages, onMessagesChange, contextBuilder, contextRequest, onOpenSourceReference, providerRouter }: ChatPanelProps) {
+export function ChatPanel({ messages, onMessagesChange, contextBuilder, contextRequest, onOpenSourceReference, providerRouter, onLongformRequest }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [activeProvider, setActiveProvider] = useState<StoryAiProvider>();
   const send = async (text = input) => {
     if (!text.trim() || busy) return;
     const question = text.trim();
+    if (parseLongformIntent(question).requested) { onLongformRequest(question); setInput(''); return; }
     const user: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: question, time: 'Jetzt' };
     const withUser = [...messages, user];
     onMessagesChange(withUser);

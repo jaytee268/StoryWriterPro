@@ -295,6 +295,17 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
     if has_character_memory == 0 {
         connection.execute("INSERT INTO schema_migrations (version) VALUES (10)", [])?;
     }
+    let has_longform = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 11",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    connection.execute_batch(include_str!(
+        "../../../migrations/011_longform_chapter_drafting.sql"
+    ))?;
+    if has_longform == 0 {
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (11)", [])?;
+    }
     Ok(())
 }
 
@@ -450,7 +461,7 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            10
+            11
         );
         assert_eq!(
             connection
@@ -458,6 +469,34 @@ mod tests {
                 .unwrap(),
             3
         );
+        drop(connection);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn longform_schema_migrates_after_character_memory() {
+        let path = temp_path("longform-schema");
+        let connection = database_path_for_test(&path).unwrap();
+        for table in [
+            "project_story_direction",
+            "project_writing_preferences",
+            "narrative_summaries",
+            "project_style_analysis_runs",
+            "project_style_observations",
+            "chapter_generation_jobs",
+            "chapter_generation_assumptions",
+            "chapter_generation_plans",
+            "chapter_generation_sections",
+            "chapter_generation_reviews",
+        ] {
+            assert!(connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                    params![table],
+                    |row| row.get::<_, bool>(0),
+                )
+                .unwrap());
+        }
         drop(connection);
         let _ = fs::remove_file(path);
     }
@@ -611,7 +650,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                10
+                11
             );
             // Running startup migrations again must not change the assignment
             // or fail on the ALTER TABLE statement.

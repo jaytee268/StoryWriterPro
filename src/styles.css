@@ -649,3 +649,28 @@ body { background: var(--bg); color: var(--text); }
   .writing-title-block { padding-left: 16px; }
   .writing-header-actions { padding-right: 12px; }
 }
+/* Guided long-form drafting */
+.longform-overlay { position: fixed; inset: 0; z-index: 30; background: rgba(244,247,251,.96); overflow: auto; padding: 28px; }
+.longform-view { max-width: 1120px; margin: 0 auto; padding: 12px 0 64px; color: #203047; }
+.longform-head { display: grid; grid-template-columns: 180px 1fr 42px; gap: 20px; align-items: start; margin-bottom: 22px; }
+.longform-head h1 { margin: 4px 0 5px; font-size: 34px; letter-spacing: -.04em; }
+.longform-head p { margin: 0; color: #71829d; }
+.longform-steps { display: flex; gap: 8px; margin-bottom: 18px; }
+.longform-steps span { padding: 9px 13px; border-radius: 999px; background: #e8edf5; color: #8190a6; font-size: 13px; font-weight: 700; }
+.longform-steps span.active { background: #526fc4; color: white; }.longform-steps span.done { background: #d9eee5; color: #237c5b; }
+.longform-grid { display: grid; grid-template-columns: .75fr 1.25fr; gap: 16px; }
+.longform-card { background: #fff; border: 1px solid #dbe3ee; border-radius: 18px; padding: 22px; box-shadow: 0 10px 30px rgba(60,80,110,.06); }
+.longform-card h2 { margin: 4px 0; font-size: 21px; }.longform-number { display: block; font-size: 40px; color: #526fc4; margin: 16px 0 6px; }
+.longform-card p { color: #73829a; line-height: 1.55; }.direction-card, .longform-actions { grid-column: 1 / -1; }
+.card-title-row, .section-heading { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; }
+.preflight-row { display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid #eef2f7; }.preflight-row:last-child { border-bottom: 0; }
+.preflight-row > span { min-width: 82px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; font-weight: 800; color: #8090a8; }
+.preflight-row.blocking > span { color: #bf5b50; }.preflight-row.recommended > span { color: #b9832e; }.preflight-row.optional > span { color: #5272bf; }
+.preflight-row strong { font-size: 14px; }.preflight-row p { margin: 3px 0 0; font-size: 13px; }
+.longform-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 2px; }.plan-card, .draft-card { max-width: 100%; }
+.beat-list { display: grid; gap: 12px; margin: 20px 0; }.beat-card { display: grid; grid-template-columns: 36px 1fr auto; gap: 14px; align-items: start; padding: 15px; border: 1px solid #e0e6ef; border-radius: 14px; background: #fbfcfe; }
+.beat-number { width: 30px; height: 30px; border-radius: 50%; background: #e7edfc; color: #526fc4; display: grid; place-items: center; font-weight: 800; }
+.beat-card input { width: 100%; border: 0; background: transparent; font-weight: 800; color: #203047; font-size: 15px; }.beat-card > strong { color: #8090a8; white-space: nowrap; }
+.draft-notice { display: flex; gap: 9px; align-items: flex-start; background: #fff7e7; border: 1px solid #f2dfb3; color: #815f20; padding: 13px 15px; border-radius: 12px; margin: 18px 0; font-size: 14px; line-height: 1.45; }
+.draft-section { border-top: 1px solid #e5eaf1; padding: 18px 0; }.draft-section textarea { width: 100%; min-height: 150px; resize: vertical; margin-top: 10px; }.section-heading span { color: #8090a8; font-size: 13px; }
+@media (max-width: 820px) { .longform-overlay { padding: 16px; }.longform-head { grid-template-columns: 1fr 42px; }.longform-head > .ghost-button { grid-column: 1 / -1; }.longform-grid { grid-template-columns: 1fr; }.direction-card, .longform-actions { grid-column: auto; }.longform-steps { overflow-x: auto; }.longform-steps span { white-space: nowrap; } }
