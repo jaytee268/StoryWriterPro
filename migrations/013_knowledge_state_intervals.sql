@@ -1,0 +1,3 @@
+-- Additive interval metadata for character knowledge.
+-- Existing rows are backfilled by the Rust migration runner because SQLite
+-- versions in the field do not all support ADD COLUMN IF NOT EXISTS.

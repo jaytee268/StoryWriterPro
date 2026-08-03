@@ -370,6 +370,48 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
     if has_character_longform == 0 {
         connection.execute("INSERT INTO schema_migrations (version) VALUES (12)", [])?;
     }
+    let has_knowledge_intervals: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 13",
+        [],
+        |row| row.get(0),
+    )?;
+    // Migration 013 is intentionally resumable. The interval columns make
+    // the historical meaning explicit without rewriting existing knowledge.
+    ensure_column(
+        connection,
+        "character_knowledge_states",
+        "effective_from_scene_id",
+        "TEXT REFERENCES scenes(id) ON DELETE SET NULL",
+    )?;
+    ensure_column(
+        connection,
+        "character_knowledge_states",
+        "effective_until_scene_id",
+        "TEXT REFERENCES scenes(id) ON DELETE SET NULL",
+    )?;
+    ensure_column(
+        connection,
+        "character_knowledge_history",
+        "effective_from_scene_id",
+        "TEXT REFERENCES scenes(id) ON DELETE SET NULL",
+    )?;
+    ensure_column(
+        connection,
+        "character_knowledge_history",
+        "effective_until_scene_id",
+        "TEXT REFERENCES scenes(id) ON DELETE SET NULL",
+    )?;
+    connection.execute(
+        "UPDATE character_knowledge_states SET effective_from_scene_id=COALESCE(effective_from_scene_id, changed_scene_id, acquired_scene_id) WHERE effective_from_scene_id IS NULL",
+        [],
+    )?;
+    connection.execute(
+        "UPDATE character_knowledge_history SET effective_until_scene_id=COALESCE(effective_until_scene_id, scene_id) WHERE effective_until_scene_id IS NULL",
+        [],
+    )?;
+    if has_knowledge_intervals == 0 {
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (13)", [])?;
+    }
     Ok(())
 }
 
@@ -525,7 +567,7 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            12
+            13
         );
         assert_eq!(
             connection
@@ -567,6 +609,8 @@ mod tests {
             ("character_memory_proposals", "accepted_memory_id"),
             ("character_memory_update_runs", "analyzed_content"),
             ("chapter_generation_jobs", "context_override_accepted"),
+            ("character_knowledge_states", "effective_from_scene_id"),
+            ("character_knowledge_history", "effective_until_scene_id"),
         ] {
             assert!(has_column(&connection, table, column).unwrap());
         }
@@ -723,7 +767,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                12
+                13
             );
             // Running startup migrations again must not change the assignment
             // or fail on the ALTER TABLE statement.

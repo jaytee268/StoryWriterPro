@@ -1,4 +1,4 @@
-import type { Chapter, ContextRequest, ProjectContext, StorySourceReference } from '../types/domain';
+import type { Chapter, CharacterKnowledgeState, ContextRequest, ProjectContext, StorySourceReference } from '../types/domain';
 import type { StoryRepository } from './storyRepository';
 import { editorContentToPlainText } from '../utils/editorContent';
 
@@ -6,6 +6,26 @@ const tokens = (value: string): string[] => value.toLocaleLowerCase().split(/[^\
 const scoreText = (value: string, needles: string[]) => needles.reduce((score, needle) => score + (tokens(value).includes(needle) ? 1 : 0), 0);
 
 export interface ProjectContextBuilder { build(input: ContextRequest): Promise<ProjectContext>; }
+
+/** Resolves knowledge as scene intervals: a state starts at its effective scene
+ * and remains valid until (but not including) the next transition scene. */
+export function resolveCharacterKnowledgeAtScene(
+  currentStates: CharacterKnowledgeState[],
+  historyStates: CharacterKnowledgeState[],
+  sceneOrder: ReadonlyMap<string, number>,
+  targetSceneId?: string,
+): CharacterKnowledgeState[] {
+  const targetOrder = targetSceneId ? (sceneOrder.get(targetSceneId) ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER;
+  const orderOf = (sceneId: string | undefined, fallback: number): number => sceneId ? (sceneOrder.get(sceneId) ?? Number.MAX_SAFE_INTEGER) : fallback;
+  const candidates = [
+    ...historyStates.map((state) => ({ state, from: orderOf(state.effectiveFromSceneId ?? state.acquiredSceneId, Number.MIN_SAFE_INTEGER), until: orderOf(state.effectiveUntilSceneId ?? state.changedSceneId, Number.MAX_SAFE_INTEGER), current: false })),
+    ...currentStates.map((state) => ({ state, from: orderOf(state.effectiveFromSceneId ?? state.changedSceneId ?? state.acquiredSceneId, Number.MIN_SAFE_INTEGER), until: orderOf(state.effectiveUntilSceneId, Number.MAX_SAFE_INTEGER), current: true })),
+  ].filter((candidate) => candidate.from <= targetOrder && targetOrder < candidate.until)
+    .sort((a, b) => a.from - b.from || Number(a.current) - Number(b.current));
+  const latest = new Map<string, (typeof candidates)[number]>();
+  candidates.forEach((candidate) => latest.set(candidate.state.factEntityId, candidate));
+  return [...latest.values()].map(({ state }) => state);
+}
 
 export class DeterministicProjectContextBuilder implements ProjectContextBuilder {
   constructor(private readonly repository: StoryRepository) {}
@@ -49,17 +69,11 @@ export class DeterministicProjectContextBuilder implements ProjectContextBuilder
     const relevantExperiences = allExperiences.filter((experience) => characterIds.includes(experience.characterId) && (!experience.sceneId || (sceneOrder.get(experience.sceneId) ?? 0) <= currentOrder)).slice(0, 20);
     const relevantDialogueMemories = allDialogueMemories.filter((memory) => memory.participants.some((participant) => characterIds.includes(participant.characterId)) && (sceneOrder.get(memory.sceneId) ?? 0) <= currentOrder).slice(0, 20);
     const relevantRelationshipMemories = allRelationshipMemories.filter((memory) => characterIds.includes(memory.characterAId) && characterIds.includes(memory.characterBId) && (!memory.sceneId || (sceneOrder.get(memory.sceneId) ?? 0) <= currentOrder)).slice(0, 20);
-    const relevantKnowledgeStates = characterIds.flatMap((characterId) => {
-      const current = allKnowledgeStates.filter((state) => state.characterId === characterId).map((state) => ({ state, order: state.changedSceneId ? (sceneOrder.get(state.changedSceneId) ?? Number.MAX_SAFE_INTEGER) : state.acquiredSceneId ? (sceneOrder.get(state.acquiredSceneId) ?? Number.MAX_SAFE_INTEGER) : currentOrder, current: true }));
-      const history = allKnowledgeHistory.filter((state) => state.characterId === characterId).map((state) => ({ state, order: sceneOrder.get(state.changedSceneId ?? state.acquiredSceneId ?? '') ?? Number.MAX_SAFE_INTEGER, current: false }));
-      const eligible = [...current, ...history].filter((candidate) => candidate.order <= currentOrder).sort((a, b) => a.order - b.order || Number(a.current) - Number(b.current));
-      const latest = new Map<string, typeof eligible[number]>();
-      eligible.forEach((candidate) => latest.set(candidate.state.factEntityId, candidate));
-      return [...latest.values()].map(({ state }) => state);
-    }).slice(0, 30);
+    const relevantKnowledgeStates = characterIds.flatMap((characterId) => resolveCharacterKnowledgeAtScene(allKnowledgeStates.filter((state) => state.characterId === characterId), allKnowledgeHistory.filter((state) => state.characterId === characterId), sceneOrder, currentScene?.id)).slice(0, 30);
     const categoryHint = questionTokens.includes('dialog') ? ['dialogue', 'general', 'humor'] : questionTokens.some((token) => ['spannung', 'konflikt', 'tension'].includes(token)) ? ['tension', 'general', 'description'] : ['general', 'dialogue', 'inner_monologue', 'description'];
     const relevantStyleReferences = [...styleReferences].sort((a, b) => (b.weight - a.weight) || (Number(categoryHint.includes(b.category)) - Number(categoryHint.includes(a.category))) || (Number(b.sceneId === currentScene?.id) - Number(a.sceneId === currentScene?.id)) || Number(a.startOffset === undefined) - Number(b.startOffset === undefined)).slice(0, 5);
-    return { projectId: input.projectId, currentScene, currentChapter, relevantEntities, relevantSources, openPlotThreads: relevantEntities.filter((entity) => entity.type === 'plot_thread' && entity.status !== 'confirmed'), possibleContradictions: relevantEntities.filter((entity) => entity.status === 'contradicted'), lore: relevantLore, entityRelations: relevantRelations, characterProfiles, characterStates, characterVoicePatterns: relevantVoicePatterns, characterExperiences: relevantExperiences, characterDialogueMemories: relevantDialogueMemories, relationshipMemories: relevantRelationshipMemories, characterKnowledgeStates: relevantKnowledgeStates, projectStyle, styleReferences: relevantStyleReferences, acceptedStyleObservations: styleObservations.filter((item) => item.reviewStatus === 'accepted' || item.reviewStatus === 'edited'), narrativeSummaries: narrativeSummaries.filter((item) => item.status !== 'rejected') };
+    const usableSummaries = narrativeSummaries.filter((item) => item.status === 'confirmed' || (input.includeProposedSummaries === true && item.status === 'proposed'));
+    return { projectId: input.projectId, currentScene, currentChapter, relevantEntities, relevantSources, openPlotThreads: relevantEntities.filter((entity) => entity.type === 'plot_thread' && entity.status !== 'confirmed'), possibleContradictions: relevantEntities.filter((entity) => entity.status === 'contradicted'), lore: relevantLore, entityRelations: relevantRelations, characterProfiles, characterStates, characterVoicePatterns: relevantVoicePatterns, characterExperiences: relevantExperiences, characterDialogueMemories: relevantDialogueMemories, relationshipMemories: relevantRelationshipMemories, characterKnowledgeStates: relevantKnowledgeStates, projectStyle, styleReferences: relevantStyleReferences, acceptedStyleObservations: styleObservations.filter((item) => item.reviewStatus === 'accepted' || item.reviewStatus === 'edited'), narrativeSummaries: usableSummaries };
   }
 }
 

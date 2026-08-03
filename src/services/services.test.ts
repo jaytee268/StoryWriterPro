@@ -255,6 +255,25 @@ describe('Story-Bible-Review und grounded context', () => {
     await repository.saveCharacterKnowledgeState({ ...first, knowledgeState: 'knows', acquiredSceneId: scenes[1]!.id, changedSceneId: scenes[1]!.id });
     const context = await new DeterministicProjectContextBuilder(repository).build({ projectId: workspace.project.id, currentSceneId: scenes[0]!.id, userQuestion: character.name });
     expect(context.characterKnowledgeStates?.find((state) => state.factEntityId === fact.id)?.knowledgeState).toBe('suspects');
+    const laterContext = await new DeterministicProjectContextBuilder(repository).build({ projectId: workspace.project.id, currentSceneId: scenes[1]!.id, userQuestion: character.name });
+    expect(laterContext.characterKnowledgeStates?.find((state) => state.factEntityId === fact.id)?.knowledgeState).toBe('knows');
+  });
+
+  it('reicht nur bestätigte, nicht veraltete Summaries an den ProjectContext weiter', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const base = { projectId: workspace.project.id, scopeType: 'project' as const, scopeId: workspace.project.id, importantEvents: [], openThreads: [], characterChanges: [], authorConfirmed: false };
+    await repository.saveNarrativeSummary({ ...base, contentHash: 'confirmed', summary: 'Bestätigt', status: 'confirmed', authorConfirmed: true });
+    await repository.saveNarrativeSummary({ ...base, contentHash: 'proposed', summary: 'Vorgeschlagen', status: 'proposed' });
+    await repository.saveNarrativeSummary({ ...base, contentHash: 'outdated', summary: 'Veraltet', status: 'outdated' });
+    await repository.saveNarrativeSummary({ ...base, contentHash: 'rejected', summary: 'Abgelehnt', status: 'rejected' });
+    const input = { projectId: workspace.project.id, currentSceneId: workspace.chapters[0]!.scenes[0]!.id, userQuestion: 'Zusammenfassung' };
+    const builder = new DeterministicProjectContextBuilder(repository);
+    const defaultContext = await builder.build(input);
+    expect(defaultContext.narrativeSummaries?.map((item) => item.summary)).toEqual(['Bestätigt']);
+    const explicitContext = await builder.build({ ...input, includeProposedSummaries: true });
+    expect(explicitContext.narrativeSummaries?.map((item) => item.summary)).toEqual(expect.arrayContaining(['Bestätigt', 'Vorgeschlagen']));
+    expect(explicitContext.narrativeSummaries?.some((item) => item.status === 'outdated' || item.status === 'rejected')).toBe(false);
   });
 
   it('verwendet nur akzeptierte Stilbeobachtungen und bestätigt aktuelle Summaries', async () => {

@@ -1059,6 +1059,8 @@ pub struct CharacterKnowledgeState {
     pub knowledge_state: String,
     pub acquired_scene_id: Option<String>,
     pub changed_scene_id: Option<String>,
+    pub effective_from_scene_id: Option<String>,
+    pub effective_until_scene_id: Option<String>,
     pub source_character_id: Option<String>,
     pub certainty: f64,
     pub notes: String,
@@ -1077,6 +1079,10 @@ pub struct SaveCharacterKnowledgeStateInput {
     pub knowledge_state: String,
     pub acquired_scene_id: Option<String>,
     pub changed_scene_id: Option<String>,
+    #[serde(default)]
+    pub effective_from_scene_id: Option<String>,
+    #[serde(default)]
+    pub effective_until_scene_id: Option<String>,
     pub source_character_id: Option<String>,
     pub certainty: f64,
     #[serde(default)]

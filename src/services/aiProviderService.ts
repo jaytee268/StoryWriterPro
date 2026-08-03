@@ -23,7 +23,7 @@ export interface ProviderStatusView { id: string; available: boolean; label: str
 function canonicalizeContextForAi(context: ProjectContext): ProjectContext {
   const currentScene = context.currentScene ? canonicalizeSceneForAi(context.currentScene).scene : undefined;
   const currentChapter = context.currentChapter ? { ...context.currentChapter, scenes: context.currentChapter.scenes.map((scene) => canonicalizeSceneForAi(scene).scene) } : undefined;
-  return { ...context, currentScene, currentChapter };
+  return { ...context, currentScene, currentChapter, narrativeSummaries: context.narrativeSummaries?.filter((summary) => summary.status === 'confirmed' || summary.status === 'proposed') };
 }
 
 export function buildCodexBibleRequest(input: BibleExtractionInput) {

@@ -2697,13 +2697,15 @@ fn knowledge_from_row(row: &rusqlite::Row<'_>) -> SqlResult<CharacterKnowledgeSt
         knowledge_state: row.get(4)?,
         acquired_scene_id: row.get(5)?,
         changed_scene_id: row.get(6)?,
-        source_character_id: row.get(7)?,
-        certainty: row.get(8)?,
-        notes: row.get(9)?,
-        status: row.get(10)?,
-        author_confirmed: row.get(11)?,
-        created_at: row.get(12)?,
-        updated_at: row.get(13)?,
+        effective_from_scene_id: row.get(7)?,
+        effective_until_scene_id: row.get(8)?,
+        source_character_id: row.get(9)?,
+        certainty: row.get(10)?,
+        notes: row.get(11)?,
+        status: row.get(12)?,
+        author_confirmed: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
     })
 }
 fn evidence_from_row(row: &rusqlite::Row<'_>) -> SqlResult<CharacterMemoryEvidence> {
@@ -3059,7 +3061,7 @@ pub fn list_character_knowledge_states(
     if let Some(id) = &character_id {
         validate_character(&db, &project_id, id)?;
     }
-    let mut stmt=db.prepare("SELECT id,project_id,character_id,fact_entity_id,knowledge_state,acquired_scene_id,changed_scene_id,source_character_id,certainty,notes,status,author_confirmed,created_at,updated_at FROM character_knowledge_states WHERE project_id=?1 AND (?2 IS NULL OR character_id=?2) ORDER BY updated_at DESC").map_err(|e|sql_error("Wissensstände konnten nicht geladen werden",e))?;
+    let mut stmt=db.prepare("SELECT id,project_id,character_id,fact_entity_id,knowledge_state,acquired_scene_id,changed_scene_id,effective_from_scene_id,effective_until_scene_id,source_character_id,certainty,notes,status,author_confirmed,created_at,updated_at FROM character_knowledge_states WHERE project_id=?1 AND (?2 IS NULL OR character_id=?2) ORDER BY updated_at DESC").map_err(|e|sql_error("Wissensstände konnten nicht geladen werden",e))?;
     let rows = stmt
         .query_map(params![project_id, character_id], knowledge_from_row)
         .map_err(|e| sql_error("Wissensstände konnten nicht geladen werden", e))?
@@ -3074,7 +3076,7 @@ pub fn list_character_knowledge_history(
     character_id: Option<String>,
 ) -> Result<Vec<CharacterKnowledgeState>, String> {
     let db = lock_db(&state)?;
-    let mut stmt=db.prepare("SELECT id,project_id,character_id,fact_entity_id,knowledge_state,scene_id,scene_id,NULL,certainty,'', 'confirmed',1,created_at,created_at FROM character_knowledge_history WHERE project_id=?1 AND (?2 IS NULL OR character_id=?2) ORDER BY created_at ASC").map_err(|e|sql_error("Wissenshistorie konnte nicht geladen werden",e))?;
+    let mut stmt=db.prepare("SELECT id,project_id,character_id,fact_entity_id,knowledge_state,NULL,scene_id,effective_from_scene_id,effective_until_scene_id,NULL,certainty,'', 'confirmed',1,created_at,created_at FROM character_knowledge_history WHERE project_id=?1 AND (?2 IS NULL OR character_id=?2) ORDER BY created_at ASC").map_err(|e|sql_error("Wissenshistorie konnte nicht geladen werden",e))?;
     let rows = stmt
         .query_map(params![project_id, character_id], knowledge_from_row)
         .map_err(|e| sql_error("Wissenshistorie konnte nicht geladen werden", e))?
@@ -3082,6 +3084,17 @@ pub fn list_character_knowledge_history(
         .map_err(|e| sql_error("Wissenshistorie konnte nicht geladen werden", e));
     rows
 }
+
+type PreviousKnowledgeState = (
+    String,
+    String,
+    f64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 #[tauri::command]
 pub fn save_character_knowledge_state(
     state: State<'_, DbState>,
@@ -3103,17 +3116,38 @@ pub fn save_character_knowledge_state(
     validate_character_memory_status(&input.status)?;
     validate_probability(input.certainty, "Certainty")?;
     let id = input.id.clone().unwrap_or_else(new_id);
-    let previous: Option<(String,String,f64)> = db.query_row("SELECT knowledge_state,project_id,certainty FROM character_knowledge_states WHERE id=?1",params![id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional().map_err(|e|sql_error("Wissensstand konnte nicht geprüft werden",e))?;
+    let previous: Option<PreviousKnowledgeState> = db.query_row("SELECT knowledge_state,project_id,certainty,effective_from_scene_id,effective_until_scene_id,acquired_scene_id,changed_scene_id FROM character_knowledge_states WHERE id=?1",params![id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?))).optional().map_err(|e|sql_error("Wissensstand konnte nicht geprüft werden",e))?;
+    let transition_scene_id = input
+        .changed_scene_id
+        .clone()
+        .or_else(|| input.acquired_scene_id.clone());
+    let effective_from_scene_id = if previous.is_some() {
+        transition_scene_id.clone()
+    } else {
+        input
+            .effective_from_scene_id
+            .clone()
+            .or_else(|| transition_scene_id.clone())
+    };
     let stamp = now();
     let tx = db
         .unchecked_transaction()
         .map_err(|e| sql_error("Wissensstandtransaktion konnte nicht gestartet werden", e))?;
-    tx.execute("INSERT INTO character_knowledge_states(id,project_id,character_id,fact_entity_id,knowledge_state,acquired_scene_id,changed_scene_id,source_character_id,certainty,notes,status,author_confirmed,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,COALESCE((SELECT created_at FROM character_knowledge_states WHERE id=?1),?13),?13) ON CONFLICT(id) DO UPDATE SET knowledge_state=excluded.knowledge_state,acquired_scene_id=excluded.acquired_scene_id,changed_scene_id=excluded.changed_scene_id,source_character_id=excluded.source_character_id,certainty=excluded.certainty,notes=excluded.notes,status=excluded.status,author_confirmed=excluded.author_confirmed,updated_at=excluded.updated_at",params![id,input.project_id,input.character_id,input.fact_entity_id,input.knowledge_state,input.acquired_scene_id,input.changed_scene_id,input.source_character_id,input.certainty,input.notes,input.status,input.author_confirmed,stamp]).map_err(|e|sql_error("Wissensstand konnte nicht gespeichert werden",e))?;
-    if let Some((old_state, old_project, old_certainty)) = previous {
+    tx.execute("INSERT INTO character_knowledge_states(id,project_id,character_id,fact_entity_id,knowledge_state,acquired_scene_id,changed_scene_id,effective_from_scene_id,effective_until_scene_id,source_character_id,certainty,notes,status,author_confirmed,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,NULL,?9,?10,?11,?12,?13,COALESCE((SELECT created_at FROM character_knowledge_states WHERE id=?1),?14),?14) ON CONFLICT(id) DO UPDATE SET knowledge_state=excluded.knowledge_state,acquired_scene_id=excluded.acquired_scene_id,changed_scene_id=excluded.changed_scene_id,effective_from_scene_id=excluded.effective_from_scene_id,effective_until_scene_id=NULL,source_character_id=excluded.source_character_id,certainty=excluded.certainty,notes=excluded.notes,status=excluded.status,author_confirmed=excluded.author_confirmed,updated_at=excluded.updated_at",params![id,input.project_id,input.character_id,input.fact_entity_id,input.knowledge_state,input.acquired_scene_id,input.changed_scene_id,effective_from_scene_id,input.source_character_id,input.certainty,input.notes,input.status,input.author_confirmed,stamp]).map_err(|e|sql_error("Wissensstand konnte nicht gespeichert werden",e))?;
+    if let Some((
+        old_state,
+        old_project,
+        old_certainty,
+        old_from,
+        _old_until,
+        old_acquired,
+        old_changed,
+    )) = previous
+    {
         if old_state != input.knowledge_state
             || (old_certainty - input.certainty).abs() > f64::EPSILON
         {
-            tx.execute("INSERT INTO character_knowledge_history(id,knowledge_state_id,project_id,character_id,fact_entity_id,knowledge_state,certainty,scene_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![new_id(),id,old_project,input.character_id,input.fact_entity_id,old_state,old_certainty,input.changed_scene_id]).map_err(|e|sql_error("Wissenshistorie konnte nicht gespeichert werden",e))?;
+            tx.execute("INSERT INTO character_knowledge_history(id,knowledge_state_id,project_id,character_id,fact_entity_id,knowledge_state,certainty,scene_id,effective_from_scene_id,effective_until_scene_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![new_id(),id,old_project,input.character_id,input.fact_entity_id,old_state,old_certainty,transition_scene_id,old_from.or(old_changed).or(old_acquired),transition_scene_id]).map_err(|e|sql_error("Wissenshistorie konnte nicht gespeichert werden",e))?;
         }
     }
     tx.commit().map_err(|e| {
@@ -3122,7 +3156,7 @@ pub fn save_character_knowledge_state(
             e,
         )
     })?;
-    db.query_row("SELECT id,project_id,character_id,fact_entity_id,knowledge_state,acquired_scene_id,changed_scene_id,source_character_id,certainty,notes,status,author_confirmed,created_at,updated_at FROM character_knowledge_states WHERE id=?1",params![id],knowledge_from_row).map_err(|e|sql_error("Gespeicherter Wissensstand konnte nicht geladen werden",e))
+    db.query_row("SELECT id,project_id,character_id,fact_entity_id,knowledge_state,acquired_scene_id,changed_scene_id,effective_from_scene_id,effective_until_scene_id,source_character_id,certainty,notes,status,author_confirmed,created_at,updated_at FROM character_knowledge_states WHERE id=?1",params![id],knowledge_from_row).map_err(|e|sql_error("Gespeicherter Wissensstand konnte nicht geladen werden",e))
 }
 #[tauri::command]
 pub fn delete_character_knowledge_state(
@@ -4698,7 +4732,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            12
+            13
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);
@@ -4809,6 +4843,18 @@ mod tests {
         db.execute("INSERT INTO character_knowledge_states (id,project_id,character_id,fact_entity_id,knowledge_state,certainty) VALUES ('knowledge-test','project-zugestellt','entity-marek','entity-package','suspects',0.4)", []).unwrap();
         db.execute("INSERT INTO character_knowledge_history (id,knowledge_state_id,project_id,character_id,fact_entity_id,knowledge_state,certainty) VALUES ('history-test','knowledge-test','project-zugestellt','entity-marek','entity-package','unknown',0.2)", []).unwrap();
         assert_eq!(db.query_row("SELECT COUNT(*) FROM character_knowledge_history WHERE knowledge_state_id='knowledge-test'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn knowledge_intervals_keep_old_state_until_transition_scene() {
+        let (path, db) = connection("knowledge-intervals");
+        db.execute("INSERT INTO character_knowledge_states (id,project_id,character_id,fact_entity_id,knowledge_state,acquired_scene_id,changed_scene_id,effective_from_scene_id,certainty) VALUES ('knowledge-interval','project-zugestellt','entity-marek','entity-package','knows','scene-1','scene-3','scene-3',1.0)", []).unwrap();
+        db.execute("INSERT INTO character_knowledge_history (id,knowledge_state_id,project_id,character_id,fact_entity_id,knowledge_state,certainty,scene_id,effective_from_scene_id,effective_until_scene_id) VALUES ('history-interval','knowledge-interval','project-zugestellt','entity-marek','entity-package','suspects',0.4,'scene-3','scene-1','scene-3')", []).unwrap();
+        let interval: (String, String) = db.query_row("SELECT effective_from_scene_id,effective_until_scene_id FROM character_knowledge_history WHERE id='history-interval'", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+        assert_eq!(interval, ("scene-1".into(), "scene-3".into()));
+        assert_eq!(db.query_row("SELECT effective_from_scene_id FROM character_knowledge_states WHERE id='knowledge-interval'", [], |row| row.get::<_, String>(0)).unwrap(), "scene-3");
         drop(db);
         let _ = fs::remove_file(path);
     }
