@@ -14,7 +14,16 @@ export class DeterministicProjectContextBuilder implements ProjectContextBuilder
     const currentChapter = workspace.chapters.find((chapter) => chapter.id === input.currentChapterId) ?? workspace.chapters.find((chapter) => chapter.scenes.some((scene) => scene.id === input.currentSceneId));
     const currentScene = currentChapter?.scenes.find((scene) => scene.id === input.currentSceneId) ?? currentChapter?.scenes[0];
     const entities = workspace.entities.filter((entity) => entity.projectId === input.projectId && entity.status !== 'archived');
-    const sources = await this.repository.listSourceReferences(input.projectId);
+    const [sources, lore, styleReferences, projectStyle] = await Promise.all([
+      this.repository.listSourceReferences(input.projectId),
+      this.repository.getLoreMetadata(input.projectId),
+      this.repository.listStyleReferences(input.projectId),
+      this.repository.getProjectStyle(input.projectId),
+    ]);
+    const characterEntities = entities.filter((entity) => entity.type === 'character');
+    const profiles = await Promise.all(characterEntities.slice(0, 20).map((entity) => this.repository.getCharacterProfile(entity.id)));
+    const characterProfiles = profiles.filter((profile): profile is NonNullable<typeof profile> => Boolean(profile));
+    const characterStates = (await this.repository.listCharacterSceneStates(input.projectId, currentScene?.id)).slice(0, 30);
     const questionTokens = tokens(input.userQuestion);
     const sceneTokens = tokens(editorContentToPlainText(currentScene?.content ?? ''));
     const relevantEntities = entities.filter((entity) => {
@@ -26,7 +35,12 @@ export class DeterministicProjectContextBuilder implements ProjectContextBuilder
     }).slice(0, 30);
     const relevantIds = new Set(relevantEntities.map((entity) => entity.id));
     const relevantSources = sources.filter((source) => (currentScene && source.sceneId === currentScene.id) || (source.entityId && relevantIds.has(source.entityId))).slice(0, 30);
-    return { projectId: input.projectId, currentScene, currentChapter, relevantEntities, relevantSources, openPlotThreads: relevantEntities.filter((entity) => entity.type === 'plot_thread' && entity.status !== 'confirmed'), possibleContradictions: relevantEntities.filter((entity) => entity.status === 'contradicted') };
+    const relevantEntityIds = new Set(relevantIds);
+    const relevantLore = lore.filter((item) => relevantEntityIds.has(item.entityId)).slice(0, 30);
+    const relevantProfiles = characterProfiles.filter((profile) => relevantEntityIds.has(profile.entityId));
+    const relevantStates = characterStates.filter((state) => relevantEntityIds.has(state.characterEntityId));
+    const relevantStyleReferences = styleReferences.filter((reference) => !currentScene || reference.sceneId === currentScene.id).slice(0, 12);
+    return { projectId: input.projectId, currentScene, currentChapter, relevantEntities, relevantSources, openPlotThreads: relevantEntities.filter((entity) => entity.type === 'plot_thread' && entity.status !== 'confirmed'), possibleContradictions: relevantEntities.filter((entity) => entity.status === 'contradicted'), lore: relevantLore, characterProfiles: relevantProfiles, characterStates: relevantStates, projectStyle, styleReferences: relevantStyleReferences };
   }
 }
 

@@ -5,14 +5,17 @@ use crate::providers::codex::{
 use crate::{
     database::DbState,
     models::{
-        validate_entity_status, validate_proposal_action, validate_proposal_classification,
-        validate_review_status, validate_scene_status, validate_scene_version_reason,
-        BibleProposal, BibleProposalInput, BibleUpdateRun, Book, Chapter,
-        CreateBibleUpdateRunInput, CreateChapterInput, CreateProjectInput, CreateSceneInput,
-        CreateSceneVersionInput, CreateSourceReferenceInput, CreateStoryEntityInput, DatabaseInfo,
-        EditorPreferences, Project, ProviderStatus, RestoreSceneVersionInput,
-        ReviewBibleProposalInput, Scene, SceneInput, SceneVersion, StoryEntity, StoryEntityInput,
-        StorySourceReference, UpdateChapterInput, UpdateStoryEntityInput, WorkspaceSnapshot,
+        validate_entity_status, validate_lore_truth_scope, validate_proposal_action,
+        validate_proposal_classification, validate_review_status, validate_scene_status,
+        validate_scene_version_reason, BibleProposal, BibleProposalInput, BibleUpdateRun, Book,
+        Chapter, CharacterProfile, CharacterSceneState, CreateBibleUpdateRunInput,
+        CreateChapterInput, CreateProjectInput, CreateSceneInput, CreateSceneVersionInput,
+        CreateSourceReferenceInput, CreateStoryEntityInput, CreateStyleReferenceInput,
+        DatabaseInfo, EditorPreferences, LoreMetadata, Project, ProjectStyle, ProviderStatus,
+        RestoreSceneVersionInput, ReviewBibleProposalInput, SaveCharacterProfileInput,
+        SaveCharacterSceneStateInput, SaveLoreMetadataInput, SaveProjectStyleInput, Scene,
+        SceneInput, SceneVersion, StoryEntity, StoryEntityInput, StorySourceReference,
+        StyleReference, UpdateChapterInput, UpdateStoryEntityInput, WorkspaceSnapshot,
     },
 };
 use chrono::Utc;
@@ -1534,6 +1537,276 @@ pub fn cancel_codex_task(
     codex::cancel_task(runtime.inner(), &task_id).map_err(|error| error.to_string())
 }
 
+fn project_entity_exists(
+    db: &Connection,
+    project_id: &str,
+    entity_id: &str,
+    expected_type: Option<&str>,
+) -> Result<(), String> {
+    let entity_type: Option<String> = db
+        .query_row(
+            "SELECT entity_type FROM story_entities WHERE id=?1 AND project_id=?2",
+            params![entity_id, project_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| sql_error("Story-Bible-Eintrag konnte nicht geprüft werden", error))?;
+    match entity_type {
+        Some(value) if expected_type.is_none_or(|expected| expected == value) => Ok(()),
+        Some(_) => Err("Der Eintrag besitzt nicht den erwarteten Typ.".into()),
+        None => Err("Der Story-Bible-Eintrag wurde im Projekt nicht gefunden.".into()),
+    }
+}
+
+fn lore_from_row(row: &rusqlite::Row<'_>) -> SqlResult<LoreMetadata> {
+    Ok(LoreMetadata {
+        entity_id: row.get(0)?,
+        project_id: row.get(1)?,
+        truth_scope: row.get(2)?,
+        truth_statement: row.get(3)?,
+        rules_text: row.get(4)?,
+        exceptions_text: row.get(5)?,
+        author_knowledge: row.get(6)?,
+        reader_knowledge: row.get(7)?,
+        reveal_plan: row.get(8)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
+    })
+}
+fn profile_from_row(row: &rusqlite::Row<'_>) -> SqlResult<CharacterProfile> {
+    Ok(CharacterProfile {
+        entity_id: row.get(0)?,
+        project_id: row.get(1)?,
+        core_want: row.get(2)?,
+        core_need: row.get(3)?,
+        fears: row.get(4)?,
+        false_belief: row.get(5)?,
+        values: row.get(6)?,
+        strengths: row.get(7)?,
+        flaws: row.get(8)?,
+        pressure_behavior: row.get(9)?,
+        voice: row.get(10)?,
+        backstory: row.get(11)?,
+        arc_summary: row.get(12)?,
+        created_at: row.get(13)?,
+        updated_at: row.get(14)?,
+    })
+}
+fn state_from_row(row: &rusqlite::Row<'_>) -> SqlResult<CharacterSceneState> {
+    Ok(CharacterSceneState {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        character_entity_id: row.get(2)?,
+        scene_id: row.get(3)?,
+        emotional_state: row.get(4)?,
+        physical_state: row.get(5)?,
+        goal: row.get(6)?,
+        conflict: row.get(7)?,
+        knowledge: row.get(8)?,
+        relationship_state: row.get(9)?,
+        change_note: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+    })
+}
+fn style_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ProjectStyle> {
+    Ok(ProjectStyle {
+        project_id: row.get(0)?,
+        narrative_pov: row.get(1)?,
+        tense: row.get(2)?,
+        sentence_style: row.get(3)?,
+        dialogue_style: row.get(4)?,
+        description_density: row.get(5)?,
+        inner_monologue: row.get(6)?,
+        preferred_patterns: serde_json::from_str::<Vec<String>>(&row.get::<_, String>(7)?)
+            .unwrap_or_default(),
+        avoided_patterns: serde_json::from_str::<Vec<String>>(&row.get::<_, String>(8)?)
+            .unwrap_or_default(),
+        notes: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+    })
+}
+fn reference_from_row(row: &rusqlite::Row<'_>) -> SqlResult<StyleReference> {
+    Ok(StyleReference {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        scene_id: row.get(2)?,
+        label: row.get(3)?,
+        excerpt: row.get(4)?,
+        notes: row.get(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
+    })
+}
+
+#[tauri::command]
+pub fn get_lore_metadata(
+    state: State<'_, DbState>,
+    project_id: String,
+) -> Result<Vec<LoreMetadata>, String> {
+    let db = lock_db(&state)?;
+    let mut statement = db.prepare("SELECT entity_id, project_id, truth_scope, truth_statement, rules_text, exceptions_text, author_knowledge, reader_knowledge, reveal_plan, created_at, updated_at FROM lore_metadata WHERE project_id=?1 ORDER BY updated_at DESC").map_err(|error| sql_error("Lore konnte nicht geladen werden", error))?;
+    let result = statement
+        .query_map(params![project_id], lore_from_row)
+        .map_err(|error| sql_error("Lore konnte nicht geladen werden", error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| sql_error("Lore konnte nicht geladen werden", error));
+    result
+}
+
+#[tauri::command]
+pub fn save_lore_metadata(
+    state: State<'_, DbState>,
+    input: SaveLoreMetadataInput,
+) -> Result<LoreMetadata, String> {
+    required(&input.entity_id, "Die Lore-Entität")?;
+    validate_lore_truth_scope(&input.truth_scope)?;
+    let db = lock_db(&state)?;
+    project_entity_exists(&db, &input.project_id, &input.entity_id, None)?;
+    let timestamp = now();
+    db.execute("INSERT INTO lore_metadata (entity_id, project_id, truth_scope, truth_statement, rules_text, exceptions_text, author_knowledge, reader_knowledge, reveal_plan, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10) ON CONFLICT(entity_id) DO UPDATE SET truth_scope=excluded.truth_scope, truth_statement=excluded.truth_statement, rules_text=excluded.rules_text, exceptions_text=excluded.exceptions_text, author_knowledge=excluded.author_knowledge, reader_knowledge=excluded.reader_knowledge, reveal_plan=excluded.reveal_plan, updated_at=excluded.updated_at", params![input.entity_id, input.project_id, input.truth_scope, input.truth_statement, input.rules_text, input.exceptions_text, input.author_knowledge, input.reader_knowledge, input.reveal_plan, timestamp]).map_err(|error| sql_error("Lore konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT entity_id, project_id, truth_scope, truth_statement, rules_text, exceptions_text, author_knowledge, reader_knowledge, reveal_plan, created_at, updated_at FROM lore_metadata WHERE entity_id=?1", params![input.entity_id], lore_from_row).map_err(|error| sql_error("Gespeicherte Lore konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn get_character_profile(
+    state: State<'_, DbState>,
+    entity_id: String,
+) -> Result<Option<CharacterProfile>, String> {
+    let db = lock_db(&state)?;
+    db.query_row("SELECT entity_id, project_id, core_want, core_need, fears, false_belief, values_text, strengths, flaws, pressure_behavior, voice, backstory, arc_summary, created_at, updated_at FROM character_profiles WHERE entity_id=?1", params![entity_id], profile_from_row).optional().map_err(|error| sql_error("Charakterprofil konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn save_character_profile(
+    state: State<'_, DbState>,
+    input: SaveCharacterProfileInput,
+) -> Result<CharacterProfile, String> {
+    let db = lock_db(&state)?;
+    project_entity_exists(&db, &input.project_id, &input.entity_id, Some("character"))?;
+    let timestamp = now();
+    db.execute("INSERT INTO character_profiles (entity_id, project_id, core_want, core_need, fears, false_belief, values_text, strengths, flaws, pressure_behavior, voice, backstory, arc_summary, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?14) ON CONFLICT(entity_id) DO UPDATE SET core_want=excluded.core_want, core_need=excluded.core_need, fears=excluded.fears, false_belief=excluded.false_belief, values_text=excluded.values_text, strengths=excluded.strengths, flaws=excluded.flaws, pressure_behavior=excluded.pressure_behavior, voice=excluded.voice, backstory=excluded.backstory, arc_summary=excluded.arc_summary, updated_at=excluded.updated_at", params![input.entity_id, input.project_id, input.core_want, input.core_need, input.fears, input.false_belief, input.values, input.strengths, input.flaws, input.pressure_behavior, input.voice, input.backstory, input.arc_summary, timestamp]).map_err(|error| sql_error("Charakterprofil konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT entity_id, project_id, core_want, core_need, fears, false_belief, values_text, strengths, flaws, pressure_behavior, voice, backstory, arc_summary, created_at, updated_at FROM character_profiles WHERE entity_id=?1", params![input.entity_id], profile_from_row).map_err(|error| sql_error("Gespeichertes Charakterprofil konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn list_character_scene_states(
+    state: State<'_, DbState>,
+    project_id: String,
+    scene_id: Option<String>,
+    character_entity_id: Option<String>,
+) -> Result<Vec<CharacterSceneState>, String> {
+    let db = lock_db(&state)?;
+    let mut statement = db.prepare("SELECT id, project_id, character_entity_id, scene_id, emotional_state, physical_state, goal, conflict, knowledge, relationship_state, change_note, created_at, updated_at FROM character_scene_states WHERE project_id=?1 AND (?2 IS NULL OR scene_id=?2) AND (?3 IS NULL OR character_entity_id=?3) ORDER BY updated_at DESC").map_err(|error| sql_error("Szenenzustände konnten nicht geladen werden", error))?;
+    let result = statement
+        .query_map(
+            params![project_id, scene_id, character_entity_id],
+            state_from_row,
+        )
+        .map_err(|error| sql_error("Szenenzustände konnten nicht geladen werden", error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| sql_error("Szenenzustände konnten nicht geladen werden", error));
+    result
+}
+
+#[tauri::command]
+pub fn save_character_scene_state(
+    state: State<'_, DbState>,
+    input: SaveCharacterSceneStateInput,
+) -> Result<CharacterSceneState, String> {
+    let db = lock_db(&state)?;
+    project_entity_exists(
+        &db,
+        &input.project_id,
+        &input.character_entity_id,
+        Some("character"),
+    )?;
+    let scene_project: Option<String> = db.query_row("SELECT books.project_id FROM scenes JOIN chapters ON chapters.id=scenes.chapter_id JOIN books ON books.id=chapters.book_id WHERE scenes.id=?1", params![input.scene_id], |row| row.get(0)).optional().map_err(|error| sql_error("Szene konnte nicht geprüft werden", error))?;
+    if scene_project.as_deref() != Some(input.project_id.as_str()) {
+        return Err("Die Szene gehört nicht zu diesem Projekt.".into());
+    }
+    let id = input.id.clone().unwrap_or_else(new_id);
+    let timestamp = now();
+    db.execute("INSERT INTO character_scene_states (id, project_id, character_entity_id, scene_id, emotional_state, physical_state, goal, conflict, knowledge, relationship_state, change_note, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?12) ON CONFLICT(character_entity_id, scene_id) DO UPDATE SET id=excluded.id, emotional_state=excluded.emotional_state, physical_state=excluded.physical_state, goal=excluded.goal, conflict=excluded.conflict, knowledge=excluded.knowledge, relationship_state=excluded.relationship_state, change_note=excluded.change_note, updated_at=excluded.updated_at", params![id, input.project_id, input.character_entity_id, input.scene_id, input.emotional_state, input.physical_state, input.goal, input.conflict, input.knowledge, input.relationship_state, input.change_note, timestamp]).map_err(|error| sql_error("Szenenzustand konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT id, project_id, character_entity_id, scene_id, emotional_state, physical_state, goal, conflict, knowledge, relationship_state, change_note, created_at, updated_at FROM character_scene_states WHERE character_entity_id=?1 AND scene_id=?2", params![input.character_entity_id, input.scene_id], state_from_row).map_err(|error| sql_error("Gespeicherter Szenenzustand konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn get_project_style(
+    state: State<'_, DbState>,
+    project_id: String,
+) -> Result<Option<ProjectStyle>, String> {
+    let db = lock_db(&state)?;
+    db.query_row("SELECT project_id, narrative_pov, tense, sentence_style, dialogue_style, description_density, inner_monologue, preferred_patterns_json, avoided_patterns_json, notes, created_at, updated_at FROM project_styles WHERE project_id=?1", params![project_id], style_from_row).optional().map_err(|error| sql_error("Projektstil konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn save_project_style(
+    state: State<'_, DbState>,
+    input: SaveProjectStyleInput,
+) -> Result<ProjectStyle, String> {
+    let db = lock_db(&state)?;
+    let exists: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+            params![input.project_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| sql_error("Projekt konnte nicht geprüft werden", error))?;
+    if !exists {
+        return Err("Das Projekt wurde nicht gefunden.".into());
+    }
+    let preferred =
+        serde_json::to_string(&input.preferred_patterns).map_err(|error| error.to_string())?;
+    let avoided =
+        serde_json::to_string(&input.avoided_patterns).map_err(|error| error.to_string())?;
+    let timestamp = now();
+    db.execute("INSERT INTO project_styles (project_id, narrative_pov, tense, sentence_style, dialogue_style, description_density, inner_monologue, preferred_patterns_json, avoided_patterns_json, notes, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?11) ON CONFLICT(project_id) DO UPDATE SET narrative_pov=excluded.narrative_pov, tense=excluded.tense, sentence_style=excluded.sentence_style, dialogue_style=excluded.dialogue_style, description_density=excluded.description_density, inner_monologue=excluded.inner_monologue, preferred_patterns_json=excluded.preferred_patterns_json, avoided_patterns_json=excluded.avoided_patterns_json, notes=excluded.notes, updated_at=excluded.updated_at", params![input.project_id, input.narrative_pov, input.tense, input.sentence_style, input.dialogue_style, input.description_density, input.inner_monologue, preferred, avoided, input.notes, timestamp]).map_err(|error| sql_error("Projektstil konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT project_id, narrative_pov, tense, sentence_style, dialogue_style, description_density, inner_monologue, preferred_patterns_json, avoided_patterns_json, notes, created_at, updated_at FROM project_styles WHERE project_id=?1", params![input.project_id], style_from_row).map_err(|error| sql_error("Gespeicherter Projektstil konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn list_style_references(
+    state: State<'_, DbState>,
+    project_id: String,
+) -> Result<Vec<StyleReference>, String> {
+    let db = lock_db(&state)?;
+    let mut statement = db.prepare("SELECT id, project_id, scene_id, label, excerpt, notes, created_at, updated_at FROM style_references WHERE project_id=?1 ORDER BY created_at DESC").map_err(|error| sql_error("Stilreferenzen konnten nicht geladen werden", error))?;
+    let result = statement
+        .query_map(params![project_id], reference_from_row)
+        .map_err(|error| sql_error("Stilreferenzen konnten nicht geladen werden", error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| sql_error("Stilreferenzen konnten nicht geladen werden", error));
+    result
+}
+
+#[tauri::command]
+pub fn create_style_reference(
+    state: State<'_, DbState>,
+    input: CreateStyleReferenceInput,
+) -> Result<StyleReference, String> {
+    required(&input.label, "Der Name der Stilreferenz")?;
+    required(&input.excerpt, "Der Ausschnitt")?;
+    let db = lock_db(&state)?;
+    let valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM scenes JOIN chapters ON chapters.id=scenes.chapter_id JOIN books ON books.id=chapters.book_id WHERE scenes.id=?1 AND books.project_id=?2)", params![input.scene_id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Szene konnte nicht geprüft werden", error))?;
+    if !valid {
+        return Err("Die Szene gehört nicht zu diesem Projekt.".into());
+    }
+    let id = new_id();
+    let timestamp = now();
+    db.execute("INSERT INTO style_references (id, project_id, scene_id, label, excerpt, notes, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?7)", params![id, input.project_id, input.scene_id, input.label, input.excerpt, input.notes, timestamp]).map_err(|error| sql_error("Stilreferenz konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT id, project_id, scene_id, label, excerpt, notes, created_at, updated_at FROM style_references WHERE id=?1", params![id], reference_from_row).map_err(|error| sql_error("Gespeicherte Stilreferenz konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn delete_style_reference(state: State<'_, DbState>, id: String) -> Result<(), String> {
+    let db = lock_db(&state)?;
+    db.execute("DELETE FROM style_references WHERE id=?1", params![id])
+        .map_err(|error| sql_error("Stilreferenz konnte nicht entfernt werden", error))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2069,10 +2342,68 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            7
+            8
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn lore_character_and_style_foundations_migrate_and_survive_reopen() {
+        let (path, db) = connection("foundations");
+        for table in [
+            "lore_metadata",
+            "character_profiles",
+            "character_scene_states",
+            "project_styles",
+            "style_references",
+        ] {
+            assert!(db
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                    params![table],
+                    |row| row.get::<_, bool>(0)
+                )
+                .unwrap());
+        }
+        db.execute("INSERT INTO lore_metadata (entity_id, project_id, truth_scope, truth_statement) VALUES ('entity-marek','project-zugestellt','world_truth','Die Paketnummer kann sich verändern.')", []).unwrap();
+        db.execute("INSERT INTO character_profiles (entity_id, project_id, core_want, fears) VALUES ('entity-marek','project-zugestellt','Die Wahrheit finden','Dass Lena ihn verlässt.')", []).unwrap();
+        db.execute("INSERT INTO character_scene_states (id, project_id, character_entity_id, scene_id, emotional_state, goal) VALUES ('state-test','project-zugestellt','entity-marek','scene-3','angespannt','Zeit gewinnen')", []).unwrap();
+        db.execute("INSERT INTO project_styles (project_id, narrative_pov, tense, preferred_patterns_json) VALUES ('project-zugestellt','personale 3. Person','Präteritum','[\"kurze Sätze\"]')", []).unwrap();
+        db.execute("INSERT INTO style_references (id, project_id, scene_id, label, excerpt) VALUES ('style-test','project-zugestellt','scene-3','Spannung','Marek sah auf den Aufkleber.')", []).unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT truth_statement FROM lore_metadata WHERE entity_id='entity-marek'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            "Die Paketnummer kann sich verändern."
+        );
+        drop(db);
+        let reopened = database_path_for_test(&path).unwrap();
+        assert_eq!(
+            reopened
+                .query_row(
+                    "SELECT COUNT(*) FROM character_scene_states WHERE id='state-test'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            reopened
+                .query_row(
+                    "SELECT COUNT(*) FROM style_references WHERE id='style-test'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        drop(reopened);
         let _ = fs::remove_file(path);
     }
 }

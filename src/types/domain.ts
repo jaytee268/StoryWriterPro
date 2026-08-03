@@ -27,7 +27,18 @@ export interface BibleExtractionInput { project: Project; chapter: Chapter; scen
 export interface BibleExtractionResult { proposals: BibleProposalDraft[]; warnings: string[]; }
 export interface BibleExtractor { readonly id: string; extract(input: BibleExtractionInput): Promise<BibleExtractionResult>; }
 export interface ContextRequest { projectId: string; currentChapterId?: string; currentSceneId?: string; userQuestion: string; }
-export interface ProjectContext { projectId: string; currentScene?: Scene; currentChapter?: Chapter; relevantEntities: StoryEntity[]; relevantSources: StorySourceReference[]; openPlotThreads: StoryEntity[]; possibleContradictions: StoryEntity[]; }
+export interface ProjectContext { projectId: string; currentScene?: Scene; currentChapter?: Chapter; relevantEntities: StoryEntity[]; relevantSources: StorySourceReference[]; openPlotThreads: StoryEntity[]; possibleContradictions: StoryEntity[]; lore?: LoreMetadata[]; characterProfiles?: CharacterProfile[]; characterStates?: CharacterSceneState[]; projectStyle?: ProjectStyle; styleReferences?: StyleReference[]; }
+export type LoreTruthScope = 'world_truth' | 'author_only' | 'reader_revealed' | 'planned_reveal';
+export interface LoreMetadata { entityId: string; projectId: string; truthScope: LoreTruthScope; truthStatement: string; rulesText: string; exceptionsText: string; authorKnowledge: string; readerKnowledge: string; revealPlan: string; createdAt: string; updatedAt: string; }
+export interface CharacterProfile { entityId: string; projectId: string; coreWant: string; coreNeed: string; fears: string; falseBelief: string; values: string; strengths: string; flaws: string; pressureBehavior: string; voice: string; backstory: string; arcSummary: string; createdAt: string; updatedAt: string; }
+export interface CharacterSceneState { id: string; projectId: string; characterEntityId: string; sceneId: string; emotionalState: string; physicalState: string; goal: string; conflict: string; knowledge: string; relationshipState: string; changeNote: string; createdAt: string; updatedAt: string; }
+export interface ProjectStyle { projectId: string; narrativePov: string; tense: string; sentenceStyle: string; dialogueStyle: string; descriptionDensity: string; innerMonologue: string; preferredPatterns: string[]; avoidedPatterns: string[]; notes: string; createdAt: string; updatedAt: string; }
+export interface StyleReference { id: string; projectId: string; sceneId: string; label: string; excerpt: string; notes: string; createdAt: string; updatedAt: string; }
+export type SaveLoreMetadataInput = Omit<LoreMetadata, 'createdAt' | 'updatedAt'>;
+export type SaveCharacterProfileInput = Omit<CharacterProfile, 'createdAt' | 'updatedAt'>;
+export interface SaveCharacterSceneStateInput extends Omit<CharacterSceneState, 'id' | 'createdAt' | 'updatedAt'> { id?: string }
+export type SaveProjectStyleInput = Omit<ProjectStyle, 'createdAt' | 'updatedAt'>;
+export type CreateStyleReferenceInput = Omit<StyleReference, 'id' | 'createdAt' | 'updatedAt'>;
 export interface ChatSource { id: string; label: string; chapterId?: string; sceneId?: string; entityId?: string; excerpt?: string; startOffset?: number; endOffset?: number; }
 export interface TimelineEvent { id: string; title: string; storyTime: string; chapter: string; scene: string; location: string; characters: string[]; pov: string; summary: string; consequences: string; knowledge: string; clue?: string; status: EntityStatus; track: string; }
 export interface MindNode { id: string; label: string; type: string; x: number; y: number; status?: EntityStatus; }

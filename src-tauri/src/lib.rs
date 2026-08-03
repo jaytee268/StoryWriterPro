@@ -53,7 +53,18 @@ pub fn run() {
             commands::save_ai_provider_settings,
             commands::get_codex_provider_status,
             commands::run_codex_task,
-            commands::cancel_codex_task
+            commands::cancel_codex_task,
+            commands::get_lore_metadata,
+            commands::save_lore_metadata,
+            commands::get_character_profile,
+            commands::save_character_profile,
+            commands::list_character_scene_states,
+            commands::save_character_scene_state,
+            commands::get_project_style,
+            commands::save_project_style,
+            commands::list_style_references,
+            commands::create_style_reference,
+            commands::delete_style_reference
         ])
         .run(tauri::generate_context!())
         .expect("error while running StoryMemory");

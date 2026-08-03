@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { demoChapters, demoEntities, demoProject } from './mockData';
 import { desktopInvoke, isTauriRuntime } from './desktop';
-import type { BibleProposal, BibleProposalDraft, BibleUpdateRun, Book, Chapter, CreateBibleUpdateRunInput, CreateChapterInput, CreateProjectInput, CreateSceneInput, CreateSceneVersionInput, CreateSourceReferenceInput, CreateStoryEntityInput, EditorPreferences, Project, ReviewBibleProposalInput, SaveStoryEntityInput, Scene, SceneVersion, StoryEntity, StorySourceReference, UpdateChapterInput, UpdateSceneInput, UpdateStoryEntityInput, WorkspaceSnapshot } from '../types/domain';
+import type { BibleProposal, BibleProposalDraft, BibleUpdateRun, Book, Chapter, CharacterProfile, CharacterSceneState, CreateBibleUpdateRunInput, CreateChapterInput, CreateProjectInput, CreateSceneInput, CreateSceneVersionInput, CreateSourceReferenceInput, CreateStoryEntityInput, CreateStyleReferenceInput, EditorPreferences, LoreMetadata, Project, ProjectStyle, ReviewBibleProposalInput, SaveCharacterProfileInput, SaveCharacterSceneStateInput, SaveLoreMetadataInput, SaveProjectStyleInput, SaveStoryEntityInput, Scene, SceneVersion, StoryEntity, StorySourceReference, StyleReference, UpdateChapterInput, UpdateSceneInput, UpdateStoryEntityInput, WorkspaceSnapshot } from '../types/domain';
 
 export type RuntimeMode = 'desktop' | 'browser-demo';
 export type SaveableScene = Scene;
@@ -36,6 +36,17 @@ export interface StoryRepository {
   reviewBibleProposal(input: ReviewBibleProposalInput): Promise<BibleProposal>;
   completeBibleReview(runId: string): Promise<BibleUpdateRun>;
   getDatabaseInfo(): Promise<DatabaseInfo>;
+  getLoreMetadata(projectId: string): Promise<LoreMetadata[]>;
+  saveLoreMetadata(input: SaveLoreMetadataInput): Promise<LoreMetadata>;
+  getCharacterProfile(entityId: string): Promise<CharacterProfile | undefined>;
+  saveCharacterProfile(input: SaveCharacterProfileInput): Promise<CharacterProfile>;
+  listCharacterSceneStates(projectId: string, sceneId?: string, characterEntityId?: string): Promise<CharacterSceneState[]>;
+  saveCharacterSceneState(input: SaveCharacterSceneStateInput): Promise<CharacterSceneState>;
+  getProjectStyle(projectId: string): Promise<ProjectStyle | undefined>;
+  saveProjectStyle(input: SaveProjectStyleInput): Promise<ProjectStyle>;
+  listStyleReferences(projectId: string): Promise<StyleReference[]>;
+  createStyleReference(input: CreateStyleReferenceInput): Promise<StyleReference>;
+  deleteStyleReference(id: string): Promise<void>;
 }
 
 const statusSchema = z.enum(['draft', 'revised', 'final']);
@@ -52,6 +63,11 @@ const sourceSchema = z.object({ id: z.string(), projectId: z.string(), entityId:
 const runSchema = z.object({ id: z.string(), projectId: z.string(), sceneId: z.string(), sceneUpdatedAt: z.string(), contentHash: z.string(), extractorId: z.string(), analyzedContent: z.string().nullable().optional(), status: z.enum(['pending', 'running', 'completed', 'failed', 'reviewed']), createdAt: z.string(), completedAt: z.string().nullable().optional(), errorMessage: z.string().nullable().optional() }).transform((run) => ({ ...run, analyzedContent: run.analyzedContent ?? '', completedAt: run.completedAt ?? undefined, errorMessage: run.errorMessage ?? undefined }));
 const proposalSchema = z.object({ id: z.string(), runId: z.string(), projectId: z.string(), sceneId: z.string(), targetEntityId: z.string().nullable().optional(), proposalAction: z.enum(['create_entity', 'update_entity', 'add_source', 'mark_contradiction', 'create_open_question', 'create_author_note']), entityType: entityTypeSchema, candidateName: z.string(), candidateDescription: z.string(), candidateStatus: entityStatusSchema, confidence: z.number(), classification: z.enum(['observable_fact', 'interpretation', 'open_question', 'possible_contradiction', 'author_note']), evidenceExcerpt: z.string(), startOffset: z.number().nullable().optional(), endOffset: z.number().nullable().optional(), reason: z.string(), reviewStatus: z.enum(['pending', 'accepted', 'edited', 'rejected']), reviewedAt: z.string().nullable().optional(), createdAt: z.string() }).transform((proposal) => ({ ...proposal, targetEntityId: proposal.targetEntityId ?? undefined, startOffset: proposal.startOffset ?? undefined, endOffset: proposal.endOffset ?? undefined, reviewedAt: proposal.reviewedAt ?? undefined }));
 const workspaceSchema = z.object({ project: projectSchema, books: z.array(bookSchema), chapters: z.array(chapterSchema), entities: z.array(entitySchema) });
+const loreSchema = z.object({ entityId: z.string(), projectId: z.string(), truthScope: z.enum(['world_truth', 'author_only', 'reader_revealed', 'planned_reveal']), truthStatement: z.string(), rulesText: z.string(), exceptionsText: z.string(), authorKnowledge: z.string(), readerKnowledge: z.string(), revealPlan: z.string(), createdAt: z.string(), updatedAt: z.string() });
+const profileSchema = z.object({ entityId: z.string(), projectId: z.string(), coreWant: z.string(), coreNeed: z.string(), fears: z.string(), falseBelief: z.string(), values: z.string(), strengths: z.string(), flaws: z.string(), pressureBehavior: z.string(), voice: z.string(), backstory: z.string(), arcSummary: z.string(), createdAt: z.string(), updatedAt: z.string() });
+const stateSchema = z.object({ id: z.string(), projectId: z.string(), characterEntityId: z.string(), sceneId: z.string(), emotionalState: z.string(), physicalState: z.string(), goal: z.string(), conflict: z.string(), knowledge: z.string(), relationshipState: z.string(), changeNote: z.string(), createdAt: z.string(), updatedAt: z.string() });
+const styleSchema = z.object({ projectId: z.string(), narrativePov: z.string(), tense: z.string(), sentenceStyle: z.string(), dialogueStyle: z.string(), descriptionDensity: z.string(), innerMonologue: z.string(), preferredPatterns: z.array(z.string()), avoidedPatterns: z.array(z.string()), notes: z.string(), createdAt: z.string(), updatedAt: z.string() });
+const styleReferenceSchema = z.object({ id: z.string(), projectId: z.string(), sceneId: z.string(), label: z.string(), excerpt: z.string(), notes: z.string(), createdAt: z.string(), updatedAt: z.string() });
 
 function parse<TSchema extends z.ZodTypeAny>(schema: TSchema, value: unknown, label: string): z.infer<TSchema> {
   const result = schema.safeParse(value);
@@ -151,9 +167,20 @@ export class TauriStoryRepository implements StoryRepository {
   async reviewBibleProposal(input: ReviewBibleProposalInput): Promise<BibleProposal> { return parse(proposalSchema, await desktopInvoke('review_bible_proposal', { input }), 'Review-Vorschlag'); }
   async completeBibleReview(runId: string): Promise<BibleUpdateRun> { return parse(runSchema, await desktopInvoke('complete_bible_review', { runId }), 'Bible-Review'); }
   async getDatabaseInfo(): Promise<DatabaseInfo> { return parse(z.object({ path: z.string(), connected: z.boolean(), engine: z.literal('sqlite'), detail: z.string() }), await desktopInvoke('database_info'), 'Datenbankstatus'); }
+  async getLoreMetadata(projectId: string): Promise<LoreMetadata[]> { return parse(z.array(loreSchema), await desktopInvoke('get_lore_metadata', { projectId }), 'Lore'); }
+  async saveLoreMetadata(input: SaveLoreMetadataInput): Promise<LoreMetadata> { return parse(loreSchema, await desktopInvoke('save_lore_metadata', { input }), 'Lore'); }
+  async getCharacterProfile(entityId: string): Promise<CharacterProfile | undefined> { const value = await desktopInvoke('get_character_profile', { entityId }); return value == null ? undefined : parse(profileSchema, value, 'Charakterprofil'); }
+  async saveCharacterProfile(input: SaveCharacterProfileInput): Promise<CharacterProfile> { return parse(profileSchema, await desktopInvoke('save_character_profile', { input }), 'Charakterprofil'); }
+  async listCharacterSceneStates(projectId: string, sceneId?: string, characterEntityId?: string): Promise<CharacterSceneState[]> { return parse(z.array(stateSchema), await desktopInvoke('list_character_scene_states', { projectId, sceneId, characterEntityId }), 'Szenenzustände'); }
+  async saveCharacterSceneState(input: SaveCharacterSceneStateInput): Promise<CharacterSceneState> { return parse(stateSchema, await desktopInvoke('save_character_scene_state', { input }), 'Szenenzustand'); }
+  async getProjectStyle(projectId: string): Promise<ProjectStyle | undefined> { const value = await desktopInvoke('get_project_style', { projectId }); return value == null ? undefined : parse(styleSchema, value, 'Projektstil'); }
+  async saveProjectStyle(input: SaveProjectStyleInput): Promise<ProjectStyle> { return parse(styleSchema, await desktopInvoke('save_project_style', { input }), 'Projektstil'); }
+  async listStyleReferences(projectId: string): Promise<StyleReference[]> { return parse(z.array(styleReferenceSchema), await desktopInvoke('list_style_references', { projectId }), 'Stilreferenzen'); }
+  async createStyleReference(input: CreateStyleReferenceInput): Promise<StyleReference> { return parse(styleReferenceSchema, await desktopInvoke('create_style_reference', { input }), 'Stilreferenz'); }
+  async deleteStyleReference(id: string): Promise<void> { await desktopInvoke('delete_style_reference', { id }); }
 }
 
-interface BrowserState { project: Project; books: Book[]; chapters: Chapter[]; entities: StoryEntity[]; versions: SceneVersion[]; editorPreferences: EditorPreferences; sources: StorySourceReference[]; runs: BibleUpdateRun[]; proposals: BibleProposal[]; }
+interface BrowserState { project: Project; books: Book[]; chapters: Chapter[]; entities: StoryEntity[]; versions: SceneVersion[]; editorPreferences: EditorPreferences; sources: StorySourceReference[]; runs: BibleUpdateRun[]; proposals: BibleProposal[]; lore: LoreMetadata[]; characterProfiles: CharacterProfile[]; characterStates: CharacterSceneState[]; projectStyle?: ProjectStyle; styleReferences: StyleReference[]; }
 const browserKey = 'storymemory-browser-demo-workspace';
 const browserPreferencesKey = 'storymemory-browser-demo-editor-preferences';
 const defaultEditorPreferences: EditorPreferences = { fontFamily: 'serif', fontSize: 18, lineHeight: 1.95 };
@@ -166,10 +193,10 @@ export class BrowserDemoRepository implements StoryRepository {
       const value = localStorage.getItem(browserKey);
       if (value) {
         const state = JSON.parse(value) as Partial<BrowserState>;
-        return { ...state, versions: state.versions ?? [], editorPreferences: state.editorPreferences ?? defaultEditorPreferences, sources: state.sources ?? [], runs: (state.runs ?? []).map((run) => ({ ...run, analyzedContent: run.analyzedContent ?? '' })), proposals: state.proposals ?? [] } as BrowserState;
+        return { ...state, versions: state.versions ?? [], editorPreferences: state.editorPreferences ?? defaultEditorPreferences, sources: state.sources ?? [], runs: (state.runs ?? []).map((run) => ({ ...run, analyzedContent: run.analyzedContent ?? '' })), proposals: state.proposals ?? [], lore: state.lore ?? [], characterProfiles: state.characterProfiles ?? [], characterStates: state.characterStates ?? [], styleReferences: state.styleReferences ?? [] } as BrowserState;
       }
     } catch { /* A broken demo cache is replaced with the safe example workspace. */ }
-    return { project: clone(demoProject), books: [{ id: 'book-1', projectId: demoProject.id, title: demoProject.title, volume: 1 }], chapters: clone(demoChapters), entities: clone(demoEntities), versions: [], editorPreferences: defaultEditorPreferences, sources: [], runs: [], proposals: [] };
+    return { project: clone(demoProject), books: [{ id: 'book-1', projectId: demoProject.id, title: demoProject.title, volume: 1 }], chapters: clone(demoChapters), entities: clone(demoEntities), versions: [], editorPreferences: defaultEditorPreferences, sources: [], runs: [], proposals: [], lore: [], characterProfiles: [], characterStates: [], styleReferences: [] };
   }
 
   private write(state: BrowserState): void { localStorage.setItem(browserKey, JSON.stringify(state)); }
@@ -184,7 +211,7 @@ export class BrowserDemoRepository implements StoryRepository {
     state.books = [{ id: crypto.randomUUID(), projectId: project.id, title: input.volumeTitle ?? input.title, volume: input.volume ?? 1, createdAt: timestamp, updatedAt: timestamp }];
     state.chapters = [];
     state.entities = [];
-    state.versions = []; state.sources = []; state.runs = []; state.proposals = [];
+    state.versions = []; state.sources = []; state.runs = []; state.proposals = []; state.lore = []; state.characterProfiles = []; state.characterStates = []; state.projectStyle = undefined; state.styleReferences = [];
     this.write(state);
     return clone(project);
   }
@@ -247,6 +274,17 @@ export class BrowserDemoRepository implements StoryRepository {
   async reviewBibleProposal(input: ReviewBibleProposalInput): Promise<BibleProposal> { const state = this.read(); const reviewed = applyBrowserProposalReview(state, input); this.write(state); return clone(reviewed); }
   async completeBibleReview(runId: string): Promise<BibleUpdateRun> { const state = this.read(); if (state.proposals.some((proposal) => proposal.runId === runId && proposal.reviewStatus === 'pending')) throw new Error('Bitte prüfe zuerst alle offenen Vorschläge.'); state.runs = state.runs.map((run) => run.id === runId ? { ...run, status: 'reviewed' as const } : run); this.write(state); return clone(state.runs.find((run) => run.id === runId)!); }
   async getDatabaseInfo(): Promise<DatabaseInfo> { return { path: 'Browser-Demo: localStorage', connected: true, engine: 'localStorage', detail: 'Nur Vorschau-Daten im Browser. Die Desktop-App verwendet SQLite.' }; }
+  async getLoreMetadata(projectId: string): Promise<LoreMetadata[]> { return this.read().lore.filter((item) => item.projectId === projectId).map(clone); }
+  async saveLoreMetadata(input: SaveLoreMetadataInput): Promise<LoreMetadata> { const state = this.read(); const stamp = now(); const current = state.lore.find((item) => item.entityId === input.entityId); const saved: LoreMetadata = { ...input, createdAt: current?.createdAt ?? stamp, updatedAt: stamp }; state.lore = [saved, ...state.lore.filter((item) => item.entityId !== input.entityId)]; this.write(state); return clone(saved); }
+  async getCharacterProfile(entityId: string): Promise<CharacterProfile | undefined> { const value = this.read().characterProfiles.find((item) => item.entityId === entityId); return value ? clone(value) : undefined; }
+  async saveCharacterProfile(input: SaveCharacterProfileInput): Promise<CharacterProfile> { const state = this.read(); const stamp = now(); const current = state.characterProfiles.find((item) => item.entityId === input.entityId); const saved: CharacterProfile = { ...input, createdAt: current?.createdAt ?? stamp, updatedAt: stamp }; state.characterProfiles = [saved, ...state.characterProfiles.filter((item) => item.entityId !== input.entityId)]; this.write(state); return clone(saved); }
+  async listCharacterSceneStates(projectId: string, sceneId?: string, characterEntityId?: string): Promise<CharacterSceneState[]> { return this.read().characterStates.filter((item) => item.projectId === projectId && (!sceneId || item.sceneId === sceneId) && (!characterEntityId || item.characterEntityId === characterEntityId)).map(clone); }
+  async saveCharacterSceneState(input: SaveCharacterSceneStateInput): Promise<CharacterSceneState> { const state = this.read(); const stamp = now(); const current = state.characterStates.find((item) => item.characterEntityId === input.characterEntityId && item.sceneId === input.sceneId); const saved: CharacterSceneState = { ...input, id: current?.id ?? input.id ?? crypto.randomUUID(), createdAt: current?.createdAt ?? stamp, updatedAt: stamp }; state.characterStates = [saved, ...state.characterStates.filter((item) => !(item.characterEntityId === saved.characterEntityId && item.sceneId === saved.sceneId))]; this.write(state); return clone(saved); }
+  async getProjectStyle(projectId: string): Promise<ProjectStyle | undefined> { const value = this.read().projectStyle; return value?.projectId === projectId ? clone(value) : undefined; }
+  async saveProjectStyle(input: SaveProjectStyleInput): Promise<ProjectStyle> { const state = this.read(); const stamp = now(); const saved: ProjectStyle = { ...input, createdAt: state.projectStyle?.createdAt ?? stamp, updatedAt: stamp }; state.projectStyle = saved; this.write(state); return clone(saved); }
+  async listStyleReferences(projectId: string): Promise<StyleReference[]> { return this.read().styleReferences.filter((item) => item.projectId === projectId).map(clone); }
+  async createStyleReference(input: CreateStyleReferenceInput): Promise<StyleReference> { const state = this.read(); const stamp = now(); const saved: StyleReference = { ...input, id: crypto.randomUUID(), createdAt: stamp, updatedAt: stamp }; state.styleReferences = [saved, ...state.styleReferences]; this.write(state); return clone(saved); }
+  async deleteStyleReference(id: string): Promise<void> { const state = this.read(); state.styleReferences = state.styleReferences.filter((item) => item.id !== id); this.write(state); }
 }
 
 export function createStoryRepository(): StoryRepository { return isTauriRuntime() ? new TauriStoryRepository() : new BrowserDemoRepository(); }

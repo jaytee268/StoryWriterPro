@@ -33,7 +33,17 @@ export function answerFromProjectContext(question: string, context: ProjectConte
   };
   if (lower.includes('figur') || lower.includes('charakter')) {
     const characters = entities.filter((entity) => entity.type === 'character');
-    return { text: characters.length ? `In der aktuellen Projektumgebung sind ${characters.map((entity) => entity.name).join(', ')} als Figuren relevant. ${characters.map((entity) => `${entity.name}: ${entity.status === 'confirmed' ? 'bestätigt' : 'noch nicht bestätigt'}`).join(' · ')}` : 'Im aktuellen Projektkontext ist keine Figur sicher belegt.', sources: sourcesFor(characters) };
+    const profiles = (context.characterProfiles ?? []).filter((profile) => characters.some((entity) => entity.id === profile.entityId));
+    const profileText = profiles.map((profile) => { const entity = characters.find((item) => item.id === profile.entityId); return `${entity?.name ?? 'Figur'}: ${profile.coreWant || 'kein Ziel eingetragen'}${profile.fears ? `; Angst: ${profile.fears}` : ''}`; }).join(' · ');
+    return { text: characters.length ? `In der aktuellen Projektumgebung sind ${characters.map((entity) => entity.name).join(', ')} als Figuren relevant. ${characters.map((entity) => `${entity.name}: ${entity.status === 'confirmed' ? 'bestätigt' : 'noch nicht bestätigt'}`).join(' · ')}${profileText ? ` Profile: ${profileText}` : ''}` : 'Im aktuellen Projektkontext ist keine Figur sicher belegt.', sources: sourcesFor(characters) };
+  }
+  if (lower.includes('stil') || lower.includes('erzählperspektive') || lower.includes('zeitform')) {
+    const style = context.projectStyle;
+    return { text: style ? `Der Projektstil ist als ${style.narrativePov || 'Perspektive noch offen'} und ${style.tense || 'Zeitform noch offen'} hinterlegt.${style.sentenceStyle ? ` Satzstil: ${style.sentenceStyle}` : ''}` : 'Für dieses Projekt ist noch kein Projektstil hinterlegt.', sources: [] };
+  }
+  if (lower.includes('weltregel') || lower.includes('lore') || lower.includes('welt')) {
+    const lore = context.lore ?? [];
+    return { text: lore.length ? `Relevante Weltgrundlagen: ${lore.map((item) => `${item.truthStatement || 'ohne Aussage'} (${item.truthScope})`).join(' · ')}` : 'Für diese Frage ist noch keine Lore im Projektkontext hinterlegt.', sources: sourcesFor(entities.filter((entity) => lore.some((item) => item.entityId === entity.id))) };
   }
   if (lower.includes('handlungsstrang') || lower.includes('offen')) {
     return { text: context.openPlotThreads.length ? `Offene Handlungsstränge: ${context.openPlotThreads.map((entity) => `${entity.name} (${entity.status})`).join(', ')}.` : 'Für diese Szene ist kein offener Handlungsstrang im geladenen Kontext vermerkt.', sources: sourcesFor(context.openPlotThreads) };

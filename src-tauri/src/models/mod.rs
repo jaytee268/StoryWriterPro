@@ -378,6 +378,170 @@ pub struct ProviderStatus {
     pub detail: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveLoreMetadataInput {
+    pub entity_id: String,
+    pub project_id: String,
+    pub truth_scope: String,
+    pub truth_statement: String,
+    pub rules_text: String,
+    pub exceptions_text: String,
+    pub author_knowledge: String,
+    pub reader_knowledge: String,
+    pub reveal_plan: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoreMetadata {
+    pub entity_id: String,
+    pub project_id: String,
+    pub truth_scope: String,
+    pub truth_statement: String,
+    pub rules_text: String,
+    pub exceptions_text: String,
+    pub author_knowledge: String,
+    pub reader_knowledge: String,
+    pub reveal_plan: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveCharacterProfileInput {
+    pub entity_id: String,
+    pub project_id: String,
+    pub core_want: String,
+    pub core_need: String,
+    pub fears: String,
+    pub false_belief: String,
+    pub values: String,
+    pub strengths: String,
+    pub flaws: String,
+    pub pressure_behavior: String,
+    pub voice: String,
+    pub backstory: String,
+    pub arc_summary: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterProfile {
+    pub entity_id: String,
+    pub project_id: String,
+    pub core_want: String,
+    pub core_need: String,
+    pub fears: String,
+    pub false_belief: String,
+    pub values: String,
+    pub strengths: String,
+    pub flaws: String,
+    pub pressure_behavior: String,
+    pub voice: String,
+    pub backstory: String,
+    pub arc_summary: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveCharacterSceneStateInput {
+    pub id: Option<String>,
+    pub project_id: String,
+    pub character_entity_id: String,
+    pub scene_id: String,
+    pub emotional_state: String,
+    pub physical_state: String,
+    pub goal: String,
+    pub conflict: String,
+    pub knowledge: String,
+    pub relationship_state: String,
+    pub change_note: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterSceneState {
+    pub id: String,
+    pub project_id: String,
+    pub character_entity_id: String,
+    pub scene_id: String,
+    pub emotional_state: String,
+    pub physical_state: String,
+    pub goal: String,
+    pub conflict: String,
+    pub knowledge: String,
+    pub relationship_state: String,
+    pub change_note: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProjectStyleInput {
+    pub project_id: String,
+    pub narrative_pov: String,
+    pub tense: String,
+    pub sentence_style: String,
+    pub dialogue_style: String,
+    pub description_density: String,
+    pub inner_monologue: String,
+    pub preferred_patterns: Vec<String>,
+    pub avoided_patterns: Vec<String>,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectStyle {
+    pub project_id: String,
+    pub narrative_pov: String,
+    pub tense: String,
+    pub sentence_style: String,
+    pub dialogue_style: String,
+    pub description_density: String,
+    pub inner_monologue: String,
+    pub preferred_patterns: Vec<String>,
+    pub avoided_patterns: Vec<String>,
+    pub notes: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateStyleReferenceInput {
+    pub project_id: String,
+    pub scene_id: String,
+    pub label: String,
+    pub excerpt: String,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StyleReference {
+    pub id: String,
+    pub project_id: String,
+    pub scene_id: String,
+    pub label: String,
+    pub excerpt: String,
+    pub notes: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+pub fn validate_lore_truth_scope(value: &str) -> Result<(), String> {
+    match value {
+        "world_truth" | "author_only" | "reader_revealed" | "planned_reveal" => Ok(()),
+        _ => Err(format!("Ungültiger Lore-Wissensbereich: {value}")),
+    }
+}
+
 pub fn validate_scene_status(value: &str) -> Result<(), String> {
     match value {
         "draft" | "revised" | "final" => Ok(()),
