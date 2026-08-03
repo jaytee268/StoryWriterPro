@@ -44,6 +44,7 @@ pub struct CodexCliCapabilities {
     pub supports_read_only_sandbox: bool,
     pub supports_skip_git_check: bool,
     pub supports_model: bool,
+    pub supports_disable_features: bool,
     pub authentication: CodexAuthenticationState,
     pub compatible: bool,
     pub detail: String,
@@ -62,6 +63,7 @@ impl CodexCliCapabilities {
             supports_read_only_sandbox: false,
             supports_skip_git_check: false,
             supports_model: false,
+            supports_disable_features: false,
             authentication: CodexAuthenticationState::Unknown,
             compatible: false,
             detail: detail.into(),
@@ -223,6 +225,7 @@ pub fn inspect_codex(explicit: Option<&str>) -> CodexCliCapabilities {
         && (exec_help.contains("read-only") || exec_help.contains("read_only"));
     let supports_skip_git = has_flag(&exec_help, "--skip-git-repo-check");
     let supports_model = has_flag(&exec_help, "--model");
+    let supports_disable_features = has_flag(&exec_help, "--disable");
     let login_supported = root_help.contains("login") || exec_help.contains("login");
     let authentication = if login_supported {
         match command_output(&binary, &["login", "status"]) {
@@ -265,6 +268,7 @@ pub fn inspect_codex(explicit: Option<&str>) -> CodexCliCapabilities {
         supports_read_only_sandbox: supports_sandbox,
         supports_skip_git_check: supports_skip_git,
         supports_model,
+        supports_disable_features,
         authentication,
         compatible,
         detail: detail.into(),
@@ -277,15 +281,41 @@ pub fn codex_status(explicit: Option<&str>) -> CodexCliCapabilities {
 
 const BIBLE_SCHEMA: &str = r#"{
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "type":"object","additionalProperties":false,
+  "type":"object",
+  "additionalProperties":false,
   "required":["proposals","warnings"],
-  "properties":{"warnings":{"type":"array","items":{"type":"string","maxLength":500}},"proposals":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["proposalAction","entityType","candidateName","candidateDescription","candidateStatus","confidence","classification","evidenceExcerpt","reason"],"properties":{"targetEntityId":{"type":"string"},"proposalAction":{"enum":["create_entity","update_entity","add_source","mark_contradiction","create_open_question","create_author_note"]},"entityType":{"type":"string"},"candidateName":{"type":"string","minLength":1,"maxLength":200},"candidateDescription":{"type":"string","maxLength":4000},"candidateStatus":{"enum":["confirmed","proposed","uncertain","contradicted","retconned"]},"confidence":{"type":"number","minimum":0,"maximum":1},"classification":{"enum":["observable_fact","interpretation","open_question","possible_contradiction","author_note"]},"evidenceExcerpt":{"type":"string","maxLength":1000},"startOffset":{"type":"integer","minimum":0},"endOffset":{"type":"integer","minimum":0},"reason":{"type":"string","maxLength":1000}}}}}
+  "properties":{
+    "warnings":{"type":"array","items":{"type":"string","maxLength":500}},
+    "proposals":{
+      "type":"array",
+      "maxItems":100,
+      "items":{
+        "type":"object",
+        "additionalProperties":false,
+        "required":["targetEntityId","proposalAction","entityType","candidateName","candidateDescription","candidateStatus","confidence","classification","evidenceExcerpt","startOffset","endOffset","reason"],
+        "properties":{
+          "targetEntityId":{"type":["string","null"]},
+          "proposalAction":{"enum":["create_entity","update_entity","add_source","mark_contradiction","create_open_question","create_author_note"]},
+          "entityType":{"type":"string"},
+          "candidateName":{"type":"string","minLength":1,"maxLength":200},
+          "candidateDescription":{"type":"string","maxLength":4000},
+          "candidateStatus":{"enum":["confirmed","proposed","uncertain","contradicted","retconned"]},
+          "confidence":{"type":"number","minimum":0,"maximum":1},
+          "classification":{"enum":["observable_fact","interpretation","open_question","possible_contradiction","author_note"]},
+          "evidenceExcerpt":{"type":"string","maxLength":1000},
+          "startOffset":{"type":["integer","null"],"minimum":0},
+          "endOffset":{"type":["integer","null"],"minimum":0},
+          "reason":{"type":"string","maxLength":1000}
+        }
+      }
+    }
+  }
 }"#;
 const CHAT_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["answer","usedEntityIds","usedSourceIds","uncertainty","warnings"],"properties":{"answer":{"type":"string","minLength":1,"maxLength":6000},"usedEntityIds":{"type":"array","maxItems":100,"items":{"type":"string"}},"usedSourceIds":{"type":"array","maxItems":8,"items":{"type":"string"}},"uncertainty":{"enum":["low","medium","high"]},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
 
 fn prompt_for(kind: &CodexTaskKind) -> (&'static str, &'static str) {
     match kind {
-        CodexTaskKind::ExtractBiblePatch => (BIBLE_PROMPT_VERSION, "Du analysierst ein Romanmanuskript für eine kontrollierte Story Bible. Verändere keine Dateien, führe keine Shell-Befehle aus und erfinde keine Informationen. Lies ausschließlich request.json und context.md. Liefere ausschließlich JSON nach output-schema.json. Trenne beobachtbare Fakten, Interpretationen, offene Fragen, mögliche Widersprüche und Autorennotizen. Ein bestätigter Kanon darf nie still überschrieben werden; nutze bei Konflikten mark_contradiction und targetEntityId."),
+        CodexTaskKind::ExtractBiblePatch => (BIBLE_PROMPT_VERSION, "Du analysierst ein Romanmanuskript für eine kontrollierte Story Bible. Verändere keine Dateien, führe keine Shell-Befehle aus und erfinde keine Informationen. Lies ausschließlich request.json und context.md. Liefere ausschließlich JSON nach output-schema.json. Trenne beobachtbare Fakten, Interpretationen, offene Fragen, mögliche Widersprüche und Autorennotizen. Verwende bei entityType ausschließlich character, relationship, place, organization, world_rule, object, event, fact, clue, secret, plot_thread, retcon oder author_note. Wenn keine sicher belegte Information vorliegt, liefere proposals als leeres Array. Ein bestätigter Kanon darf nie still überschrieben werden; nutze bei Konflikten mark_contradiction und targetEntityId. Optionale Werte targetEntityId, startOffset und endOffset müssen als null ausgegeben werden, wenn sie nicht gelten."),
         CodexTaskKind::AnswerWithProjectContext => (CHAT_PROMPT_VERSION, "Du bist ein projektbezogener Roman-Assistent. Antworte ausschließlich aus request.json und context.md. Erfinde keine Quellen oder IDs. Verwende nur vorhandene Entity- und Source-IDs und liefere ausschließlich JSON nach output-schema.json. Trenne bestätigten Kanon, Vermutungen, Widersprüche und fehlende Informationen."),
     }
 }
@@ -308,7 +338,89 @@ fn write_read_only(path: &Path, bytes: &[u8]) -> Result<(), CodexError> {
     Ok(())
 }
 
-fn cleanup_stale_snapshots(current_snapshot_name: &str) {
+fn make_tree_writable(path: &Path) -> Result<(), CodexError> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| CodexError::new("CODEX_SNAPSHOT_CLEANUP_FAILED", error.to_string()))?;
+    if metadata.file_type().is_symlink() {
+        return Err(CodexError::new(
+            "CODEX_SNAPSHOT_CLEANUP_FAILED",
+            "Symlinks sind in Codex-Snapshots nicht erlaubt.",
+        ));
+    }
+    if metadata.is_dir() {
+        for entry in fs::read_dir(path)
+            .map_err(|error| CodexError::new("CODEX_SNAPSHOT_CLEANUP_FAILED", error.to_string()))?
+        {
+            make_tree_writable(
+                &entry
+                    .map_err(|error| {
+                        CodexError::new("CODEX_SNAPSHOT_CLEANUP_FAILED", error.to_string())
+                    })?
+                    .path(),
+            )?;
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = if metadata.is_dir() { 0o700 } else { 0o600 };
+        fs::set_permissions(path, fs::Permissions::from_mode(mode))
+            .map_err(|error| CodexError::new("CODEX_SNAPSHOT_CLEANUP_FAILED", error.to_string()))?;
+    }
+    Ok(())
+}
+
+fn remove_snapshot_path(path: &Path) -> Result<(), CodexError> {
+    if !path.exists() {
+        return Ok(());
+    }
+    make_tree_writable(path)?;
+    fs::remove_dir_all(path).map_err(|error| {
+        CodexError::new(
+            "CODEX_SNAPSHOT_CLEANUP_FAILED",
+            format!("Snapshot konnte nicht gelöscht werden: {error}"),
+        )
+    })
+}
+
+pub struct CodexSnapshotGuard {
+    path: PathBuf,
+    cleaned: bool,
+}
+
+impl CodexSnapshotGuard {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            cleaned: false,
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn cleanup(&mut self) -> Result<(), CodexError> {
+        if self.cleaned {
+            return Ok(());
+        }
+        let result = remove_snapshot_path(&self.path);
+        if result.is_ok() || !self.path.exists() {
+            self.cleaned = true;
+        }
+        result
+    }
+}
+
+impl Drop for CodexSnapshotGuard {
+    fn drop(&mut self) {
+        if !self.cleaned {
+            let _ = remove_snapshot_path(&self.path);
+        }
+    }
+}
+
+fn cleanup_stale_snapshots(current_snapshot_name: &str) -> Result<(), CodexError> {
     if let Ok(entries) = fs::read_dir(env::temp_dir()) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -324,20 +436,21 @@ fn cleanup_stale_snapshots(current_snapshot_name: &str) {
                 .and_then(|modified| modified.elapsed().ok())
                 .is_some_and(|age| age > Duration::from_secs(60 * 60));
             if is_snapshot && is_stale && path.is_dir() {
-                let _ = fs::remove_dir_all(&path);
+                remove_snapshot_path(&path)?;
             }
         }
     }
+    Ok(())
 }
 
-fn create_snapshot(input: &RunCodexTaskInput) -> Result<PathBuf, CodexError> {
+fn create_snapshot(input: &RunCodexTaskInput) -> Result<CodexSnapshotGuard, CodexError> {
     if !valid_task_id(&input.task_id) {
         return Err(CodexError::new(
             "CODEX_SNAPSHOT_FAILED",
             "Ungültige Task-ID.",
         ));
     }
-    cleanup_stale_snapshots(&format!("storymemory-codex-{}", input.task_id));
+    cleanup_stale_snapshots(&format!("storymemory-codex-{}", input.task_id))?;
     let serialized = serde_json::to_vec_pretty(&input.request_json)
         .map_err(|error| CodexError::new("CODEX_SNAPSHOT_FAILED", error.to_string()))?;
     let limit = if input.task_kind == CodexTaskKind::ExtractBiblePatch {
@@ -401,12 +514,19 @@ fn create_snapshot(input: &RunCodexTaskInput) -> Result<PathBuf, CodexError> {
             fs::set_permissions(&directory, fs::Permissions::from_mode(0o555))
                 .map_err(|error| CodexError::new("CODEX_SNAPSHOT_FAILED", error.to_string()))?;
         }
-        Ok(directory.clone())
+        Ok(())
     })();
-    if result.is_err() {
-        let _ = fs::remove_dir_all(&directory);
+    let mut guard = CodexSnapshotGuard::new(directory);
+    if let Err(error) = result {
+        return match guard.cleanup() {
+            Ok(()) => Err(error),
+            Err(cleanup_error) => Err(CodexError::new(
+                "CODEX_SNAPSHOT_CLEANUP_FAILED",
+                format!("{}; {}", error.message, cleanup_error.message),
+            )),
+        };
     }
-    result
+    Ok(guard)
 }
 
 fn invocation(
@@ -442,6 +562,9 @@ fn invocation(
         OsString::from("read-only"),
         OsString::from("--skip-git-repo-check"),
     ];
+    if capabilities.supports_disable_features {
+        args.extend([OsString::from("--disable"), OsString::from("skill_search")]);
+    }
     if let Some(model) = settings
         .codex_model_override
         .as_deref()
@@ -464,21 +587,50 @@ fn invocation(
     Ok((path, args))
 }
 
-fn read_limited<R: Read>(mut reader: R, maximum: usize) -> Vec<u8> {
+fn read_limited<R: Read>(mut reader: R, maximum: usize) -> Result<Vec<u8>, CodexError> {
     let mut result = Vec::new();
     let mut buffer = [0_u8; 8192];
+    let mut exceeded = false;
     loop {
         match reader.read(&mut buffer) {
-            Ok(0) | Err(_) => break,
+            Ok(0) => break,
+            Err(error) => {
+                return Err(CodexError::new(
+                    "CODEX_PROCESS_FAILED",
+                    format!("Codex-Ausgabe konnte nicht gelesen werden: {error}"),
+                ));
+            }
             Ok(count) => {
-                if result.len() < maximum {
-                    let remaining = maximum - result.len();
+                let remaining = maximum.saturating_sub(result.len());
+                if count > remaining {
+                    exceeded = true;
+                }
+                if remaining > 0 {
                     result.extend_from_slice(&buffer[..count.min(remaining)]);
                 }
             }
         }
     }
-    result
+    if exceeded {
+        Err(CodexError::new(
+            "CODEX_OUTPUT_TOO_LARGE",
+            format!("Codex-Ausgabe überschreitet das Limit von {maximum} Bytes."),
+        ))
+    } else {
+        Ok(result)
+    }
+}
+
+fn bounded_diagnostic(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(1000)
+        .collect()
 }
 
 fn extract_final_json(stdout: &[u8]) -> Result<(Value, Vec<String>), CodexError> {
@@ -897,14 +1049,24 @@ impl CodexProcessRunner for SystemCodexProcessRunner {
             }
             std::thread::sleep(Duration::from_millis(100));
         };
-        let stdout = stdout_task.join().unwrap_or_default();
-        let stderr = stderr_task.join().unwrap_or_default();
+        let stdout = stdout_task.join().map_err(|_| {
+            CodexError::new("CODEX_PROCESS_FAILED", "stdout-Leser ist fehlgeschlagen.")
+        })??;
+        let stderr = stderr_task.join().map_err(|_| {
+            CodexError::new("CODEX_PROCESS_FAILED", "stderr-Leser ist fehlgeschlagen.")
+        })??;
         if !status.success() {
+            let diagnostic = bounded_diagnostic(&stderr);
             return Err(CodexError::new(
                 "CODEX_PROCESS_FAILED",
                 format!(
-                    "Codex wurde mit Exit-Code {} beendet.",
-                    status.code().unwrap_or(-1)
+                    "Codex wurde mit Exit-Code {} beendet{}.",
+                    status.code().unwrap_or(-1),
+                    if diagnostic.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {diagnostic}")
+                    }
                 ),
             ));
         }
@@ -946,15 +1108,15 @@ fn run_process(
     settings: &AiProviderSettings,
     cancel: Arc<AtomicBool>,
 ) -> Result<(Value, Vec<String>), CodexError> {
-    let snapshot = create_snapshot(input)?;
+    let mut snapshot = create_snapshot(input)?;
     let result = {
-        let (binary, args) = invocation("codex", settings, &snapshot)?;
+        let (binary, args) = invocation("codex", settings, snapshot.path())?;
         SystemCodexProcessRunner
             .run(
                 CodexInvocation {
                     binary,
                     args,
-                    snapshot: snapshot.clone(),
+                    snapshot: snapshot.path().to_path_buf(),
                     prompt: prompt_for(&input.task_kind).1.into(),
                     timeout_seconds: input.timeout_seconds,
                 },
@@ -962,8 +1124,15 @@ fn run_process(
             )
             .map(|result| (result.result, result.warnings))
     };
-    let _ = fs::remove_dir_all(&snapshot);
-    result
+    match (result, snapshot.cleanup()) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(primary), Ok(())) => Err(primary),
+        (Ok(_), Err(cleanup_error)) => Err(cleanup_error),
+        (Err(primary), Err(cleanup_error)) => Err(CodexError::new(
+            "CODEX_SNAPSHOT_CLEANUP_FAILED",
+            format!("{}; {}", primary.message, cleanup_error.message),
+        )),
+    }
 }
 
 pub fn run_task(
@@ -1040,6 +1209,25 @@ fn md_hash(bytes: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+
+    fn synthetic_input(task_id: &str) -> RunCodexTaskInput {
+        RunCodexTaskInput {
+            task_id: task_id.into(),
+            task_kind: CodexTaskKind::ExtractBiblePatch,
+            request_json: json!({
+                "projectId": "synthetic-project",
+                "sceneId": "synthetic-scene",
+                "project": {"id":"synthetic-project","title":"Synthetischer Test","author":"Test"},
+                "chapter": {"id":"synthetic-chapter","title":"Kapitel 1"},
+                "scene": {"id":"synthetic-scene","title":"Testszene","content":"Synthetischer Test ohne auswertbare Story-Bible-Fakten.","pov":"","location":"","storyTime":"","goal":"","notes":"Synthetischer Test"},
+                "existingEntities": [],
+                "relevantSources": []
+            }),
+            timeout_seconds: 90,
+        }
+    }
+
     #[test]
     fn missing_binary_is_not_installed() {
         assert!(resolve_binary_with_path(
@@ -1091,5 +1279,73 @@ mod tests {
             Some("Belegt")
         );
         assert_eq!(result.warnings.len(), 1);
+    }
+
+    #[test]
+    fn snapshot_guard_removes_read_only_snapshot_and_is_idempotent() {
+        let mut guard = create_snapshot(&synthetic_input("guard-test")).expect("snapshot");
+        let path = guard.path().to_path_buf();
+        assert!(path.join("request.json").is_file());
+        guard.cleanup().expect("cleanup");
+        assert!(!path.exists());
+        guard.cleanup().expect("second cleanup");
+    }
+
+    #[test]
+    fn snapshot_is_cleaned_when_invocation_fails_before_process_start() {
+        let input = synthetic_input("invocation-error-test");
+        let path = env::temp_dir().join(format!("storymemory-codex-{}", input.task_id));
+        let binary = env::temp_dir().join("storymemory-not-executable");
+        fs::write(&binary, b"not a binary").expect("test binary");
+        let result = run_process(
+            &input,
+            &AiProviderSettings {
+                codex_binary_path: Some(binary.display().to_string()),
+                ..AiProviderSettings::default()
+            },
+            Arc::new(AtomicBool::new(false)),
+        );
+        assert_eq!(result.expect_err("must fail").code, "CODEX_INCOMPATIBLE");
+        assert!(!path.exists());
+        let _ = fs::remove_file(binary);
+    }
+
+    #[test]
+    fn output_limit_is_a_visible_error() {
+        let output = read_limited(Cursor::new(vec![b'x'; MAX_STDOUT + 1]), MAX_STDOUT);
+        assert_eq!(
+            output.expect_err("must reject oversized output").code,
+            "CODEX_OUTPUT_TOO_LARGE"
+        );
+    }
+
+    #[test]
+    fn live_codex_e2e_is_opt_in_and_uses_only_synthetic_scene() {
+        if env::var("STORYMEMORY_RUN_CODEX_E2E").ok().as_deref() != Some("1") {
+            return;
+        }
+        let input = synthetic_input(&format!("live-e2e-{}", std::process::id()));
+        let codex_binary_path = [
+            "/Applications/ChatGPT.app/Contents/Resources/codex",
+            "/Users/juliantows/.local/bin/codex",
+        ]
+        .into_iter()
+        .find(|path| Path::new(path).is_file())
+        .map(str::to_owned);
+        let result = run_task(
+            Arc::new(CodexRuntimeState::default()),
+            input,
+            AiProviderSettings {
+                active_provider: "codex-cli".into(),
+                codex_binary_path,
+                ..AiProviderSettings::default()
+            },
+        )
+        .expect("synthetic Codex task should complete");
+        assert_eq!(result.status, "completed");
+        assert!(result.result.get("proposals").is_some());
+        assert!(!env::temp_dir()
+            .join(format!("storymemory-codex-live-e2e-{}", std::process::id()))
+            .exists());
     }
 }
