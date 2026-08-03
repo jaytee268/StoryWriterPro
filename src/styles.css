@@ -483,6 +483,7 @@ body { background: var(--bg); color: var(--text); }
 /* A real left-to-right timeline: blank paper, timestamp columns, cards stacked below. */
 .timeline-paper-board { background: #f7f0e4; background-image: none; }
 .timeline-paper-columns { min-height: 980px; padding: 0; }
+.timeline-paper-zoom-space { position: relative; flex: none; }
 .timeline-paper-start-note, .timeline-paper-end-note { position: absolute; top: 42px; color: #a28d72; font: 14px "Comic Sans MS", "Bradley Hand", cursive; white-space: nowrap; }
 .timeline-paper-start-note { left: 32px; transform: rotate(-2deg); }.timeline-paper-end-note { transform: rotate(1deg); }
 .timeline-paper-axis { position: absolute; top: 96px; left: 32px; right: 32px; height: 3px; border-radius: 4px; background: #9b8364; box-shadow: 0 2px 0 #fffaf0; }
