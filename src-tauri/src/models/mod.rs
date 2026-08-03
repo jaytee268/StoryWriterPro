@@ -618,6 +618,94 @@ pub fn validate_lore_entity_type(value: &str) -> Result<(), String> {
     }
 }
 
+pub fn validate_character_memory_status(value: &str) -> Result<(), String> {
+    match value {
+        "proposed" | "confirmed" | "rejected" | "retired" | "retconned" => Ok(()),
+        _ => Err(format!("Ungültiger Charaktergedächtnis-Status: {value}")),
+    }
+}
+pub fn validate_character_voice_pattern_type(value: &str) -> Result<(), String> {
+    match value {
+        "signature_word"
+        | "signature_phrase"
+        | "filler_word"
+        | "nickname"
+        | "address_pattern"
+        | "sentence_pattern"
+        | "humor_pattern"
+        | "metaphor_pattern"
+        | "avoidance_pattern"
+        | "lie_pattern"
+        | "stress_pattern"
+        | "relationship_specific_voice"
+        | "dialogue_rule" => Ok(()),
+        _ => Err(format!("Ungültiger Sprachmuster-Typ: {value}")),
+    }
+}
+pub fn validate_character_significance(value: &str) -> Result<(), String> {
+    match value {
+        "minor" | "supporting" | "major" | "defining" | "important" | "core" => Ok(()),
+        _ => Err(format!("Ungültige Bedeutung: {value}")),
+    }
+}
+pub fn validate_memory_reliability(value: &str) -> Result<(), String> {
+    match value {
+        "reliable" | "uncertain" | "distorted" | "implanted" | "forgotten" => Ok(()),
+        _ => Err(format!("Ungültige Erinnerungssicherheit: {value}")),
+    }
+}
+pub fn validate_dialogue_kind(value: &str) -> Result<(), String> {
+    match value {
+        "statement" | "promise" | "threat" | "lie" | "confession" | "reveal" | "argument"
+        | "inside_joke" | "nickname" | "secret_shared" | "secret_hidden" | "boundary"
+        | "callback" | "question" | "accusation" | "apology" => Ok(()),
+        _ => Err(format!("Ungültiger Dialogtyp: {value}")),
+    }
+}
+pub fn validate_truthfulness(value: &str) -> Result<(), String> {
+    match value {
+        "true" | "false" | "partially_true" | "speaker_believes_true" | "unknown" => Ok(()),
+        _ => Err(format!("Ungültiger Wahrheitsgehalt: {value}")),
+    }
+}
+pub fn validate_relationship_memory_type(value: &str) -> Result<(), String> {
+    match value {
+        "inside_joke" | "nickname" | "shared_memory" | "shared_secret" | "promise" | "betrayal"
+        | "argument" | "trust_gain" | "trust_loss" | "relationship_shift" | "debt" | "favor"
+        | "fear" | "attraction" | "resentment" | "callback" | "boundary" => Ok(()),
+        _ => Err(format!("Ungültiger Beziehungserinnerungstyp: {value}")),
+    }
+}
+pub fn validate_knowledge_state(value: &str) -> Result<(), String> {
+    match value {
+        "knows" | "suspects" | "believes_false" | "denies" | "forgot" | "unknown" => Ok(()),
+        _ => Err(format!("Ungültiger Wissensstatus: {value}")),
+    }
+}
+pub fn validate_memory_kind(value: &str) -> Result<(), String> {
+    match value {
+        "voice_pattern"
+        | "experience"
+        | "dialogue_memory"
+        | "relationship_memory"
+        | "knowledge_state"
+        | "profile_observation" => Ok(()),
+        _ => Err(format!("Ungültige Gedächtnisart: {value}")),
+    }
+}
+pub fn validate_evidence_role(value: &str) -> Result<(), String> {
+    match value {
+        "primary" | "supporting" | "contradicting" => Ok(()),
+        _ => Err(format!("Ungültige Belegrolle: {value}")),
+    }
+}
+pub fn validate_participant_role(value: &str) -> Result<(), String> {
+    match value {
+        "speaker" | "listener" | "present" | "mentioned" => Ok(()),
+        _ => Err(format!("Ungültige Teilnehmerrolle: {value}")),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateStoryEntityRelationInput {
@@ -676,6 +764,312 @@ pub struct CreateLoreEntryInput {
 pub struct LoreEntry {
     pub entity: StoryEntity,
     pub metadata: LoreMetadata,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterVoicePattern {
+    pub id: String,
+    pub project_id: String,
+    pub character_id: String,
+    pub related_character_id: Option<String>,
+    pub pattern_type: String,
+    pub pattern_text: String,
+    pub description: String,
+    pub context_condition: String,
+    pub confidence: f64,
+    pub status: String,
+    pub author_confirmed: bool,
+    pub occurrence_count: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveCharacterVoicePatternInput {
+    pub id: Option<String>,
+    pub project_id: String,
+    pub character_id: String,
+    pub related_character_id: Option<String>,
+    pub pattern_type: String,
+    pub pattern_text: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub context_condition: String,
+    pub confidence: f64,
+    pub status: String,
+    pub author_confirmed: bool,
+    #[serde(default = "default_occurrence_count")]
+    pub occurrence_count: i64,
+}
+fn default_occurrence_count() -> i64 {
+    1
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterExperience {
+    pub id: String,
+    pub project_id: String,
+    pub character_id: String,
+    pub event_entity_id: Option<String>,
+    pub scene_id: Option<String>,
+    pub title: String,
+    pub objective_summary: String,
+    pub subjective_interpretation: String,
+    pub emotional_impact: String,
+    pub lasting_effect: String,
+    pub significance: String,
+    pub memory_reliability: String,
+    pub status: String,
+    pub author_confirmed: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveCharacterExperienceInput {
+    pub id: Option<String>,
+    pub project_id: String,
+    pub character_id: String,
+    pub event_entity_id: Option<String>,
+    pub scene_id: Option<String>,
+    pub title: String,
+    #[serde(default)]
+    pub objective_summary: String,
+    #[serde(default)]
+    pub subjective_interpretation: String,
+    #[serde(default)]
+    pub emotional_impact: String,
+    #[serde(default)]
+    pub lasting_effect: String,
+    pub significance: String,
+    pub memory_reliability: String,
+    pub status: String,
+    pub author_confirmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DialogueMemoryParticipant {
+    pub dialogue_memory_id: String,
+    pub character_id: String,
+    pub role: String,
+}
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterDialogueMemory {
+    pub id: String,
+    pub project_id: String,
+    pub speaker_id: String,
+    pub scene_id: String,
+    pub dialogue_kind: String,
+    pub topic: String,
+    pub summary: String,
+    pub exact_excerpt: String,
+    pub emotional_tone: String,
+    pub hidden_intent: String,
+    pub significance: String,
+    pub truthfulness: String,
+    pub status: String,
+    pub author_confirmed: bool,
+    pub participants: Vec<DialogueMemoryParticipant>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveCharacterDialogueMemoryInput {
+    pub id: Option<String>,
+    pub project_id: String,
+    pub speaker_id: String,
+    pub scene_id: String,
+    pub dialogue_kind: String,
+    #[serde(default)]
+    pub topic: String,
+    pub summary: String,
+    #[serde(default)]
+    pub exact_excerpt: String,
+    #[serde(default)]
+    pub emotional_tone: String,
+    #[serde(default)]
+    pub hidden_intent: String,
+    pub significance: String,
+    pub truthfulness: String,
+    pub status: String,
+    pub author_confirmed: bool,
+    #[serde(default)]
+    pub participants: Vec<DialogueMemoryParticipantInput>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DialogueMemoryParticipantInput {
+    pub character_id: String,
+    pub role: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelationshipMemory {
+    pub id: String,
+    pub project_id: String,
+    pub character_a_id: String,
+    pub character_b_id: String,
+    pub scene_id: Option<String>,
+    pub memory_type: String,
+    pub title: String,
+    pub summary: String,
+    pub private_meaning: String,
+    pub relationship_effect: String,
+    pub significance: String,
+    pub status: String,
+    pub author_confirmed: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveRelationshipMemoryInput {
+    pub id: Option<String>,
+    pub project_id: String,
+    pub character_a_id: String,
+    pub character_b_id: String,
+    pub scene_id: Option<String>,
+    pub memory_type: String,
+    pub title: String,
+    pub summary: String,
+    #[serde(default)]
+    pub private_meaning: String,
+    #[serde(default)]
+    pub relationship_effect: String,
+    pub significance: String,
+    pub status: String,
+    pub author_confirmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterKnowledgeState {
+    pub id: String,
+    pub project_id: String,
+    pub character_id: String,
+    pub fact_entity_id: String,
+    pub knowledge_state: String,
+    pub acquired_scene_id: Option<String>,
+    pub changed_scene_id: Option<String>,
+    pub source_character_id: Option<String>,
+    pub certainty: f64,
+    pub notes: String,
+    pub status: String,
+    pub author_confirmed: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveCharacterKnowledgeStateInput {
+    pub id: Option<String>,
+    pub project_id: String,
+    pub character_id: String,
+    pub fact_entity_id: String,
+    pub knowledge_state: String,
+    pub acquired_scene_id: Option<String>,
+    pub changed_scene_id: Option<String>,
+    pub source_character_id: Option<String>,
+    pub certainty: f64,
+    #[serde(default)]
+    pub notes: String,
+    pub status: String,
+    pub author_confirmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterMemoryEvidence {
+    pub id: String,
+    pub project_id: String,
+    pub memory_kind: String,
+    pub memory_id: String,
+    pub source_reference_id: String,
+    pub evidence_role: String,
+    pub created_at: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddCharacterMemoryEvidenceInput {
+    pub project_id: String,
+    pub memory_kind: String,
+    pub memory_id: String,
+    pub source_reference_id: String,
+    pub evidence_role: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterMemoryUpdateRun {
+    pub id: String,
+    pub project_id: String,
+    pub scene_id: String,
+    pub content_hash: String,
+    pub extractor_id: String,
+    pub status: String,
+    pub created_at: String,
+    pub completed_at: Option<String>,
+    pub error_message: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateCharacterMemoryUpdateRunInput {
+    pub project_id: String,
+    pub scene_id: String,
+    pub content_hash: String,
+    pub extractor_id: String,
+}
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterMemoryProposal {
+    pub id: String,
+    pub run_id: String,
+    pub project_id: String,
+    pub scene_id: String,
+    pub proposal_kind: String,
+    pub subject_character_id: Option<String>,
+    pub related_character_id: Option<String>,
+    pub target_entity_id: Option<String>,
+    pub payload: serde_json::Value,
+    pub classification: String,
+    pub confidence: f64,
+    pub evidence_excerpt: String,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub reason: String,
+    pub review_status: String,
+    pub reviewed_at: Option<String>,
+    pub created_at: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterMemoryProposalDraft {
+    pub proposal_kind: String,
+    pub subject_character_id: Option<String>,
+    pub related_character_id: Option<String>,
+    pub target_entity_id: Option<String>,
+    pub payload: serde_json::Value,
+    pub classification: String,
+    pub confidence: f64,
+    pub evidence_excerpt: String,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub reason: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewCharacterMemoryProposalInput {
+    pub proposal_id: String,
+    pub review_status: String,
+    pub decision: Option<String>,
+    pub payload: Option<serde_json::Value>,
 }
 
 pub fn validate_scene_status(value: &str) -> Result<(), String> {

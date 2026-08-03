@@ -77,6 +77,7 @@ impl CodexCliCapabilities {
 #[serde(rename_all = "camelCase")]
 pub enum CodexTaskKind {
     ExtractBiblePatch,
+    ExtractCharacterMemoryPatch,
     AnswerWithProjectContext,
 }
 
@@ -337,10 +338,12 @@ const BIBLE_SCHEMA: &str = r#"{
   }
 }"#;
 const CHAT_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["answer","usedEntityIds","usedSourceIds","uncertainty","warnings"],"properties":{"answer":{"type":"string","minLength":1,"maxLength":6000},"usedEntityIds":{"type":"array","maxItems":100,"items":{"type":"string"}},"usedSourceIds":{"type":"array","maxItems":8,"items":{"type":"string"}},"uncertainty":{"enum":["low","medium","high"]},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
+const CHARACTER_MEMORY_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["proposals","warnings"],"properties":{"proposals":{"type":"array","maxItems":100,"items":{"type":"object","required":["proposalKind","subjectCharacterId","relatedCharacterId","targetEntityId","payload","classification","confidence","evidenceExcerpt","startOffset","endOffset","reason"],"properties":{"proposalKind":{"enum":["voice_pattern","experience","dialogue_memory","relationship_memory","knowledge_change","profile_observation","character_relation"]},"subjectCharacterId":{"type":["string","null"]},"relatedCharacterId":{"type":["string","null"]},"targetEntityId":{"type":["string","null"]},"payload":{"type":"object"},"classification":{"enum":["observable","interpretation","author_decision_required","possible_contradiction"]},"confidence":{"type":"number","minimum":0,"maximum":1},"evidenceExcerpt":{"type":"string","maxLength":1000},"startOffset":{"type":["integer","null"],"minimum":0},"endOffset":{"type":["integer","null"],"minimum":0},"reason":{"type":"string","maxLength":1000}}}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
 
 fn prompt_for(kind: &CodexTaskKind) -> (&'static str, &'static str) {
     match kind {
         CodexTaskKind::ExtractBiblePatch => (BIBLE_PROMPT_VERSION, "Du analysierst ein Romanmanuskript für eine kontrollierte Story Bible. Verändere keine Dateien, führe keine Shell-Befehle aus und erfinde keine Informationen. Lies ausschließlich request.json. Liefere ausschließlich JSON nach output-schema.json. Trenne beobachtbare Fakten, Interpretationen, offene Fragen, mögliche Widersprüche und Autorennotizen. Verwende bei entityType ausschließlich character, relationship, place, organization, world_rule, object, event, fact, clue, secret, plot_thread, retcon oder author_note. Wenn keine sicher belegte Information vorliegt, liefere proposals als leeres Array. Ein bestätigter Kanon darf nie still überschrieben werden; nutze bei Konflikten mark_contradiction und targetEntityId. Optionale Werte targetEntityId, startOffset und endOffset müssen als null ausgegeben werden, wenn sie nicht gelten. AI-Offsets sind Unicode-Zeichenpositionen im normalisierten Klartext aus request.json.scene.content."),
+        CodexTaskKind::ExtractCharacterMemoryPatch => ("storymemory-character-memory-v1", "Analysiere ausschließlich request.json für quellengebundene Charakterbeobachtungen. Verändere keine Dateien und erfinde keine Figuren, Teilnehmer, Psychologie oder Wissensstände. Trenne beobachtbares Verhalten von Interpretation. Liefere ausschließlich JSON nach output-schema.json. Verwende nur vorhandene Character-IDs. Keine dauerhafte Speicherung, keine vollständigen Dialogkopien. Eine einmalige Formulierung ist nur ein proposed Muster. AI-Offsets sind Unicode-Zeichenpositionen aus request.json.scene.content."),
         CodexTaskKind::AnswerWithProjectContext => (CHAT_PROMPT_VERSION, "Du bist ein projektbezogener Roman-Assistent. Antworte ausschließlich aus request.json. Erfinde keine Quellen oder IDs. Verwende nur vorhandene Entity- und Source-IDs und liefere ausschließlich JSON nach output-schema.json. Trenne bestätigten Kanon, Vermutungen, Widersprüche und fehlende Informationen."),
     }
 }
@@ -478,7 +481,10 @@ fn create_snapshot(input: &RunCodexTaskInput) -> Result<CodexSnapshotGuard, Code
     cleanup_stale_snapshots(&format!("storymemory-codex-{}", input.task_id))?;
     let serialized = serde_json::to_vec_pretty(&input.request_json)
         .map_err(|error| CodexError::new("CODEX_SNAPSHOT_FAILED", error.to_string()))?;
-    let limit = if input.task_kind == CodexTaskKind::ExtractBiblePatch {
+    let limit = if matches!(
+        input.task_kind,
+        CodexTaskKind::ExtractBiblePatch | CodexTaskKind::ExtractCharacterMemoryPatch
+    ) {
         MAX_BIBLE_SNAPSHOT
     } else {
         MAX_CHAT_SNAPSHOT
@@ -519,6 +525,8 @@ fn create_snapshot(input: &RunCodexTaskInput) -> Result<CodexSnapshotGuard, Code
             &directory.join("output-schema.json"),
             if input.task_kind == CodexTaskKind::ExtractBiblePatch {
                 BIBLE_SCHEMA.as_bytes()
+            } else if input.task_kind == CodexTaskKind::ExtractCharacterMemoryPatch {
+                CHARACTER_MEMORY_SCHEMA.as_bytes()
             } else {
                 CHAT_SCHEMA.as_bytes()
             },
@@ -918,6 +926,121 @@ pub fn validate_bible_result(result: &Value, request: &Value) -> Result<Value, C
     Ok(result.clone())
 }
 
+pub fn validate_character_memory_result(
+    result: &Value,
+    request: &Value,
+) -> Result<Value, CodexError> {
+    let proposals = result
+        .get("proposals")
+        .and_then(Value::as_array)
+        .ok_or_else(|| CodexError::new("CODEX_SCHEMA_VALIDATION_FAILED", "proposals fehlt."))?;
+    if proposals.len() > 100 {
+        return Err(CodexError::new(
+            "CODEX_SCHEMA_VALIDATION_FAILED",
+            "Maximal 100 Charaktergedächtnis-Vorschläge sind erlaubt.",
+        ));
+    }
+    let characters = string_set(request, "/characters");
+    let entities = string_set(request, "/existingEntities");
+    let content: Vec<char> = request
+        .pointer("/scene/content")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .chars()
+        .collect();
+    let kinds = [
+        "voice_pattern",
+        "experience",
+        "dialogue_memory",
+        "relationship_memory",
+        "knowledge_change",
+        "profile_observation",
+        "character_relation",
+    ];
+    let classes = [
+        "observable",
+        "interpretation",
+        "author_decision_required",
+        "possible_contradiction",
+    ];
+    for proposal in proposals {
+        let kind = valid_string(proposal, "proposalKind", 40)?;
+        if !kinds.contains(&kind) {
+            return Err(CodexError::new(
+                "CODEX_SCHEMA_VALIDATION_FAILED",
+                "Unbekannter Character-Memory-Typ.",
+            ));
+        }
+        let classification = valid_string(proposal, "classification", 40)?;
+        if !classes.contains(&classification) {
+            return Err(CodexError::new(
+                "CODEX_SCHEMA_VALIDATION_FAILED",
+                "Unbekannte Character-Memory-Klassifikation.",
+            ));
+        }
+        let confidence = proposal
+            .get("confidence")
+            .and_then(Value::as_f64)
+            .ok_or_else(|| {
+                CodexError::new("CODEX_SCHEMA_VALIDATION_FAILED", "confidence fehlt.")
+            })?;
+        if !(0.0..=1.0).contains(&confidence) {
+            return Err(CodexError::new(
+                "CODEX_SCHEMA_VALIDATION_FAILED",
+                "confidence muss zwischen 0 und 1 liegen.",
+            ));
+        }
+        valid_string(proposal, "evidenceExcerpt", 1000)?;
+        valid_string(proposal, "reason", 1000)?;
+        for field in ["subjectCharacterId", "relatedCharacterId"] {
+            if let Some(id) = proposal.get(field).and_then(Value::as_str) {
+                if !characters.contains(id) {
+                    return Err(CodexError::new(
+                        "CODEX_INVALID_REFERENCE",
+                        format!("{field} ist keine vorhandene Figur."),
+                    ));
+                }
+            }
+        }
+        if let Some(id) = proposal.get("targetEntityId").and_then(Value::as_str) {
+            if !entities.contains(id) {
+                return Err(CodexError::new(
+                    "CODEX_INVALID_REFERENCE",
+                    "targetEntityId ist im Kontext nicht vorhanden.",
+                ));
+            }
+        }
+        let start = proposal.get("startOffset").and_then(Value::as_u64);
+        let end = proposal.get("endOffset").and_then(Value::as_u64);
+        if start.is_some() != end.is_some() {
+            return Err(CodexError::new(
+                "CODEX_SCHEMA_VALIDATION_FAILED",
+                "startOffset und endOffset müssen gemeinsam gesetzt werden.",
+            ));
+        }
+        if let (Some(start), Some(end)) = (start, end) {
+            if start > end || end > content.len() as u64 {
+                return Err(CodexError::new(
+                    "CODEX_INVALID_REFERENCE",
+                    "Offset liegt außerhalb der Szene.",
+                ));
+            }
+            let excerpt: String = content[start as usize..end as usize].iter().collect();
+            let evidence = proposal
+                .get("evidenceExcerpt")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if !excerpt.contains(evidence) && !evidence.contains(&excerpt) {
+                return Err(CodexError::new(
+                    "CODEX_INVALID_REFERENCE",
+                    "Evidence passt nicht zum Textbereich.",
+                ));
+            }
+        }
+    }
+    Ok(result.clone())
+}
+
 pub fn validate_chat_result(result: &Value, request: &Value) -> Result<Value, CodexError> {
     let object = result.as_object().ok_or_else(|| {
         CodexError::new(
@@ -1248,6 +1371,9 @@ pub fn run_task(
     let (raw, mut warnings, turn_completed) = result?;
     let validated = match input.task_kind {
         CodexTaskKind::ExtractBiblePatch => validate_bible_result(&raw, &input.request_json)?,
+        CodexTaskKind::ExtractCharacterMemoryPatch => {
+            validate_character_memory_result(&raw, &input.request_json)?
+        }
         CodexTaskKind::AnswerWithProjectContext => validate_chat_result(&raw, &input.request_json)?,
     };
     if let Some(extra) = validated.get("warnings").and_then(Value::as_array) {

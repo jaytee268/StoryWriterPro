@@ -9,6 +9,7 @@ import { answerFromProjectContext } from './providerBridge';
 import { buildCodexBibleRequest, providerRouter } from './aiProviderService';
 import { canonicalizeSceneForAi, contentHash as canonicalContentHash, unicodeIndexOf, unicodeSlice } from '../utils/aiText';
 import { editorContentToPlainText } from '../utils/editorContent';
+import { LocalPrototypeCharacterMemoryExtractor } from './characterMemoryExtractor';
 
 const store = new Map<string, string>();
 vi.stubGlobal('localStorage', { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => store.set(key, value), removeItem: (key: string) => store.delete(key) });
@@ -38,6 +39,23 @@ describe('Desktop-Fehler und Autosave', () => {
 });
 
 describe('Story-Bible-Review und grounded context', () => {
+  it('speichert Charaktergedächtnis getrennt von freien Wissensnotizen', async () => {
+    const repository = new BrowserDemoRepository(); const workspace = await repository.loadWorkspace(); const character = workspace.entities.find((entity) => entity.type === 'character')!; const scene = workspace.chapters[0]!.scenes[0]!;
+    const pattern = await repository.saveCharacterVoicePattern({ projectId: workspace.project.id, characterId: character.id, patternType: 'signature_phrase', patternText: 'Schon gut.', description: '', contextCondition: '', confidence: 1, status: 'confirmed', authorConfirmed: true, occurrenceCount: 2 });
+    const experience = await repository.saveCharacterExperience({ projectId: workspace.project.id, characterId: character.id, sceneId: scene.id, title: 'Das Paket', objectiveSummary: 'Eine überprüfbare Beobachtung.', subjectiveInterpretation: 'Er zweifelt an sich.', emotionalImpact: 'Verunsicherung.', lastingEffect: 'Mehr Vorsicht.', significance: 'major', memoryReliability: 'reliable', status: 'confirmed', authorConfirmed: true });
+    expect((await repository.listCharacterVoicePatterns(workspace.project.id, character.id))[0]).toEqual(pattern); expect((await repository.listCharacterExperiences(workspace.project.id, character.id))[0]).toEqual(experience);
+  });
+  it('validiert Dialogteilnehmer und normalisiert Beziehungspaare', async () => {
+    const repository = new BrowserDemoRepository(); const workspace = await repository.loadWorkspace(); const chars = workspace.entities.filter((entity) => entity.type === 'character'); const scene = workspace.chapters[0]!.scenes[0]!;
+    const dialogue = await repository.saveCharacterDialogueMemory({ projectId: workspace.project.id, speakerId: chars[0]!.id, sceneId: scene.id, dialogueKind: 'promise', topic: 'Paket', summary: 'Ein Versprechen.', exactExcerpt: 'Ich verspreche es.', emotionalTone: '', hiddenIntent: '', significance: 'important', truthfulness: 'unknown', status: 'confirmed', authorConfirmed: true, participants: [{ characterId: chars[0]!.id, role: 'speaker' }, { characterId: chars[1]!.id, role: 'listener' }] });
+    const relationship = await repository.saveRelationshipMemory({ projectId: workspace.project.id, characterAId: chars[1]!.id, characterBId: chars[0]!.id, memoryType: 'promise', title: 'Versprechen', summary: 'Gemeinsame Geschichte.', privateMeaning: '', relationshipEffect: '', significance: 'supporting', status: 'confirmed', authorConfirmed: true });
+    expect(dialogue.participants).toHaveLength(2); expect(relationship.characterAId < relationship.characterBId).toBe(true);
+  });
+  it('lokaler Character-Extractor erfindet keine Psychologie', async () => {
+    const repository = new BrowserDemoRepository(); const workspace = await repository.loadWorkspace(); const chapter = workspace.chapters[0]!; const scene = { ...chapter.scenes[0]!, content: 'Marek sagte: Ich komme später.' }; const character = workspace.entities.find((entity) => entity.type === 'character')!;
+    const result = await new LocalPrototypeCharacterMemoryExtractor().extract({ project: workspace.project, chapter, scene, characters: [character], existingEntities: workspace.entities, context: { projectId: workspace.project.id, relevantEntities: workspace.entities, relevantSources: [], openPlotThreads: [], possibleContradictions: [] } });
+    expect(result.proposals[0]?.classification).toBe('observable'); expect(result.proposals[0]?.payload).not.toHaveProperty('hiddenIntent');
+  });
   it('normalisiert Rich Text für AI und hält Unicode-Offsets stabil', async () => {
     expect(editorContentToPlainText('<p>Marek <strong>lief</strong>.</p>')).toBe('Marek lief.');
     expect(editorContentToPlainText('<p>Erste Zeile<br>Zweite Zeile</p><p>Äpfel 😀</p>')).toBe('Erste Zeile\nZweite Zeile\nÄpfel 😀');

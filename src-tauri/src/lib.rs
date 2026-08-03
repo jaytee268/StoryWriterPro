@@ -69,7 +69,32 @@ pub fn run() {
             commands::create_lore_entry,
             commands::list_story_entity_relations,
             commands::create_story_entity_relation,
-            commands::delete_story_entity_relation
+            commands::delete_story_entity_relation,
+            commands::list_character_voice_patterns,
+            commands::save_character_voice_pattern,
+            commands::delete_character_voice_pattern,
+            commands::list_character_experiences,
+            commands::save_character_experience,
+            commands::delete_character_experience,
+            commands::list_character_dialogue_memories,
+            commands::save_character_dialogue_memory,
+            commands::delete_character_dialogue_memory,
+            commands::list_relationship_memories,
+            commands::save_relationship_memory,
+            commands::delete_relationship_memory,
+            commands::list_character_knowledge_states,
+            commands::list_character_knowledge_history,
+            commands::save_character_knowledge_state,
+            commands::delete_character_knowledge_state,
+            commands::list_character_memory_evidence,
+            commands::add_character_memory_evidence,
+            commands::delete_character_memory_evidence,
+            commands::create_character_memory_update_run,
+            commands::list_character_memory_update_runs,
+            commands::save_character_memory_proposals,
+            commands::list_character_memory_proposals,
+            commands::review_character_memory_proposal,
+            commands::complete_character_memory_review
         ])
         .run(tauri::generate_context!())
         .expect("error while running StoryMemory");

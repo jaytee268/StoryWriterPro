@@ -160,6 +160,12 @@ fn ensure_lore_completion_schema(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn ensure_character_memory_schema(connection: &Connection) -> Result<()> {
+    connection.execute_batch(include_str!(
+        "../../../migrations/010_character_memory_graph.sql"
+    ))
+}
+
 impl DbState {
     pub fn open(app: &AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
         let data_dir = app.path().app_data_dir()?;
@@ -279,6 +285,15 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
     } else {
         // A partially applied migration can be resumed safely.
         ensure_lore_completion_schema(connection)?;
+    }
+    let has_character_memory: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 10",
+        [],
+        |row| row.get(0),
+    )?;
+    ensure_character_memory_schema(connection)?;
+    if has_character_memory == 0 {
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (10)", [])?;
     }
     Ok(())
 }
@@ -435,7 +450,7 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            9
+            10
         );
         assert_eq!(
             connection
@@ -596,7 +611,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                9
+                10
             );
             // Running startup migrations again must not change the assignment
             // or fail on the ALTER TABLE statement.
