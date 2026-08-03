@@ -473,3 +473,17 @@ body { background: var(--bg); color: var(--text); }
 .timeline-paper-detail { display: grid; grid-template-columns: 1.15fr 1fr auto; gap: 24px; align-items: center; margin-top: 18px; padding: 22px 24px; border: 1px solid #c4b9a9; border-radius: 10px; color: #403a34; background: #fffdf3; box-shadow: 0 7px 18px #4e423012; }
 .timeline-paper-detail h2 { margin: 8px 0 6px; font: 24px "Comic Sans MS", "Bradley Hand", cursive; }.timeline-paper-detail p { margin: 0; color: #786c5d; font: 14px/1.55 "Comic Sans MS", "Bradley Hand", cursive; }.timeline-paper-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; color: #786c5d; font: 13px "Comic Sans MS", "Bradley Hand", cursive; }.timeline-paper-facts span { display: flex; flex-direction: column; gap: 3px; }.timeline-paper-facts b { color: #9a8469; font: 10px "DM Mono", monospace; text-transform: uppercase; }
 @media (max-width: 900px) { .timeline-paper-detail { grid-template-columns: 1fr; }.timeline-paper-detail .text-button { justify-self: start; } }
+
+/* A real left-to-right timeline: blank paper, timestamp columns, cards stacked below. */
+.timeline-paper-board { background: #f7f0e4; background-image: none; }
+.timeline-paper-columns { min-height: 980px; padding: 0; }
+.timeline-paper-start-note, .timeline-paper-end-note { position: absolute; top: 42px; color: #a28d72; font: 14px "Comic Sans MS", "Bradley Hand", cursive; white-space: nowrap; }
+.timeline-paper-start-note { left: 32px; transform: rotate(-2deg); }.timeline-paper-end-note { transform: rotate(1deg); }
+.timeline-paper-axis { position: absolute; top: 96px; left: 32px; right: 32px; height: 3px; border-radius: 4px; background: #9b8364; box-shadow: 0 2px 0 #fffaf0; }
+.timeline-paper-column { position: absolute; top: 65px; width: 340px; min-height: 820px; }
+.timeline-paper-timestamp { position: relative; z-index: 2; display: inline-flex; align-items: center; gap: 7px; min-height: 54px; padding: 0 16px; border: 2px solid #9b8364; border-radius: 999px; color: #684f36; background: #fffaf0; box-shadow: 2px 3px 0 #8b6d4430; font: 15px "DM Mono", monospace; }
+.timeline-paper-column-line { position: absolute; top: 45px; left: 15px; width: 2px; height: 750px; background: #b6a083; opacity: .7; }
+.timeline-paper-column-events { position: relative; display: flex; flex-direction: column; gap: 18px; margin: 28px 0 0 48px; }
+.timeline-paper-column .timeline-paper-card { width: 276px; min-height: 108px; }
+.timeline-paper-card-track { align-self: flex-start; padding: 3px 7px; border-radius: 999px; color: #8b6d44 !important; background: #f4e7cf; font: 10px "DM Mono", monospace !important; }
+.timeline-paper-column .timeline-paper-card > span:last-child { font-size: 12px; }
