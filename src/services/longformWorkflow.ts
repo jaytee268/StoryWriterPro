@@ -45,8 +45,8 @@ export function buildLocalPlan(job: ChapterGenerationJob, chapters: Chapter[], p
   return createPlanFrame({ job, chapterTitle, povCharacterId: pov?.id, sceneCount, sectionWords });
 }
 
-export function contextHashForLongform(project: Project, chapters: Chapter[], direction?: StoryDirection): string {
-  const source = JSON.stringify({ projectId: project.id, updatedAt: project.updatedAt, chapters: chapters.map((chapter) => ({ id: chapter.id, updatedAt: chapter.updatedAt, scenes: chapter.scenes.map((scene) => ({ id: scene.id, updatedAt: scene.updatedAt, content: scene.content.slice(-3000) })) })), direction });
+export function contextHashForLongform(project: Project, chapters: Chapter[], direction?: StoryDirection, context?: ProjectContext): string {
+  const source = JSON.stringify({ projectId: project.id, updatedAt: project.updatedAt, chapters: chapters.map((chapter) => ({ id: chapter.id, updatedAt: chapter.updatedAt, scenes: chapter.scenes.map((scene) => ({ id: scene.id, updatedAt: scene.updatedAt, content: scene.content })) })), direction, entities: context?.relevantEntities.map((item) => [item.id, item.updatedAt]), lore: context?.lore?.map((item) => [item.entityId, item.updatedAt]), profiles: context?.characterProfiles?.map((item) => [item.entityId, item.updatedAt]), memories: [...(context?.characterVoicePatterns ?? []), ...(context?.characterExperiences ?? []), ...(context?.characterDialogueMemories ?? []), ...(context?.relationshipMemories ?? []), ...(context?.characterKnowledgeStates ?? [])].map((item) => [item.id, item.updatedAt]), style: context?.projectStyle?.updatedAt, styleReferences: context?.styleReferences?.map((item) => [item.id, item.updatedAt]) });
   let hash = 2166136261; for (const char of source) { hash ^= char.charCodeAt(0); hash = Math.imul(hash, 16777619); } return (hash >>> 0).toString(16);
 }
 

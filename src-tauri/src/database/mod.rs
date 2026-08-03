@@ -306,6 +306,70 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
     if has_longform == 0 {
         connection.execute("INSERT INTO schema_migrations (version) VALUES (11)", [])?;
     }
+    let has_character_longform = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 12",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    // Migration 012 is additive.  Column checks make a partially applied
+    // upgrade resumable even on SQLite versions without ADD COLUMN IF NOT EXISTS.
+    ensure_column(
+        connection,
+        "character_voice_patterns",
+        "first_observed_scene_id",
+        "TEXT REFERENCES scenes(id) ON DELETE SET NULL",
+    )?;
+    ensure_column(
+        connection,
+        "character_voice_patterns",
+        "last_observed_scene_id",
+        "TEXT REFERENCES scenes(id) ON DELETE SET NULL",
+    )?;
+    ensure_column(
+        connection,
+        "character_voice_patterns",
+        "retired_scene_id",
+        "TEXT REFERENCES scenes(id) ON DELETE SET NULL",
+    )?;
+    ensure_column(
+        connection,
+        "character_memory_proposals",
+        "analyzed_content_hash",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        connection,
+        "character_memory_proposals",
+        "accepted_memory_id",
+        "TEXT",
+    )?;
+    ensure_column(
+        connection,
+        "character_memory_proposals",
+        "accepted_memory_kind",
+        "TEXT",
+    )?;
+    ensure_column(
+        connection,
+        "character_memory_update_runs",
+        "analyzed_content",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        connection,
+        "chapter_generation_jobs",
+        "context_override_accepted",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        connection,
+        "chapter_generation_jobs",
+        "last_resumed_at",
+        "TEXT",
+    )?;
+    if has_character_longform == 0 {
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (12)", [])?;
+    }
     Ok(())
 }
 
@@ -461,7 +525,7 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            11
+            12
         );
         assert_eq!(
             connection
@@ -496,6 +560,15 @@ mod tests {
                     |row| row.get::<_, bool>(0),
                 )
                 .unwrap());
+        }
+        for (table, column) in [
+            ("character_voice_patterns", "first_observed_scene_id"),
+            ("character_voice_patterns", "last_observed_scene_id"),
+            ("character_memory_proposals", "accepted_memory_id"),
+            ("character_memory_update_runs", "analyzed_content"),
+            ("chapter_generation_jobs", "context_override_accepted"),
+        ] {
+            assert!(has_column(&connection, table, column).unwrap());
         }
         drop(connection);
         let _ = fs::remove_file(path);
@@ -650,7 +723,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                11
+                12
             );
             // Running startup migrations again must not change the assignment
             // or fail on the ALTER TABLE statement.

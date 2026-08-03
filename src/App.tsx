@@ -4,7 +4,7 @@ import { BookOpen, BrainCircuit, FileText, Gauge, MessageCircle, PanelLeftClose,
 import { useAppStore } from './stores/useAppStore';
 import { demoEvents, mindEdges, mindNodes } from './services/mockData';
 import { createStoryRepository, type RuntimeMode, type StoryRepository } from './services/storyRepository';
-import type { AiProviderSettings, AppView, BibleProposal, BibleUpdateRun, ChatMessage, Chapter, CreateStyleReferenceInput, PendingSourceNavigation, ReviewBibleProposalInput, Scene, StoryEntity, StorySourceReference, StyleReference, UpdateChapterInput, WorkspaceSnapshot } from './types/domain';
+import type { AiProviderSettings, AppView, BibleProposal, BibleUpdateRun, CharacterMemoryProposal, CharacterMemoryUpdateRun, ChatMessage, Chapter, CreateStyleReferenceInput, PendingSourceNavigation, ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput, Scene, StoryEntity, StorySourceReference, StyleReference, UpdateChapterInput, WorkspaceSnapshot } from './types/domain';
 import { DeterministicProjectContextBuilder } from './services/contextBuilder';
 import { changedRange } from './services/bibleExtractor';
 import { Dashboard } from './features/projects/Dashboard';
@@ -45,6 +45,8 @@ export function App() {
   const [pendingSourceNavigation, setPendingSourceNavigation] = useState<PendingSourceNavigation>();
   const [activeReviewRun, setActiveReviewRun] = useState<BibleUpdateRun>();
   const [reviewProposals, setReviewProposals] = useState<BibleProposal[]>([]);
+  const [activeMemoryRun, setActiveMemoryRun] = useState<CharacterMemoryUpdateRun>();
+  const [memoryProposals, setMemoryProposals] = useState<CharacterMemoryProposal[]>([]);
   const [providerSettings, setProviderSettings] = useState<AiProviderSettings>(defaultAiProviderSettings);
   const [providerNotice, setProviderNotice] = useState('');
   const [bibleUpdateProvider, setBibleUpdateProvider] = useState<StoryAiProvider>();
@@ -224,7 +226,8 @@ export function App() {
         } catch (error) {
           if (settings.activeProvider !== 'codex-cli' || !settings.allowLocalFallback) throw error;
           actualExtractor = 'local-prototype-extractor';
-          const localInput = { ...input, previousAnalyzedContent: existingRuns.find((candidate) => candidate.extractorId === actualExtractor && ['completed', 'reviewed'].includes(candidate.status))?.analyzedContent || undefined };
+          const localPreviousAnalyzedContent = existingRuns.find((candidate) => candidate.extractorId === actualExtractor && ['completed', 'reviewed'].includes(candidate.status))?.analyzedContent || undefined;
+          const localInput = { ...input, previousAnalyzedContent: localPreviousAnalyzedContent, changedRange: changedRange(localPreviousAnalyzedContent, canonical.text) };
           const localRun = findReusableRun(actualExtractor);
           if (localRun) {
             run = localRun;
@@ -246,9 +249,49 @@ export function App() {
       setBibleUpdateProvider(undefined);
     }
   }, [currentChapter, currentScene, requestViewChange, workspace]);
+  const runCharacterMemoryUpdate = useCallback(async (sceneOverride?: Scene): Promise<void> => {
+    const sourceWorkspace = loadState.status === 'ready' ? loadState.workspace : workspace;
+    const scene = sceneOverride ?? currentScene;
+    const chapter = sourceWorkspace?.chapters.find((item) => item.id === scene?.chapterId);
+    if (!sourceWorkspace?.project || !scene || !chapter) throw new Error('Bitte zuerst eine Szene auswählen.');
+    const controller = editorSaveController.current;
+    if (controller) { await controller.flush(); if (controller.getStatus() === 'error') throw new Error('Die Szene konnte vor der Gedächtnisanalyse nicht gespeichert werden.'); }
+    const canonical = canonicalizeSceneForAi(controller?.getDraft() ?? scene);
+    const { provider, settings } = await providerRouter.getActiveProvider();
+    const context = await contextBuilder.build({ projectId: sourceWorkspace.project.id, currentChapterId: chapter.id, currentSceneId: canonical.scene.id, userQuestion: canonical.text });
+    const characters = sourceWorkspace.entities.filter((entity) => entity.type === 'character' && (canonical.text.toLocaleLowerCase().includes(entity.name.toLocaleLowerCase()) || canonical.scene.pov === entity.name || canonical.scene.pov === entity.id));
+    if (!characters.length) { setProviderNotice('Keine bekannte Figur wurde in dieser Szene gefunden.'); return; }
+    const extractorId = settings.activeProvider === 'codex-cli' ? 'codex-cli' : 'local-prototype-extractor';
+    const existingRuns = await repository.listCharacterMemoryUpdateRuns(sourceWorkspace.project.id, canonical.scene.id);
+    const reusable = existingRuns.find((item) => item.extractorId === extractorId && item.contentHash === canonical.hash && ['completed', 'reviewed'].includes(item.status));
+    let run = reusable;
+    let proposals: CharacterMemoryProposal[];
+    if (run) proposals = await repository.listCharacterMemoryProposals(run.id);
+    else {
+      const input = { project: sourceWorkspace.project, chapter, scene: canonical.scene, characters, existingEntities: sourceWorkspace.entities, context, changedRange: changedRange(undefined, canonical.text) };
+      let extraction;
+      let actual = extractorId;
+      try { extraction = await provider.extractCharacterMemoryPatch(input, settings.bibleUpdateTimeoutSeconds); }
+      catch (error) {
+        if (settings.activeProvider !== 'codex-cli' || !settings.allowLocalFallback) throw error;
+        actual = 'local-prototype-extractor';
+        const local = await providerRouter.getLocalProvider();
+        const localPrevious = existingRuns.filter((item) => item.extractorId === actual && ['completed', 'reviewed'].includes(item.status)).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+        extraction = await local.extractCharacterMemoryPatch({ ...input, changedRange: changedRange(localPrevious?.analyzedContent, canonical.text) }, settings.bibleUpdateTimeoutSeconds);
+        setProviderNotice(`Angefordert: Codex CLI · Verwendet: Lokaler Prototyp · Grund: ${error instanceof Error ? error.message : 'Codex-Fehler'}`);
+      }
+      run = await repository.createCharacterMemoryUpdateRun({ projectId: sourceWorkspace.project.id, sceneId: canonical.scene.id, contentHash: canonical.hash, analyzedContent: canonical.text, extractorId: actual });
+      proposals = await repository.saveCharacterMemoryProposals(run.id, extraction.proposals);
+      setProviderNotice(`Angefordert: ${settings.activeProvider === 'codex-cli' ? 'Codex CLI' : 'Lokaler Prototyp'} · Verwendet: ${actual === 'codex-cli' ? 'Codex CLI' : 'Lokaler Prototyp'}. Vorschläge bleiben unbestätigt.`);
+    }
+    if (!run) throw new Error('Character-Memory-Lauf konnte nicht erstellt werden.');
+    setActiveMemoryRun(run); setMemoryProposals(proposals); await requestViewChange('bible');
+  }, [contextBuilder, currentScene, loadState, requestViewChange, workspace]);
   const cancelBibleUpdate = useCallback(async () => { await bibleUpdateProvider?.cancelActive(); }, [bibleUpdateProvider]);
   const reviewProposal = useCallback(async (input: ReviewBibleProposalInput) => { const saved = await repository.reviewBibleProposal(input); setReviewProposals((current) => current.map((proposal) => proposal.id === saved.id ? saved : proposal)); const refreshed = await repository.loadWorkspace(); setLoadState({ status: 'ready', workspace: refreshed }); }, []);
-  const completeBibleReview = useCallback(async () => { if (activeReviewRun) { await repository.completeBibleReview(activeReviewRun.id); setActiveReviewRun(undefined); setReviewProposals([]); setLoadState({ status: 'ready', workspace: await repository.loadWorkspace() }); } }, [activeReviewRun]);
+  const completeBibleReview = useCallback(async () => { if (activeReviewRun) { await repository.completeBibleReview(activeReviewRun.id); setActiveReviewRun(undefined); setReviewProposals([]); const refreshed = await repository.loadWorkspace(); setLoadState({ status: 'ready', workspace: refreshed }); const refreshedScene = refreshed.chapters.flatMap((chapter) => chapter.scenes).find((scene) => scene.id === activeReviewRun.sceneId); if (refreshedScene) await runCharacterMemoryUpdate(refreshedScene); } }, [activeReviewRun, runCharacterMemoryUpdate]);
+  const reviewCharacterMemory = useCallback(async (input: ReviewCharacterMemoryProposalInput) => { const saved = await repository.reviewCharacterMemoryProposal(input); setMemoryProposals((current) => current.map((proposal) => proposal.id === saved.id ? saved : proposal)); setLoadState({ status: 'ready', workspace: await repository.loadWorkspace() }); }, []);
+  const completeCharacterMemoryReview = useCallback(async () => { if (!activeMemoryRun) return; await repository.completeCharacterMemoryReview(activeMemoryRun.id); setActiveMemoryRun(undefined); setMemoryProposals([]); setLoadState({ status: 'ready', workspace: await repository.loadWorkspace() }); }, [activeMemoryRun]);
   const openSourceReference = useCallback(async (reference: StorySourceReference) => {
     const changed = await requestSceneChange(reference.sceneId);
     if (!changed) return;
@@ -266,7 +309,7 @@ export function App() {
     if (!workspace) return null;
     if (view === 'dashboard') return <Dashboard project={workspace.project} onOpen={() => void requestViewChange('editor')} onImport={() => setActiveModal('import')} />;
     if (view === 'editor') return <EditorView projectId={workspace.project.id} chapters={workspace.chapters} scene={currentScene} chapter={currentChapter} pendingSourceNavigation={pendingSourceNavigation} onSourceNavigationConsumed={() => setPendingSourceNavigation(undefined)} onBack={() => void requestViewChange('dashboard')} onSelectScene={(id) => void requestSceneChange(id)} onSave={saveScene} onCreateChapter={createChapter} onUpdateChapter={updateChapter} onCreateScene={createScene} onListVersions={listSceneVersions} onCreateVersion={createSceneVersion} onRestoreVersion={restoreSceneVersion} onGetEditorPreferences={getEditorPreferences} onSaveEditorPreferences={saveEditorPreferences} onBibleUpdate={runBibleUpdate} bibleUpdateBusy={Boolean(bibleUpdateProvider)} onCancelBibleUpdate={cancelBibleUpdate} onOpenAssistant={() => setAssistantOpen(true)} onSaveStateChange={setSaveStatus} onRegisterSaveController={registerSaveController} onCreateStyleReference={createStyleReference} />;
-    if (view === 'bible' || view === 'characters' || view === 'threads') return <StoryBibleView entities={workspace.entities} projectId={workspace.project.id} chapters={workspace.chapters} repository={repository} activeRun={activeReviewRun} proposals={reviewProposals} onEntityChanged={replaceEntity} onOpenSourceReference={openSourceReference} onOpenStyleReference={openStyleReference} onReview={reviewProposal} onCompleteReview={completeBibleReview} onCloseReview={() => { setActiveReviewRun(undefined); setReviewProposals([]); }} initialFilter={view === 'characters' ? 'character' : view === 'threads' ? 'plot_thread' : undefined} />;
+    if (view === 'bible' || view === 'characters' || view === 'threads') return <StoryBibleView entities={workspace.entities} projectId={workspace.project.id} chapters={workspace.chapters} repository={repository} activeRun={activeReviewRun} proposals={reviewProposals} activeMemoryRun={activeMemoryRun} memoryProposals={memoryProposals} onEntityChanged={replaceEntity} onOpenSourceReference={openSourceReference} onOpenStyleReference={openStyleReference} onReview={reviewProposal} onCompleteReview={completeBibleReview} onMemoryReview={reviewCharacterMemory} onCompleteMemoryReview={completeCharacterMemoryReview} onCloseReview={() => { setActiveReviewRun(undefined); setReviewProposals([]); setActiveMemoryRun(undefined); setMemoryProposals([]); }} initialFilter={view === 'characters' ? 'character' : view === 'threads' ? 'plot_thread' : undefined} />;
     if (view === 'timeline') return <TimelineView events={demoEvents} />;
     if (view === 'mindmap') return <MindmapView nodes={mindNodes} edges={mindEdges} />;
     if (view === 'settings') return <SettingsView mode={repository.mode} project={workspace.project} settings={providerSettings} onSettingsChange={setProviderSettings} onReload={loadWorkspace} />;
@@ -289,7 +332,7 @@ export function App() {
       <div className="content-scroll">{providerNotice && <div className="provider-notice" role="status"><span>{providerNotice}</span><button className="text-button" onClick={() => setProviderNotice('')}>Ausblenden</button></div>}{viewError && <div className="save-error workspace-save-error" role="alert"><strong>Speichern erforderlich</strong><span>{viewError}</span><button className="text-button" onClick={() => void retryEditorSave()}>Erneut versuchen</button></div>}{loadState.status === 'loading' && <LoadingView mode={repository.mode} />}{loadState.status === 'error' && <ErrorView message={loadState.message} detail={loadState.detail} onRetry={() => void loadWorkspace()} />}{loadState.status === 'ready' && renderView()}</div>
     </main>
     {assistantOpen && <div className="assistant-drawer"><button className="drawer-close" onClick={() => setAssistantOpen(false)} aria-label="Assistent schließen"><X size={20} /></button>{workspace && <ChatPanel messages={messages} onMessagesChange={setMessages} contextBuilder={contextBuilder} contextRequest={{ projectId: workspace.project.id, currentChapterId: currentChapter?.id, currentSceneId: currentScene?.id }} onOpenSourceReference={(reference) => void openSourceReference(reference)} providerRouter={providerRouter} onLongformRequest={(instruction) => { setLongformInstruction(instruction); setAssistantOpen(false); }} />}</div>}
-    {longformInstruction && workspace && <div className="longform-overlay"><LongformDraftView project={workspace.project} chapters={workspace.chapters} entities={workspace.entities} repository={longformRepository} instruction={longformInstruction} activeProvider={providerSettings.activeProvider} onClose={() => setLongformInstruction(undefined)} onAccepted={async (plan, sections) => { if (longformRepository.mode === 'browser-demo') { const chapter = await createChapter(plan.chapterTitle); for (const section of sections) { const scene = await createScene(chapter.id, `Szene ${section.orderIndex + 1}`); await saveScene({ ...scene, content: section.content, pov: plan.povCharacterId ?? '', goal: plan.chapterGoal }); } } setLongformInstruction(undefined); await loadWorkspace(); await requestViewChange('editor'); }} /></div>}
+    {longformInstruction && workspace && <div className="longform-overlay"><LongformDraftView project={workspace.project} chapters={workspace.chapters} entities={workspace.entities} repository={longformRepository} instruction={longformInstruction} activeProvider={providerSettings.activeProvider} onClose={() => setLongformInstruction(undefined)} onAccepted={async () => { setLongformInstruction(undefined); await loadWorkspace(); await requestViewChange('editor'); }} /></div>}
     {activeModal && <Modal type={activeModal} onClose={() => setActiveModal(null)} />}
     {closePrompt && <ClosePrompt message={closePrompt} onRetry={() => void finishClose(false)} onForceClose={() => void finishClose(true)} onCancel={() => setClosePrompt('')} />}
   </div>;

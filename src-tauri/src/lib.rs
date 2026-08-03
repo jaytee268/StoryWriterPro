@@ -107,7 +107,11 @@ pub fn run() {
             commands::list_chapter_generation_sections,
             commands::save_chapter_generation_section,
             commands::list_chapter_generation_reviews,
-            commands::accept_chapter_generation_job
+            commands::save_chapter_generation_reviews,
+            commands::delete_chapter_generation_reviews_for_section,
+            commands::update_chapter_generation_review_status,
+            commands::accept_chapter_generation_job,
+            commands::accept_chapter_generation_context_override
         ])
         .run(tauri::generate_context!())
         .expect("error while running StoryMemory");

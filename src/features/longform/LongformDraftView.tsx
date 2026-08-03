@@ -1,30 +1,175 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Check, ChevronLeft, FileText, LockKeyhole, Plus, Save, X } from 'lucide-react';
-import type { Chapter, ChapterGenerationJob, ChapterGenerationPlan, ChapterGenerationSection, Project, StoryEntity, StoryDirection, WritingPreferences } from '../../types/domain';
+import type { Chapter, ChapterGenerationJob, ChapterGenerationPlan, ChapterGenerationReview, ChapterGenerationSection, Project, ProjectContext, StoryDirection, StoryEntity, WritingPreferences } from '../../types/domain';
 import type { LongformRepository } from '../../services/longformRepository';
 import { buildPreflight, contextHashForLongform, parseLongformIntent, targetWords } from '../../services/longformWorkflow';
 import { createLongformAiProvider } from '../../services/longformAiService';
+import { createStoryRepository } from '../../services/storyRepository';
+import { LongformContextBundleBuilder } from '../../services/longformContext';
 
 interface Props { project: Project; chapters: Chapter[]; entities: StoryEntity[]; repository: LongformRepository; instruction: string; activeProvider: string; onClose: () => void; onAccepted: (plan: ChapterGenerationPlan, sections: ChapterGenerationSection[]) => Promise<void>; }
 
+const emptyDirection = (projectId: string): StoryDirection => ({ projectId, premise: '', currentStoryPhase: '', bookGoal: '', plannedEnding: '', endingStatus: 'open', centralTwist: '', thematicGoal: '', mustHappen: [], mustNotHappen: [], nextTurningPoint: '', revealConstraints: [], authorNotes: '', createdAt: '', updatedAt: '' });
+
 export function LongformDraftView({ project, chapters, entities, repository, instruction, activeProvider, onClose, onAccepted }: Props) {
   const intent = useMemo(() => parseLongformIntent(instruction), [instruction]);
+  const sourceRepository = useMemo(() => createStoryRepository(), []);
+  const contextBuilder = useMemo(() => new LongformContextBundleBuilder(sourceRepository), [sourceRepository]);
   const [direction, setDirection] = useState<StoryDirection>();
+  const [directionDraft, setDirectionDraft] = useState<StoryDirection>(emptyDirection(project.id));
   const [preferences, setPreferences] = useState<WritingPreferences>();
+  const [context, setContext] = useState<ProjectContext>();
   const [job, setJob] = useState<ChapterGenerationJob>();
   const [plan, setPlan] = useState<ChapterGenerationPlan>();
   const [sections, setSections] = useState<ChapterGenerationSection[]>([]);
+  const [reviews, setReviews] = useState<ChapterGenerationReview[]>([]);
   const [step, setStep] = useState<'preflight' | 'plan' | 'draft'>('preflight');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [directionDraft, setDirectionDraft] = useState<StoryDirection>();
-  useEffect(() => { void Promise.all([repository.getStoryDirection(project.id), repository.getWritingPreferences(project.id)]).then(([loadedDirection, loadedPreferences]) => { setDirection(loadedDirection); setDirectionDraft(loadedDirection ?? { projectId: project.id, premise: '', currentStoryPhase: '', bookGoal: '', plannedEnding: '', endingStatus: 'open', centralTwist: '', thematicGoal: '', mustHappen: [], mustNotHappen: [], nextTurningPoint: '', revealConstraints: [], authorNotes: '', createdAt: '', updatedAt: '' }); setPreferences(loadedPreferences); }).catch((cause) => setError(cause instanceof Error ? cause.message : 'Langformdaten konnten nicht geladen werden.')); }, [project.id, repository]);
+  const [contextOverrideRequired, setContextOverrideRequired] = useState(false);
+
+  useEffect(() => {
+    void Promise.all([repository.getStoryDirection(project.id), repository.getWritingPreferences(project.id)])
+      .then(([loadedDirection, loadedPreferences]) => { setDirection(loadedDirection); setDirectionDraft(loadedDirection ?? emptyDirection(project.id)); setPreferences(loadedPreferences); })
+      .catch((cause) => setError(cause instanceof Error ? cause.message : 'Langformdaten konnten nicht geladen werden.'));
+  }, [project.id, repository]);
+
+  useEffect(() => {
+    void repository.listJobs(project.id).then(async (jobs) => {
+      const resumable = jobs.find((item) => !['accepted', 'cancelled', 'failed'].includes(item.status));
+      if (!resumable) return;
+      const [loadedPlan, loadedSections, loadedReviews] = await Promise.all([repository.getPlan(resumable.id), repository.listSections(resumable.id), repository.listReviews(resumable.id)]);
+      setJob(resumable); setPlan(loadedPlan); setSections(loadedSections); setReviews(loadedReviews);
+      if (loadedPlan) setStep(loadedSections.some((section) => section.content.trim()) ? 'draft' : 'plan');
+    }).catch((cause) => setError(cause instanceof Error ? cause.message : 'Offene Schreibaufträge konnten nicht geladen werden.'));
+  }, [project.id, repository]);
+
+  const totalWords = preferences ? targetWords(intent, preferences) : 0;
+  useEffect(() => {
+    if (!preferences) return;
+    void contextBuilder.build({ project, chapters, entities, direction, preferences, userQuestion: instruction, currentSceneId: chapters.at(-1)?.scenes.at(-1)?.id, targetWords: totalWords, remainingWords: totalWords })
+      .then(setContext).catch(() => setContext(undefined));
+  }, [chapters, contextBuilder, direction, entities, instruction, preferences, project, totalWords]);
+
   const preflight = preferences ? buildPreflight(project, chapters, entities, direction, preferences, intent) : undefined;
-  const saveDirection = async () => { if (!directionDraft) return; setBusy(true); setError(''); try { const saved = await repository.saveStoryDirection({ ...directionDraft }); setDirection(saved); setDirectionDraft(saved); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Story-Richtung konnte nicht gespeichert werden.'); } finally { setBusy(false); } };
-  const start = async () => { const currentPreferences = preferences; if (!currentPreferences || !preflight?.canPlan || !preflight.targetBookId) return; setBusy(true); setError(''); try { const created = await repository.createJob({ projectId: project.id, targetBookId: preflight.targetBookId, targetAfterChapterId: preflight.afterChapterId, requestedPages: intent.pages, targetWords: targetWords(intent, currentPreferences), requestedSceneCount: intent.sceneCount ?? currentPreferences.defaultSceneCount, userInstruction: instruction, activeProvider, contentContextHash: contextHashForLongform(project, chapters, direction) }); setJob(created); const ai = createLongformAiProvider(activeProvider, currentPreferences); const frame = await ai.createPlan({ project, chapters, entities, direction, preferences: currentPreferences, job: created }); const savedPlan = await repository.savePlan({ ...frame, jobId: created.id, reviewStatus: 'pending' }); setPlan(savedPlan); setStep('plan'); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Schreibauftrag konnte nicht gestartet werden.'); } finally { setBusy(false); } };
-  const confirmPlan = async () => { const currentPreferences = preferences; if (!job || !plan || !currentPreferences) return; setBusy(true); setError(''); try { const savedPlan = await repository.savePlan({ ...plan, reviewStatus: 'accepted' }); setPlan(savedPlan); const nextSections: ChapterGenerationSection[] = []; const ai = createLongformAiProvider(activeProvider, currentPreferences); for (const beat of savedPlan.beats) { const draftSection: ChapterGenerationSection = await repository.saveSection({ jobId: job.id, planBeatId: beat.id, orderIndex: beat.orderIndex, targetWords: beat.targetWords, content: '', continuationSummary: '', continuityState: { currentLocation: '', currentStoryTime: '', presentCharacterIds: beat.participatingCharacterIds, characterStates: [], establishedFacts: [], knowledgeChanges: beat.knowledgeChanges, relationshipChanges: beat.relationshipChanges, movedObjects: [], injuries: [], cluesIntroduced: beat.cluesUsed, promisesCreated: [], unresolvedActions: [], lastParagraphSummary: '' }, status: 'pending', providerId: activeProvider }); const generated = activeProvider === 'codex-cli' ? await ai.draftSection({ project, chapters, entities, direction, preferences: currentPreferences, job, plan: savedPlan, section: draftSection }) : undefined; nextSections.push(generated ? await repository.saveSection({ ...draftSection, content: generated.content, continuationSummary: generated.continuationSummary, continuityState: generated.continuityState, status: 'generated', providerId: 'codex-cli' }) : draftSection); } setSections(nextSections); await repository.updateJobStatus(job.id, 'draft_ready'); setJob((current) => current ? { ...current, status: 'draft_ready' } : current); setStep('draft'); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Plan oder Abschnitt konnte nicht verarbeitet werden.'); } finally { setBusy(false); } };
-  const updateSection = async (section: ChapterGenerationSection, content: string) => { const saved = await repository.saveSection({ ...section, content, status: 'generated' }); setSections((current) => current.map((item) => item.id === saved.id ? saved : item)); };
-  const accept = async () => { if (!job || !plan || sections.some((section) => !section.content.trim())) { setError('Bitte fülle jeden Abschnitt oder verwirf den Entwurf bewusst.'); return; } setBusy(true); try { await repository.acceptJob(job.id); await onAccepted(plan, sections); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Der Entwurf konnte nicht übernommen werden.'); } finally { setBusy(false); } };
-  if (!preferences || !directionDraft) return <section className="longform-view"><p>Vorbereitung wird geladen …</p></section>;
-  return <section className="longform-view"><header className="longform-head"><button className="ghost-button" onClick={onClose}><ChevronLeft size={16} /> Zurück zum Assistenten</button><div><span className="eyebrow">GEFÜHRTER KAPITELENTWURF</span><h1>{step === 'preflight' ? 'Vorbereitung' : plan?.chapterTitle ?? 'Kapitelentwurf'}</h1><p>{instruction}</p></div><button className="icon-button" onClick={onClose} aria-label="Workflow schließen"><X size={18} /></button></header>{error && <div className="save-error" role="alert">{error}</div>}<div className="longform-steps"><span className={step === 'preflight' ? 'active' : 'done'}>1 Umfang & Kontext</span><span className={step === 'plan' ? 'active' : step === 'draft' ? 'done' : ''}>2 Plan bestätigen</span><span className={step === 'draft' ? 'active' : ''}>3 Entwurf prüfen</span></div>{step === 'preflight' && <div className="longform-grid"><div className="longform-card"><span className="eyebrow">ZIELUMFANG</span><strong className="longform-number">{intent.pages ? `${intent.pages} Seiten` : `${intent.words ?? targetWords(intent, preferences)} Wörter`}</strong><p>{intent.pages ? `${intent.pages} Seiten entsprechen in diesem Projekt ungefähr ${targetWords(intent, preferences).toLocaleString('de-DE')} Wörtern.` : 'Die Zielwortzahl ist eine Schätzung für die Planung, keine exakte Export-Seitenzahl.'}</p><label className="field-label">Zielwörter<input type="number" min={1} value={targetWords(intent, preferences)} onChange={() => undefined} readOnly /></label></div><div className="longform-card"><span className="eyebrow">PREFLIGHT</span>{preflight?.items.map((item) => <div className={`preflight-row ${item.level}`} key={`${item.level}-${item.label}`}><span>{item.level === 'blocking' ? 'Blockierend' : item.level === 'recommended' ? 'Empfohlen' : 'Optional'}</span><div><strong>{item.label}</strong><p>{item.detail}</p></div></div>)}</div><div className="longform-card direction-card"><div className="card-title-row"><div><span className="eyebrow">STORY-RICHTUNG</span><h2>Was soll die Geschichte gerade tun?</h2></div><button className="ghost-button" onClick={() => void saveDirection()} disabled={busy}><Save size={15} /> Speichern</button></div><div className="form-grid"><label className="field-label full-field">Prämisse<textarea value={directionDraft.premise} onChange={(event) => setDirectionDraft({ ...directionDraft, premise: event.target.value })} rows={2} /></label><label className="field-label">Geplantes Ende<textarea value={directionDraft.plannedEnding} onChange={(event) => setDirectionDraft({ ...directionDraft, plannedEnding: event.target.value })} rows={2} /></label><label className="field-label">Endstatus<select value={directionDraft.endingStatus} onChange={(event) => setDirectionDraft({ ...directionDraft, endingStatus: event.target.value as StoryDirection['endingStatus'] })}><option value="open">Noch offen</option><option value="preferred">Bevorzugt</option><option value="fixed">Fest</option></select></label><label className="field-label">Nächster Wendepunkt<input value={directionDraft.nextTurningPoint} onChange={(event) => setDirectionDraft({ ...directionDraft, nextTurningPoint: event.target.value })} /></label></div></div><div className="longform-actions"><button className="ghost-button" onClick={onClose}>Auftrag abbrechen</button><button className="primary-button large" disabled={busy || !preflight?.canPlan} onClick={() => void start()}>{busy ? 'Bereite vor …' : 'Vorbereitung öffnen'}</button></div></div>}{step === 'plan' && plan && <div className="longform-card plan-card"><div className="card-title-row"><div><span className="eyebrow">PLAN VOR DER GENERIERUNG</span><h2>{plan.chapterTitle}</h2><p>{plan.chapterGoal}</p></div><span className="status-pill yellow"><LockKeyhole size={13} /> Noch nicht bestätigt</span></div><label className="field-label">Kapitelziel<textarea value={plan.chapterGoal} onChange={(event) => setPlan({ ...plan, chapterGoal: event.target.value })} rows={2} /></label><div className="beat-list">{plan.beats.map((beat, index) => <article className="beat-card" key={beat.id}><span className="beat-number">{index + 1}</span><div><input value={beat.title} onChange={(event) => setPlan({ ...plan, beats: plan.beats.map((item) => item.id === beat.id ? { ...item, title: event.target.value } : item) })} /><p>{beat.purpose}</p><label className="field-label">Ereignis<textarea value={beat.event} onChange={(event) => setPlan({ ...plan, beats: plan.beats.map((item) => item.id === beat.id ? { ...item, event: event.target.value } : item) })} rows={2} /></label></div><strong>{beat.targetWords} W</strong></article>)}</div><div className="longform-actions"><button className="ghost-button" onClick={() => setStep('preflight')}>Zurück</button><button className="primary-button large" disabled={busy} onClick={() => void confirmPlan()}><Check size={16} /> Plan bestätigen</button></div></div>}{step === 'draft' && job && plan && <div className="longform-card draft-card"><div className="card-title-row"><div><span className="eyebrow">ENTWURF · {sections.reduce((sum, section) => sum + section.actualWords, 0).toLocaleString('de-DE')} WÖRTER</span><h2>{plan.chapterTitle}</h2></div><span className="status-pill purple"><FileText size={13} /> Entwurf</span></div><div className="draft-notice"><LockKeyhole size={17} /><span>Der Text wird nicht automatisch ins Manuskript geschrieben. Im lokalen Modus ist jetzt nur die kontrollierte Abschnittsfläche verfügbar; echte Langtextgenerierung benötigt Codex CLI.</span></div>{sections.map((section, index) => <div className="draft-section" key={section.id}><div className="section-heading"><strong>Abschnitt {index + 1}</strong><span>Ziel: {section.targetWords} Wörter</span></div><textarea value={section.content} onChange={(event) => void updateSection(section, event.target.value)} placeholder="Hier kann der Abschnitt geprüft oder nach Codex-Generierung eingefügt werden …" rows={10} /></div>)}<div className="longform-actions"><button className="ghost-button" onClick={() => setStep('plan')}>Plan öffnen</button><button className="primary-button large" disabled={busy || sections.some((section) => !section.content.trim())} onClick={() => void accept()}><Plus size={16} /> Als Entwurf übernehmen</button></div></div>}</section>;
+
+  const saveDirection = async () => {
+    setBusy(true); setError('');
+    try { const saved = await repository.saveStoryDirection(directionDraft); setDirection(saved); setDirectionDraft(saved); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'Story-Richtung konnte nicht gespeichert werden.'); }
+    finally { setBusy(false); }
+  };
+
+  const start = async () => {
+    if (!preferences || !preflight?.canPlan || !preflight.targetBookId) return;
+    setBusy(true); setError('');
+    try {
+      const created = await repository.createJob({ projectId: project.id, targetBookId: preflight.targetBookId, targetAfterChapterId: preflight.afterChapterId, requestedPages: intent.pages, targetWords: totalWords, requestedSceneCount: intent.sceneCount ?? preferences.defaultSceneCount, userInstruction: instruction, activeProvider, contentContextHash: contextHashForLongform(project, chapters, direction, context) });
+      setJob(created);
+      const ai = createLongformAiProvider(activeProvider, preferences);
+      const frame = await ai.createPlan({ project, chapters, entities, direction, preferences, job: created, context });
+      const savedPlan = await repository.savePlan({ ...frame, jobId: created.id, reviewStatus: 'pending' });
+      setPlan(savedPlan); setStep('plan');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Schreibauftrag konnte nicht gestartet werden.'); }
+    finally { setBusy(false); }
+  };
+
+  const reviewSection = async (ai: ReturnType<typeof createLongformAiProvider>, currentJob: ChapterGenerationJob, currentPlan: ChapterGenerationPlan, section: ChapterGenerationSection, previousSections: ChapterGenerationSection[]) => {
+    if (activeProvider !== 'codex-cli') return [];
+    return ai.reviewSection({ project, chapters, entities, direction, preferences: preferences!, job: currentJob, plan: currentPlan, section, previousSections, context });
+  };
+
+  const generateSection = async (ai: ReturnType<typeof createLongformAiProvider>, currentJob: ChapterGenerationJob, currentPlan: ChapterGenerationPlan, beat: ChapterGenerationPlan['beats'][number], previousSections: ChapterGenerationSection[]) => {
+    const emptySection: ChapterGenerationSection = await repository.saveSection({ jobId: currentJob.id, planBeatId: beat.id, orderIndex: beat.orderIndex, targetWords: beat.targetWords, content: '', continuationSummary: '', continuityState: { currentLocation: '', currentStoryTime: '', presentCharacterIds: beat.participatingCharacterIds, characterStates: [], establishedFacts: [], knowledgeChanges: beat.knowledgeChanges, relationshipChanges: beat.relationshipChanges, movedObjects: [], injuries: [], cluesIntroduced: beat.cluesUsed, promisesCreated: [], unresolvedActions: [], lastParagraphSummary: '' }, status: 'pending', providerId: activeProvider });
+    if (activeProvider !== 'codex-cli') return emptySection;
+    const generated = await ai.draftSection({ project, chapters, entities, direction, preferences: preferences!, job: currentJob, plan: currentPlan, section: emptySection, previousSections, context });
+    return repository.saveSection({ ...emptySection, content: generated.content, continuationSummary: generated.continuationSummary, continuityState: generated.continuityState, status: 'generated', providerId: 'codex-cli' });
+  };
+
+  const confirmPlan = async () => {
+    if (!job || !plan || !preferences) return;
+    setBusy(true); setError('');
+    try {
+      const savedPlan = await repository.savePlan({ ...plan, reviewStatus: 'accepted' });
+      setPlan(savedPlan);
+      const ai = createLongformAiProvider(activeProvider, preferences);
+      const nextSections: ChapterGenerationSection[] = [];
+      for (const beat of savedPlan.beats) {
+        const existing = sections.find((section) => section.orderIndex === beat.orderIndex && section.content.trim());
+        const section = existing ?? await generateSection(ai, job, savedPlan, beat, nextSections);
+        nextSections.push(section);
+        const issues = await reviewSection(ai, job, savedPlan, section, nextSections.slice(0, -1));
+        if (issues.length) {
+          const persisted = await repository.saveReviews(job.id, issues);
+          setReviews((current) => [...current, ...persisted]);
+          if (issues.some((issue) => issue.severity === 'blocking')) {
+            await repository.updateJobStatus(job.id, 'reviewing'); setJob((current) => current ? { ...current, status: 'reviewing' } : current); setSections(nextSections); setStep('draft'); return;
+          }
+        }
+      }
+      setSections(nextSections);
+      const completeIssues = activeProvider === 'codex-cli' ? await ai.reviewComplete({ project, chapters, entities, direction, preferences, job, plan: savedPlan, previousSections: nextSections, context }) : [];
+      if (completeIssues.length) { const persisted = await repository.saveReviews(job.id, completeIssues); setReviews((current) => [...current, ...persisted]); }
+      const finalBlocked = completeIssues.some((issue) => issue.severity === 'blocking');
+      await repository.updateJobStatus(job.id, finalBlocked ? 'reviewing' : 'draft_ready'); setJob((current) => current ? { ...current, status: finalBlocked ? 'reviewing' : 'draft_ready' } : current); setStep('draft');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Plan oder Abschnitt konnte nicht verarbeitet werden.'); }
+    finally { setBusy(false); }
+  };
+
+  const regenerateSection = async (section: ChapterGenerationSection) => {
+    if (!job || !plan || !preferences) return;
+    setBusy(true); setError('');
+    try {
+      await repository.deleteReviewsForSection(job.id, section.id);
+      const previous = sections.filter((item) => item.orderIndex < section.orderIndex).sort((a, b) => a.orderIndex - b.orderIndex);
+      const ai = createLongformAiProvider(activeProvider, preferences);
+      const beat = plan.beats.find((item) => item.orderIndex === section.orderIndex);
+      if (!beat) throw new Error('Der zugehörige Plan-Beat wurde nicht gefunden.');
+      const generated = await ai.draftSection({ project, chapters, entities, direction, preferences, job, plan, section, previousSections: previous, context });
+      const saved = await repository.saveSection({ ...section, content: generated.content, continuationSummary: generated.continuationSummary, continuityState: generated.continuityState, status: 'generated', providerId: 'codex-cli' });
+      const issues = await reviewSection(ai, job, plan, saved, previous);
+      const persisted = issues.length ? await repository.saveReviews(job.id, issues) : [];
+      setSections((current) => current.map((item) => item.id === saved.id ? saved : item));
+      setReviews((current) => [...current.filter((item) => item.sectionId !== section.id), ...persisted]);
+      if (!issues.some((issue) => issue.severity === 'blocking')) { await repository.updateJobStatus(job.id, 'draft_ready'); setJob((current) => current ? { ...current, status: 'draft_ready' } : current); }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Abschnitt konnte nicht neu erzeugt werden.'); }
+    finally { setBusy(false); }
+  };
+
+  const updateSection = async (section: ChapterGenerationSection, content: string) => {
+    const saved = await repository.saveSection({ ...section, content, status: 'generated' });
+    await repository.deleteReviewsForSection(section.jobId, section.id);
+    setReviews((current) => current.filter((review) => review.sectionId !== section.id));
+    setSections((current) => current.map((item) => item.id === saved.id ? saved : item));
+  };
+
+  const accept = async () => {
+    if (!job || !plan || sections.some((section) => !section.content.trim())) { setError('Bitte fülle jeden Abschnitt oder verwirf den Entwurf bewusst.'); return; }
+    if (job.status !== 'draft_ready' || reviews.some((review) => review.severity === 'blocking' && review.status === 'open')) { setError('Der Entwurf muss zuerst ohne offene Blockierungen geprüft werden.'); return; }
+    const currentHash = contextHashForLongform(project, chapters, direction, context);
+    if (currentHash !== job.contentContextHash && !job.contextOverrideAccepted) { setContextOverrideRequired(true); setError('Der Projektkontext hat sich seit Beginn dieses Entwurfs verändert. Prüfe den Kontext oder bestätige ausdrücklich die Fortsetzung mit dem alten Kontext.'); return; }
+    setBusy(true); setError('');
+    try { await repository.acceptJob(job.id); await onAccepted(plan, sections); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'Der Entwurf konnte nicht übernommen werden.'); }
+    finally { setBusy(false); }
+  };
+
+  const continueWithOldContext = async () => {
+    if (!job) return;
+    setBusy(true); setError('');
+    try { const saved = await repository.acceptContextOverride(job.id); setJob(saved); setContextOverrideRequired(false); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'Die Kontextentscheidung konnte nicht gespeichert werden.'); }
+    finally { setBusy(false); }
+  };
+
+  if (!preferences) return <section className="longform-view"><p>Vorbereitung wird geladen …</p></section>;
+  const wordCount = sections.reduce((sum, section) => sum + section.actualWords, 0);
+  return <section className="longform-view">
+    <header className="longform-head"><button className="ghost-button" onClick={onClose}><ChevronLeft size={16} /> Zurück zum Assistenten</button><div><span className="eyebrow">GEFÜHRTER KAPITELENTWURF</span><h1>{step === 'preflight' ? 'Vorbereitung' : plan?.chapterTitle ?? 'Kapitelentwurf'}</h1><p>{instruction}</p></div><button className="icon-button" onClick={onClose} aria-label="Workflow schließen"><X size={18} /></button></header>
+    {error && <div className="save-error" role="alert">{error}</div>}
+    <div className="longform-steps"><span className={step === 'preflight' ? 'active' : 'done'}>1 Umfang & Kontext</span><span className={step === 'plan' ? 'active' : step === 'draft' ? 'done' : ''}>2 Plan bestätigen</span><span className={step === 'draft' ? 'active' : ''}>3 Entwurf prüfen</span></div>
+    {step === 'preflight' && <div className="longform-grid"><div className="longform-card"><span className="eyebrow">ZIELUMFANG</span><strong className="longform-number">{intent.pages ? `${intent.pages} Seiten` : `${intent.words ?? totalWords} Wörter`}</strong><p>{intent.pages ? `${intent.pages} Seiten entsprechen in diesem Projekt ungefähr ${totalWords.toLocaleString('de-DE')} Wörtern.` : 'Die Zielwortzahl ist eine Schätzung für die Planung, keine exakte Export-Seitenzahl.'}</p><label className="field-label">Zielwörter<input type="number" value={totalWords} readOnly /></label></div><div className="longform-card"><span className="eyebrow">PREFLIGHT</span>{preflight?.items.map((item) => <div className={`preflight-row ${item.level}`} key={`${item.level}-${item.label}`}><span>{item.level === 'blocking' ? 'Blockierend' : item.level === 'recommended' ? 'Empfohlen' : 'Optional'}</span><div><strong>{item.label}</strong><p>{item.detail}</p></div></div>)}</div><div className="longform-card direction-card"><div className="card-title-row"><div><span className="eyebrow">STORY-RICHTUNG</span><h2>Was soll die Geschichte gerade tun?</h2></div><button className="ghost-button" onClick={() => void saveDirection()} disabled={busy}><Save size={15} /> Speichern</button></div><div className="form-grid"><label className="field-label full-field">Prämisse<textarea value={directionDraft.premise} onChange={(event) => setDirectionDraft({ ...directionDraft, premise: event.target.value })} rows={2} /></label><label className="field-label">Geplantes Ende<textarea value={directionDraft.plannedEnding} onChange={(event) => setDirectionDraft({ ...directionDraft, plannedEnding: event.target.value })} rows={2} /></label><label className="field-label">Endstatus<select value={directionDraft.endingStatus} onChange={(event) => setDirectionDraft({ ...directionDraft, endingStatus: event.target.value as StoryDirection['endingStatus'] })}><option value="open">Noch offen</option><option value="preferred">Bevorzugt</option><option value="fixed">Fest</option></select></label><label className="field-label">Nächster Wendepunkt<input value={directionDraft.nextTurningPoint} onChange={(event) => setDirectionDraft({ ...directionDraft, nextTurningPoint: event.target.value })} /></label></div></div><div className="longform-actions"><button className="ghost-button" onClick={onClose}>Auftrag abbrechen</button><button className="primary-button large" disabled={busy || !preflight?.canPlan} onClick={() => void start()}>{busy ? 'Bereite vor …' : 'Kapitelplan erstellen'}</button></div></div>}
+    {step === 'plan' && plan && <div className="longform-card plan-card"><div className="card-title-row"><div><span className="eyebrow">PLAN VOR DER GENERIERUNG</span><h2>{plan.chapterTitle}</h2><p>{plan.chapterGoal}</p></div><span className="status-pill yellow"><LockKeyhole size={13} /> Noch nicht bestätigt</span></div><label className="field-label">Kapitelziel<textarea value={plan.chapterGoal} onChange={(event) => setPlan({ ...plan, chapterGoal: event.target.value })} rows={2} /></label><div className="beat-list">{plan.beats.map((beat, index) => <article className="beat-card" key={beat.id}><span className="beat-number">{index + 1}</span><div><input value={beat.title} onChange={(event) => setPlan({ ...plan, beats: plan.beats.map((item) => item.id === beat.id ? { ...item, title: event.target.value } : item) })} /><p>{beat.purpose}</p><label className="field-label">Ereignis<textarea value={beat.event} onChange={(event) => setPlan({ ...plan, beats: plan.beats.map((item) => item.id === beat.id ? { ...item, event: event.target.value } : item) })} rows={2} /></label></div><strong>{beat.targetWords} W</strong></article>)}</div><div className="longform-actions"><button className="ghost-button" onClick={() => setStep('preflight')}>Zurück</button><button className="primary-button large" disabled={busy} onClick={() => void confirmPlan()}><Check size={16} /> Plan bestätigen</button></div></div>}
+    {step === 'draft' && job && plan && <div className="longform-card draft-card"><div className="card-title-row"><div><span className="eyebrow">ENTWURF · {wordCount.toLocaleString('de-DE')} WÖRTER</span><h2>{plan.chapterTitle}</h2></div><span className={`status-pill ${job.status === 'draft_ready' ? 'green' : 'yellow'}`}><FileText size={13} /> {job.status === 'draft_ready' ? 'Geprüfter Entwurf' : 'Prüfung erforderlich'}</span></div><div className="draft-notice"><LockKeyhole size={17} /><span>Der Text wird nicht automatisch ins Manuskript geschrieben. Abschnitts- und Gesamtreview bleiben sichtbar.</span></div>{contextOverrideRequired && <div className="save-error"><strong>Projektkontext geändert.</strong><button className="text-button" onClick={() => void continueWithOldContext()} disabled={busy}>Mit altem Kontext bewusst fortfahren</button></div>}{reviews.map((review) => <article className={`review-card ${review.severity}`} key={review.id}><strong>{review.title}</strong><p>{review.description}</p><small>{review.severity} · {review.suggestedAction}</small>{review.severity === 'blocking' && <button className="text-button" onClick={() => { const section = sections.find((item) => item.id === review.sectionId); if (section) void regenerateSection(section); }}>Abschnitt neu erzeugen</button>}<button className="text-button" onClick={() => void repository.updateReviewStatus(review.id, 'exception')}>Als bewusste Ausnahme markieren</button></article>)}{sections.map((section, index) => <div className="draft-section" key={section.id}><div className="section-heading"><strong>Abschnitt {index + 1}</strong><span>Ziel: {section.targetWords} Wörter · {section.actualWords} Wörter</span></div><textarea value={section.content} onChange={(event) => void updateSection(section, event.target.value)} placeholder="Abschnitt prüfen oder nach Codex-Generierung bearbeiten …" rows={10} /></div>)}<div className="longform-actions"><button className="ghost-button" onClick={() => setStep('plan')}>Plan öffnen</button><button className="primary-button large" disabled={busy || sections.some((section) => !section.content.trim()) || job.status !== 'draft_ready' || reviews.some((review) => review.severity === 'blocking' && review.status === 'open')} onClick={() => void accept()}><Plus size={16} /> Als Entwurf übernehmen</button></div></div>}
+  </section>;
 }

@@ -54,7 +54,7 @@ describe('Story-Bible-Review und grounded context', () => {
   it('lokaler Character-Extractor erfindet keine Psychologie', async () => {
     const repository = new BrowserDemoRepository(); const workspace = await repository.loadWorkspace(); const chapter = workspace.chapters[0]!; const scene = { ...chapter.scenes[0]!, content: 'Marek sagte: Ich komme später.' }; const character = workspace.entities.find((entity) => entity.type === 'character')!;
     const result = await new LocalPrototypeCharacterMemoryExtractor().extract({ project: workspace.project, chapter, scene, characters: [character], existingEntities: workspace.entities, context: { projectId: workspace.project.id, relevantEntities: workspace.entities, relevantSources: [], openPlotThreads: [], possibleContradictions: [] } });
-    expect(result.proposals[0]?.classification).toBe('observable'); expect(result.proposals[0]?.payload).not.toHaveProperty('hiddenIntent');
+    expect(result.proposals[0]?.classification).toBe('observable'); expect(result.proposals[0]?.payload).toHaveProperty('hiddenIntent', '');
   });
   it('normalisiert Rich Text für AI und hält Unicode-Offsets stabil', async () => {
     expect(editorContentToPlainText('<p>Marek <strong>lief</strong>.</p>')).toBe('Marek lief.');
@@ -204,5 +204,29 @@ describe('Story-Bible-Review und grounded context', () => {
     };
     const answer = answerFromProjectContext('Welche bestätigten Fakten gibt es zur Paketnummer?', context);
     expect(answer.sources.map((source) => source.id)).toEqual(['source-package']);
+  });
+
+  it('übernimmt Character Memory mit Teilnehmern, Evidence und idempotenter Quelle', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const characters = workspace.entities.filter((entity) => entity.type === 'character');
+    const scene = workspace.chapters[0]!.scenes[0]!;
+    const run = await repository.createCharacterMemoryUpdateRun({ projectId: workspace.project.id, sceneId: scene.id, contentHash: contentHash(scene.content), extractorId: 'local-prototype-extractor' });
+    const [proposal] = await repository.saveCharacterMemoryProposals(run.id, [{ proposalKind: 'dialogue_memory', subjectCharacterId: characters[0]!.id, payload: { dialogueKind: 'inside_joke', topic: 'Paket', summary: 'Eine belegte Aussage.', exactExcerpt: 'Marek sagte', emotionalTone: '', hiddenIntent: '', significance: 'important', truthfulness: 'unknown', participants: [{ characterId: characters[0]!.id, role: 'speaker' }, { characterId: characters[1]!.id, role: 'listener' }] }, classification: 'observable', confidence: 0.9, evidenceExcerpt: 'Marek sagte', startOffset: undefined, endOffset: undefined, reason: 'Test' }]);
+    const reviewed = await repository.reviewCharacterMemoryProposal({ proposalId: proposal!.id, reviewStatus: 'accepted' });
+    expect(reviewed.acceptedMemoryKind).toBe('dialogue_memory');
+    expect((await repository.listCharacterDialogueMemories(workspace.project.id))[0]!.participants).toHaveLength(2);
+    expect((await repository.listCharacterMemoryEvidence(workspace.project.id, 'dialogue_memory', reviewed.acceptedMemoryId!))).toHaveLength(1);
+    await expect(repository.reviewCharacterMemoryProposal({ proposalId: proposal!.id, reviewStatus: 'accepted' })).rejects.toThrow('bereits geprüft');
+  });
+
+  it('speichert Longform-Reviews und blockiert die Übernahme bis zur Ausnahme', async () => {
+    const { BrowserLongformRepository } = await import('./longformRepository');
+    const repository = new BrowserLongformRepository();
+    const job = await repository.createJob({ projectId: 'p', targetBookId: 'b', targetWords: 800, userInstruction: 'Schreib', activeProvider: 'local-prototype', contentContextHash: 'h' });
+    const reviews = await repository.saveReviews(job.id, [{ jobId: job.id, sectionId: undefined, reviewScope: 'chapter', issueType: 'canon', severity: 'blocking', title: 'Konflikt', description: 'Prüfen', relatedEntityIds: [], relatedSourceIds: [], suggestedAction: 'Neu erzeugen', status: 'open' }]);
+    expect(reviews[0]!.severity).toBe('blocking');
+    const exception = await repository.updateReviewStatus(reviews[0]!.id, 'exception');
+    expect(exception.status).toBe('exception');
   });
 });

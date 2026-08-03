@@ -620,7 +620,7 @@ pub fn validate_lore_entity_type(value: &str) -> Result<(), String> {
 
 pub fn validate_character_memory_status(value: &str) -> Result<(), String> {
     match value {
-        "proposed" | "confirmed" | "rejected" | "retired" | "retconned" => Ok(()),
+        "proposed" | "confirmed" | "uncertain" | "rejected" | "retired" | "retconned" => Ok(()),
         _ => Err(format!("Ungültiger Charaktergedächtnis-Status: {value}")),
     }
 }
@@ -781,6 +781,9 @@ pub struct CharacterVoicePattern {
     pub status: String,
     pub author_confirmed: bool,
     pub occurrence_count: i64,
+    pub first_observed_scene_id: Option<String>,
+    pub last_observed_scene_id: Option<String>,
+    pub retired_scene_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -802,6 +805,12 @@ pub struct SaveCharacterVoicePatternInput {
     pub author_confirmed: bool,
     #[serde(default = "default_occurrence_count")]
     pub occurrence_count: i64,
+    #[serde(default)]
+    pub first_observed_scene_id: Option<String>,
+    #[serde(default)]
+    pub last_observed_scene_id: Option<String>,
+    #[serde(default)]
+    pub retired_scene_id: Option<String>,
 }
 fn default_occurrence_count() -> i64 {
     1
@@ -1013,6 +1022,7 @@ pub struct CharacterMemoryUpdateRun {
     pub scene_id: String,
     pub content_hash: String,
     pub extractor_id: String,
+    pub analyzed_content: String,
     pub status: String,
     pub created_at: String,
     pub completed_at: Option<String>,
@@ -1025,6 +1035,8 @@ pub struct CreateCharacterMemoryUpdateRunInput {
     pub scene_id: String,
     pub content_hash: String,
     pub extractor_id: String,
+    #[serde(default)]
+    pub analyzed_content: String,
 }
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1046,6 +1058,9 @@ pub struct CharacterMemoryProposal {
     pub reason: String,
     pub review_status: String,
     pub reviewed_at: Option<String>,
+    pub analyzed_content_hash: String,
+    pub accepted_memory_id: Option<String>,
+    pub accepted_memory_kind: Option<String>,
     pub created_at: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1062,6 +1077,8 @@ pub struct CharacterMemoryProposalDraft {
     pub start_offset: Option<i64>,
     pub end_offset: Option<i64>,
     pub reason: String,
+    #[serde(default)]
+    pub analyzed_content_hash: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1150,6 +1167,8 @@ pub struct ChapterGenerationJob {
     pub status: String,
     pub active_provider: String,
     pub content_context_hash: String,
+    pub context_override_accepted: bool,
+    pub last_resumed_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub completed_at: Option<String>,
@@ -1279,6 +1298,28 @@ pub struct ChapterGenerationReview {
     pub status: String,
     pub created_at: String,
     pub updated_at: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveChapterGenerationReviewInput {
+    pub job_id: String,
+    pub section_id: Option<String>,
+    pub review_scope: String,
+    pub issue_type: String,
+    pub severity: String,
+    pub title: String,
+    pub description: String,
+    #[serde(default)]
+    pub related_entity_ids: Vec<String>,
+    #[serde(default)]
+    pub related_source_ids: Vec<String>,
+    #[serde(default)]
+    pub suggested_action: String,
+    #[serde(default = "default_review_status")]
+    pub status: String,
+}
+fn default_review_status() -> String {
+    "open".into()
 }
 
 pub fn validate_scene_status(value: &str) -> Result<(), String> {

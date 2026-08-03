@@ -26,14 +26,15 @@ use crate::{
         DatabaseInfo, DialogueMemoryParticipant, EditorPreferences, LoreEntry, LoreMetadata,
         Project, ProjectStyle, ProviderStatus, RelationshipMemory, RestoreSceneVersionInput,
         ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput,
-        SaveChapterGenerationPlanInput, SaveChapterGenerationSectionInput,
-        SaveCharacterDialogueMemoryInput, SaveCharacterExperienceInput,
-        SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput, SaveCharacterSceneStateInput,
-        SaveCharacterVoicePatternInput, SaveLoreMetadataInput, SaveProjectStyleInput,
-        SaveRelationshipMemoryInput, SaveStoryDirectionInput, SaveWritingPreferencesInput, Scene,
-        SceneInput, SceneVersion, StoryDirection, StoryEntity, StoryEntityInput,
-        StoryEntityRelation, StorySourceReference, StyleReference, UpdateChapterInput,
-        UpdateStoryEntityInput, UpdateStyleReferenceInput, WorkspaceSnapshot, WritingPreferences,
+        SaveChapterGenerationPlanInput, SaveChapterGenerationReviewInput,
+        SaveChapterGenerationSectionInput, SaveCharacterDialogueMemoryInput,
+        SaveCharacterExperienceInput, SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput,
+        SaveCharacterSceneStateInput, SaveCharacterVoicePatternInput, SaveLoreMetadataInput,
+        SaveProjectStyleInput, SaveRelationshipMemoryInput, SaveStoryDirectionInput,
+        SaveWritingPreferencesInput, Scene, SceneInput, SceneVersion, StoryDirection, StoryEntity,
+        StoryEntityInput, StoryEntityRelation, StorySourceReference, StyleReference,
+        UpdateChapterInput, UpdateStoryEntityInput, UpdateStyleReferenceInput, WorkspaceSnapshot,
+        WritingPreferences,
     },
 };
 use chrono::Utc;
@@ -2042,6 +2043,170 @@ fn validate_probability(value: f64, label: &str) -> Result<(), String> {
         Ok(())
     }
 }
+fn payload_text(
+    payload: &serde_json::Value,
+    key: &str,
+    label: &str,
+    required_value: bool,
+) -> Result<String, String> {
+    let value = payload
+        .get(key)
+        .and_then(|item| item.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if required_value {
+        required(&value, label)?;
+    }
+    if value.chars().count() > 4000 {
+        return Err(format!("{label} ist zu lang."));
+    }
+    Ok(value)
+}
+fn validate_memory_payload_tx(
+    tx: &rusqlite::Transaction<'_>,
+    project_id: &str,
+    kind: &str,
+    payload: &serde_json::Value,
+    subject: Option<&str>,
+    related: Option<&str>,
+) -> Result<(), String> {
+    let subject_id = subject.or_else(|| {
+        payload
+            .get("subjectCharacterId")
+            .and_then(|value| value.as_str())
+    });
+    if let Some(id) = subject_id {
+        validate_character(tx, project_id, id)?;
+    }
+    if let Some(id) = related.or_else(|| {
+        payload
+            .get("relatedCharacterId")
+            .and_then(|value| value.as_str())
+    }) {
+        validate_character(tx, project_id, id)?;
+    }
+    match kind {
+        "voice_pattern" => {
+            validate_memory_text(
+                &payload_text(payload, "patternText", "Das Sprachmuster", true)?,
+                "Das Sprachmuster",
+                240,
+            )?;
+            validate_character_voice_pattern_type(
+                payload
+                    .get("patternType")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            )?;
+        }
+        "experience" => {
+            payload_text(payload, "title", "Der Erlebnistitel", true)?;
+            validate_character_significance(
+                payload
+                    .get("significance")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            )?;
+            validate_memory_reliability(
+                payload
+                    .get("memoryReliability")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            )?;
+        }
+        "dialogue_memory" => {
+            payload_text(payload, "summary", "Die Dialogzusammenfassung", true)?;
+            validate_dialogue_kind(
+                payload
+                    .get("dialogueKind")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            )?;
+            validate_character_significance(
+                payload
+                    .get("significance")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            )?;
+            validate_truthfulness(
+                payload
+                    .get("truthfulness")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            )?;
+            let participants = payload
+                .get("participants")
+                .and_then(|v| v.as_array())
+                .ok_or("Dialogteilnehmer fehlen.")?;
+            let speaker = subject_id.ok_or("Der Sprecher fehlt.")?;
+            let mut speaker_count = 0;
+            for participant in participants {
+                let id = participant
+                    .get("characterId")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Ungültiger Dialogteilnehmer.")?;
+                validate_character(tx, project_id, id)?;
+                let role = participant
+                    .get("role")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                validate_participant_role(role)?;
+                if id == speaker && role == "speaker" {
+                    speaker_count += 1;
+                }
+            }
+            if speaker_count != 1 {
+                return Err("Der Sprecher muss genau einmal als speaker teilnehmen.".into());
+            }
+        }
+        "relationship_memory" => {
+            let other = related
+                .or_else(|| payload.get("relatedCharacterId").and_then(|v| v.as_str()))
+                .ok_or("Die zweite Figur fehlt.")?;
+            normalize_pair(subject_id.ok_or("Die erste Figur fehlt.")?, other)?;
+            validate_relationship_memory_type(
+                payload
+                    .get("memoryType")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            )?;
+            payload_text(payload, "title", "Der Beziehungstitel", true)?;
+            payload_text(payload, "summary", "Die Beziehungszusammenfassung", true)?;
+        }
+        "knowledge_change" => {
+            let fact = payload
+                .get("factEntityId")
+                .and_then(|v| v.as_str())
+                .ok_or("Der Wissensfakt fehlt.")?;
+            project_entity_exists(tx, project_id, fact, None)?;
+            validate_knowledge_state(
+                payload
+                    .get("knowledgeState")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            )?;
+            validate_probability(
+                payload
+                    .get("certainty")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(-1.0),
+                "Certainty",
+            )?;
+        }
+        "profile_observation" => {
+            payload_text(payload, "field", "Das Profilfeld", true)?;
+            payload_text(payload, "observedBehavior", "Die Beobachtung", true)?;
+        }
+        "character_relation" => {
+            return Err(
+                "Character-Relation-Proposals benötigen eine bewusste manuelle Entscheidung."
+                    .into(),
+            );
+        }
+        _ => return Err("Unbekannter Character-Memory-Proposal-Typ.".into()),
+    }
+    Ok(())
+}
 fn normalize_pair(a: &str, b: &str) -> Result<(String, String), String> {
     if a == b {
         Err("Eine Figur kann keine Beziehungserinnerung mit sich selbst besitzen.".into())
@@ -2066,8 +2231,11 @@ fn voice_from_row(row: &rusqlite::Row<'_>) -> SqlResult<CharacterVoicePattern> {
         status: row.get(9)?,
         author_confirmed: row.get(10)?,
         occurrence_count: row.get(11)?,
-        created_at: row.get(12)?,
-        updated_at: row.get(13)?,
+        first_observed_scene_id: row.get(12)?,
+        last_observed_scene_id: row.get(13)?,
+        retired_scene_id: row.get(14)?,
+        created_at: row.get(15)?,
+        updated_at: row.get(16)?,
     })
 }
 fn experience_from_row(row: &rusqlite::Row<'_>) -> SqlResult<CharacterExperience> {
@@ -2176,10 +2344,11 @@ fn memory_run_from_row(row: &rusqlite::Row<'_>) -> SqlResult<CharacterMemoryUpda
         scene_id: row.get(2)?,
         content_hash: row.get(3)?,
         extractor_id: row.get(4)?,
-        status: row.get(5)?,
-        created_at: row.get(6)?,
-        completed_at: row.get(7)?,
-        error_message: row.get(8)?,
+        analyzed_content: row.get(5)?,
+        status: row.get(6)?,
+        created_at: row.get(7)?,
+        completed_at: row.get(8)?,
+        error_message: row.get(9)?,
     })
 }
 fn memory_proposal_from_row(row: &rusqlite::Row<'_>) -> SqlResult<CharacterMemoryProposal> {
@@ -2202,7 +2371,10 @@ fn memory_proposal_from_row(row: &rusqlite::Row<'_>) -> SqlResult<CharacterMemor
         reason: row.get(14)?,
         review_status: row.get(15)?,
         reviewed_at: row.get(16)?,
-        created_at: row.get(17)?,
+        analyzed_content_hash: row.get(17).unwrap_or_default(),
+        accepted_memory_id: row.get(18).ok(),
+        accepted_memory_kind: row.get(19).ok(),
+        created_at: row.get(20)?,
     })
 }
 
@@ -2211,7 +2383,7 @@ fn list_voice_db(
     project_id: &str,
     character_id: Option<&str>,
 ) -> Result<Vec<CharacterVoicePattern>, String> {
-    let mut statement = db.prepare("SELECT id,project_id,character_id,related_character_id,pattern_type,pattern_text,description,context_condition,confidence,status,author_confirmed,occurrence_count,created_at,updated_at FROM character_voice_patterns WHERE project_id=?1 AND (?2 IS NULL OR character_id=?2) ORDER BY occurrence_count DESC, updated_at DESC").map_err(|e| sql_error("Sprachmuster konnten nicht geladen werden", e))?;
+    let mut statement = db.prepare("SELECT id,project_id,character_id,related_character_id,pattern_type,pattern_text,description,context_condition,confidence,status,author_confirmed,occurrence_count,first_observed_scene_id,last_observed_scene_id,retired_scene_id,created_at,updated_at FROM character_voice_patterns WHERE project_id=?1 AND (?2 IS NULL OR character_id=?2) ORDER BY occurrence_count DESC, updated_at DESC").map_err(|e| sql_error("Sprachmuster konnten nicht geladen werden", e))?;
     let rows = statement
         .query_map(params![project_id, character_id], voice_from_row)
         .map_err(|e| sql_error("Sprachmuster konnten nicht geladen werden", e))?
@@ -2258,8 +2430,8 @@ pub fn save_character_voice_pattern(
     }
     let id = input.id.clone().unwrap_or_else(new_id);
     let stamp = now();
-    db.execute("INSERT INTO character_voice_patterns(id,project_id,character_id,related_character_id,pattern_type,pattern_text,description,context_condition,confidence,status,author_confirmed,occurrence_count,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,COALESCE((SELECT created_at FROM character_voice_patterns WHERE id=?1),?13),?13) ON CONFLICT(id) DO UPDATE SET related_character_id=excluded.related_character_id,pattern_type=excluded.pattern_type,pattern_text=excluded.pattern_text,description=excluded.description,context_condition=excluded.context_condition,confidence=excluded.confidence,status=excluded.status,author_confirmed=excluded.author_confirmed,occurrence_count=excluded.occurrence_count,updated_at=excluded.updated_at", params![id,input.project_id,input.character_id,input.related_character_id,input.pattern_type,input.pattern_text,input.description,input.context_condition,input.confidence,input.status,input.author_confirmed,input.occurrence_count.max(1),stamp]).map_err(|e| sql_error("Sprachmuster konnte nicht gespeichert werden",e))?;
-    db.query_row("SELECT id,project_id,character_id,related_character_id,pattern_type,pattern_text,description,context_condition,confidence,status,author_confirmed,occurrence_count,created_at,updated_at FROM character_voice_patterns WHERE id=?1",params![id],voice_from_row).map_err(|e| sql_error("Sprachmuster konnte nicht geladen werden",e))
+    db.execute("INSERT INTO character_voice_patterns(id,project_id,character_id,related_character_id,pattern_type,pattern_text,description,context_condition,confidence,status,author_confirmed,occurrence_count,first_observed_scene_id,last_observed_scene_id,retired_scene_id,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,COALESCE((SELECT created_at FROM character_voice_patterns WHERE id=?1),?16),?16) ON CONFLICT(id) DO UPDATE SET related_character_id=excluded.related_character_id,pattern_type=excluded.pattern_type,pattern_text=excluded.pattern_text,description=excluded.description,context_condition=excluded.context_condition,confidence=excluded.confidence,status=excluded.status,author_confirmed=excluded.author_confirmed,occurrence_count=excluded.occurrence_count,first_observed_scene_id=excluded.first_observed_scene_id,last_observed_scene_id=excluded.last_observed_scene_id,retired_scene_id=excluded.retired_scene_id,updated_at=excluded.updated_at", params![id,input.project_id,input.character_id,input.related_character_id,input.pattern_type,input.pattern_text,input.description,input.context_condition,input.confidence,input.status,input.author_confirmed,input.occurrence_count.max(1),input.first_observed_scene_id,input.last_observed_scene_id,input.retired_scene_id,stamp]).map_err(|e| sql_error("Sprachmuster konnte nicht gespeichert werden",e))?;
+    db.query_row("SELECT id,project_id,character_id,related_character_id,pattern_type,pattern_text,description,context_condition,confidence,status,author_confirmed,occurrence_count,first_observed_scene_id,last_observed_scene_id,retired_scene_id,created_at,updated_at FROM character_voice_patterns WHERE id=?1",params![id],voice_from_row).map_err(|e| sql_error("Sprachmuster konnte nicht geladen werden",e))
 }
 #[tauri::command]
 pub fn delete_character_voice_pattern(
@@ -2687,11 +2859,11 @@ pub fn create_character_memory_update_run(
     validate_scene_project(&db, &input.project_id, &input.scene_id)?;
     required(&input.content_hash, "Der Content-Hash")?;
     required(&input.extractor_id, "Der Extractor")?;
-    if let Some(existing)=db.query_row("SELECT id,project_id,scene_id,content_hash,extractor_id,status,created_at,completed_at,error_message FROM character_memory_update_runs WHERE project_id=?1 AND scene_id=?2 AND content_hash=?3 AND extractor_id=?4 AND status IN ('completed','reviewed') ORDER BY created_at DESC LIMIT 1",params![input.project_id,input.scene_id,input.content_hash,input.extractor_id],memory_run_from_row).optional().map_err(|e|sql_error("Character-Memory-Run konnte nicht geprüft werden",e))? { return Ok(existing); }
+    if let Some(existing)=db.query_row("SELECT id,project_id,scene_id,content_hash,extractor_id,analyzed_content,status,created_at,completed_at,error_message FROM character_memory_update_runs WHERE project_id=?1 AND scene_id=?2 AND content_hash=?3 AND extractor_id=?4 AND status IN ('completed','reviewed') ORDER BY created_at DESC LIMIT 1",params![input.project_id,input.scene_id,input.content_hash,input.extractor_id],memory_run_from_row).optional().map_err(|e|sql_error("Character-Memory-Run konnte nicht geprüft werden",e))? { return Ok(existing); }
     let id = new_id();
     let stamp = now();
-    db.execute("INSERT INTO character_memory_update_runs(id,project_id,scene_id,content_hash,extractor_id,status,created_at) VALUES(?1,?2,?3,?4,?5,'pending',?6)",params![id,input.project_id,input.scene_id,input.content_hash,input.extractor_id,stamp]).map_err(|e|sql_error("Character-Memory-Run konnte nicht angelegt werden",e))?;
-    db.query_row("SELECT id,project_id,scene_id,content_hash,extractor_id,status,created_at,completed_at,error_message FROM character_memory_update_runs WHERE id=?1",params![id],memory_run_from_row).map_err(|e|sql_error("Character-Memory-Run konnte nicht geladen werden",e))
+    db.execute("INSERT INTO character_memory_update_runs(id,project_id,scene_id,content_hash,extractor_id,analyzed_content,status,created_at) VALUES(?1,?2,?3,?4,?5,?6,'pending',?7)",params![id,input.project_id,input.scene_id,input.content_hash,input.extractor_id,input.analyzed_content,stamp]).map_err(|e|sql_error("Character-Memory-Run konnte nicht angelegt werden",e))?;
+    db.query_row("SELECT id,project_id,scene_id,content_hash,extractor_id,analyzed_content,status,created_at,completed_at,error_message FROM character_memory_update_runs WHERE id=?1",params![id],memory_run_from_row).map_err(|e|sql_error("Character-Memory-Run konnte nicht geladen werden",e))
 }
 #[tauri::command]
 pub fn list_character_memory_update_runs(
@@ -2700,7 +2872,7 @@ pub fn list_character_memory_update_runs(
     scene_id: Option<String>,
 ) -> Result<Vec<CharacterMemoryUpdateRun>, String> {
     let db = lock_db(&state)?;
-    let mut stmt=db.prepare("SELECT id,project_id,scene_id,content_hash,extractor_id,status,created_at,completed_at,error_message FROM character_memory_update_runs WHERE project_id=?1 AND (?2 IS NULL OR scene_id=?2) ORDER BY created_at DESC").map_err(|e|sql_error("Character-Memory-Runs konnten nicht geladen werden",e))?;
+    let mut stmt=db.prepare("SELECT id,project_id,scene_id,content_hash,extractor_id,analyzed_content,status,created_at,completed_at,error_message FROM character_memory_update_runs WHERE project_id=?1 AND (?2 IS NULL OR scene_id=?2) ORDER BY created_at DESC").map_err(|e|sql_error("Character-Memory-Runs konnten nicht geladen werden",e))?;
     let rows = stmt
         .query_map(params![project_id, scene_id], memory_run_from_row)
         .map_err(|e| sql_error("Character-Memory-Runs konnten nicht geladen werden", e))?
@@ -2718,11 +2890,11 @@ pub fn save_character_memory_proposals(
         return Err("Maximal 100 Charaktergedächtnis-Vorschläge pro Lauf sind erlaubt.".into());
     }
     let db = lock_db(&state)?;
-    let run: (String, String, String) = db
+    let run: (String, String, String, String) = db
         .query_row(
-            "SELECT project_id,scene_id,status FROM character_memory_update_runs WHERE id=?1",
+            "SELECT project_id,scene_id,status,content_hash FROM character_memory_update_runs WHERE id=?1",
             params![run_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .map_err(|e| sql_error("Character-Memory-Run wurde nicht gefunden", e))?;
     let tx = db
@@ -2749,10 +2921,23 @@ pub fn save_character_memory_proposals(
         if let Some(id) = &p.target_entity_id {
             project_entity_exists(&tx, &run.0, id, None)?;
         }
+        validate_memory_payload_tx(
+            &tx,
+            &run.0,
+            &p.proposal_kind,
+            &p.payload,
+            p.subject_character_id.as_deref(),
+            p.related_character_id.as_deref(),
+        )?;
         let payload = serde_json::to_string(&p.payload)
             .map_err(|e| format!("Proposal-Payload ist ungültig: {e}"))?;
         let id = new_id();
-        tx.execute("INSERT INTO character_memory_proposals(id,run_id,project_id,scene_id,proposal_kind,subject_character_id,related_character_id,target_entity_id,payload_json,classification,confidence,evidence_excerpt,start_offset,end_offset,reason,review_status,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,'pending',?17)",params![id,run_id,run.0,run.1,p.proposal_kind,p.subject_character_id,p.related_character_id,p.target_entity_id,payload,p.classification,p.confidence,p.evidence_excerpt,p.start_offset,p.end_offset,p.reason,now()]).map_err(|e|sql_error("Character-Memory-Proposal konnte nicht gespeichert werden",e))?;
+        let analyzed_hash = if p.analyzed_content_hash.is_empty() {
+            run.3.clone()
+        } else {
+            p.analyzed_content_hash.clone()
+        };
+        tx.execute("INSERT INTO character_memory_proposals(id,run_id,project_id,scene_id,proposal_kind,subject_character_id,related_character_id,target_entity_id,payload_json,classification,confidence,evidence_excerpt,start_offset,end_offset,reason,review_status,analyzed_content_hash,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,'pending',?17,?18)",params![id,run_id,run.0,run.1,p.proposal_kind,p.subject_character_id,p.related_character_id,p.target_entity_id,payload,p.classification,p.confidence,p.evidence_excerpt,p.start_offset,p.end_offset,p.reason,analyzed_hash,now()]).map_err(|e|sql_error("Character-Memory-Proposal konnte nicht gespeichert werden",e))?;
     }
     tx.execute(
         "UPDATE character_memory_update_runs SET status='completed',completed_at=?1 WHERE id=?2",
@@ -2767,7 +2952,7 @@ fn list_character_memory_proposals_from_db(
     db: &Connection,
     run_id: &str,
 ) -> Result<Vec<CharacterMemoryProposal>, String> {
-    let mut stmt=db.prepare("SELECT id,run_id,project_id,scene_id,proposal_kind,subject_character_id,related_character_id,target_entity_id,payload_json,classification,confidence,evidence_excerpt,start_offset,end_offset,reason,review_status,reviewed_at,created_at FROM character_memory_proposals WHERE run_id=?1 ORDER BY created_at ASC").map_err(|e|sql_error("Character-Memory-Proposals konnten nicht geladen werden",e))?;
+    let mut stmt=db.prepare("SELECT id,run_id,project_id,scene_id,proposal_kind,subject_character_id,related_character_id,target_entity_id,payload_json,classification,confidence,evidence_excerpt,start_offset,end_offset,reason,review_status,reviewed_at,analyzed_content_hash,accepted_memory_id,accepted_memory_kind,created_at FROM character_memory_proposals WHERE run_id=?1 ORDER BY created_at ASC").map_err(|e|sql_error("Character-Memory-Proposals konnten nicht geladen werden",e))?;
     let rows = stmt
         .query_map(params![run_id], memory_proposal_from_row)
         .map_err(|e| sql_error("Character-Memory-Proposals konnten nicht geladen werden", e))?
@@ -2792,6 +2977,10 @@ type CharacterMemoryReviewRow = (
     Option<String>,
     Option<String>,
     Option<String>,
+    String,
+    String,
+    Option<i64>,
+    Option<i64>,
 );
 
 #[tauri::command]
@@ -2800,7 +2989,7 @@ pub fn review_character_memory_proposal(
     input: ReviewCharacterMemoryProposalInput,
 ) -> Result<CharacterMemoryProposal, String> {
     let db = lock_db(&state)?;
-    let current: CharacterMemoryReviewRow = db.query_row("SELECT project_id,scene_id,proposal_kind,review_status,payload_json,subject_character_id,related_character_id,target_entity_id FROM character_memory_proposals WHERE id=?1",params![input.proposal_id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?))).map_err(|e|sql_error("Character-Memory-Proposal wurde nicht gefunden",e))?;
+    let current: CharacterMemoryReviewRow = db.query_row("SELECT project_id,scene_id,proposal_kind,review_status,payload_json,subject_character_id,related_character_id,target_entity_id,evidence_excerpt,analyzed_content_hash,start_offset,end_offset FROM character_memory_proposals WHERE id=?1",params![input.proposal_id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?,row.get(8)?,row.get(9)?,row.get(10)?,row.get(11)?))).map_err(|e|sql_error("Character-Memory-Proposal wurde nicht gefunden",e))?;
     if current.3 != "pending" {
         return Err("Dieser Character-Memory-Vorschlag wurde bereits geprüft.".into());
     }
@@ -2811,6 +3000,7 @@ pub fn review_character_memory_proposal(
     let tx = db
         .unchecked_transaction()
         .map_err(|e| sql_error("Review-Transaktion konnte nicht gestartet werden", e))?;
+    let mut accepted: Option<(String, String)> = None;
     if status != "rejected" {
         let mut payload = input.payload.unwrap_or_else(|| {
             serde_json::from_str(&current.4).unwrap_or_else(|_| serde_json::json!({}))
@@ -2820,11 +3010,51 @@ pub fn review_character_memory_proposal(
             object.insert("relatedCharacterId".into(), serde_json::json!(current.6));
             object.insert("targetEntityId".into(), serde_json::json!(current.7));
         }
-        apply_memory_payload(&tx, &current.0, &current.1, &current.2, payload, &status)?;
+        validate_memory_payload_tx(
+            &tx,
+            &current.0,
+            &current.2,
+            &payload,
+            current.5.as_deref(),
+            current.6.as_deref(),
+        )?;
+        accepted = Some(apply_memory_payload(
+            &tx,
+            &current.0,
+            &current.1,
+            &current.2,
+            payload,
+            &status,
+            input.decision.as_deref(),
+        )?);
+        if !current.8.trim().is_empty() {
+            let scene_data: (String, String) = tx.query_row("SELECT chapters.id,scenes.content FROM scenes JOIN chapters ON chapters.id=scenes.chapter_id WHERE scenes.id=?1", params![current.1], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|e| sql_error("Quellenszene konnte nicht geladen werden", e))?;
+            let text = crate::services::plain_text::editor_content_to_plain_text(&scene_data.1);
+            let chars: Vec<char> = text.chars().collect();
+            let (start, end) = match (current.10, current.11) {
+                (Some(start), Some(end)) if start >= 0 && end > start && (end as usize) <= chars.len() && chars[start as usize..end as usize].iter().collect::<String>() == current.8 => (start, end),
+                (None, None) => { let needle: Vec<char> = current.8.chars().collect(); let found = chars.windows(needle.len()).position(|window| window == needle.as_slice()).ok_or("Die Evidence-Passage wurde in der aktuellen Szene nicht gefunden. Bitte analysiere die Szene erneut.")? as i64; (found, found + needle.len() as i64) },
+                _ => return Err("Die Evidence-Offsets passen nicht mehr zur aktuellen Szene. Bitte analysiere die Szene erneut.".into()),
+            };
+            let source = CreateSourceReferenceInput {
+                project_id: current.0.clone(),
+                entity_id: None,
+                proposal_id: Some(input.proposal_id.clone()),
+                chapter_id: scene_data.0,
+                scene_id: current.1.clone(),
+                excerpt: current.8.clone(),
+                start_offset: Some(start),
+                end_offset: Some(end),
+            };
+            let source_id = insert_source_reference_if_missing_tx(&tx, &source)?;
+            if let Some((memory_id, memory_kind)) = &accepted {
+                tx.execute("INSERT INTO character_memory_evidence(id,project_id,memory_kind,memory_id,source_reference_id,evidence_role,created_at) VALUES(?1,?2,?3,?4,?5,'primary',?6) ON CONFLICT(memory_kind,memory_id,source_reference_id) DO NOTHING", params![new_id(), current.0, memory_kind, memory_id, source_id, now()]).map_err(|e| sql_error("Gedächtnis-Evidence konnte nicht gespeichert werden", e))?;
+            }
+        }
     }
     tx.execute(
-        "UPDATE character_memory_proposals SET review_status=?1,reviewed_at=?2 WHERE id=?3",
-        params![status, now(), input.proposal_id],
+        "UPDATE character_memory_proposals SET review_status=?1,reviewed_at=?2,accepted_memory_id=?3,accepted_memory_kind=?4 WHERE id=?5",
+        params![status, now(), accepted.as_ref().map(|value| value.0.clone()), accepted.as_ref().map(|value| value.1.clone()), input.proposal_id],
     )
     .map_err(|e| {
         sql_error(
@@ -2834,7 +3064,7 @@ pub fn review_character_memory_proposal(
     })?;
     tx.commit()
         .map_err(|e| sql_error("Review-Transaktion konnte nicht abgeschlossen werden", e))?;
-    db.query_row("SELECT id,run_id,project_id,scene_id,proposal_kind,subject_character_id,related_character_id,target_entity_id,payload_json,classification,confidence,evidence_excerpt,start_offset,end_offset,reason,review_status,reviewed_at,created_at FROM character_memory_proposals WHERE id=?1",params![input.proposal_id],memory_proposal_from_row).map_err(|e|sql_error("Geprüfter Character-Memory-Vorschlag konnte nicht geladen werden",e))
+    db.query_row("SELECT id,run_id,project_id,scene_id,proposal_kind,subject_character_id,related_character_id,target_entity_id,payload_json,classification,confidence,evidence_excerpt,start_offset,end_offset,reason,review_status,reviewed_at,analyzed_content_hash,accepted_memory_id,accepted_memory_kind,created_at FROM character_memory_proposals WHERE id=?1",params![input.proposal_id],memory_proposal_from_row).map_err(|e|sql_error("Geprüfter Character-Memory-Vorschlag konnte nicht geladen werden",e))
 }
 fn apply_memory_payload(
     tx: &rusqlite::Transaction<'_>,
@@ -2843,9 +3073,10 @@ fn apply_memory_payload(
     kind: &str,
     payload: serde_json::Value,
     status: &str,
-) -> Result<(), String> {
+    decision: Option<&str>,
+) -> Result<(String, String), String> {
     if status == "rejected" {
-        return Ok(());
+        return Err("Abgelehnte Vorschläge dürfen keine Produktdaten erzeugen.".into());
     }
     let text = |key: &str, fallback: &str| {
         payload
@@ -2854,22 +3085,65 @@ fn apply_memory_payload(
             .unwrap_or(fallback)
             .to_string()
     };
-    let id = new_id();
     let stamp = now();
+    let memory_status = if decision == Some("uncertain") {
+        "uncertain"
+    } else {
+        "confirmed"
+    };
+    let author_confirmed = if memory_status == "confirmed" {
+        1_i64
+    } else {
+        0_i64
+    };
     let subject = payload
         .get("subjectCharacterId")
         .and_then(|v| v.as_str())
         .unwrap_or_default();
+    let id = if kind == "voice_pattern" {
+        let pattern = payload
+            .get("patternText")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let pattern_type = payload
+            .get("patternType")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        tx.query_row("SELECT id FROM character_voice_patterns WHERE project_id=?1 AND character_id=?2 AND pattern_type=?3 AND LOWER(pattern_text)=LOWER(?4) AND related_character_id IS ?5 ORDER BY updated_at DESC LIMIT 1", params![project, subject, pattern_type, pattern, payload.get("relatedCharacterId").and_then(|value| value.as_str())], |row| row.get(0)).optional().map_err(|e| sql_error("Bestehende Sprachmuster konnten nicht geprüft werden", e))?.unwrap_or_else(new_id)
+    } else {
+        new_id()
+    };
     match kind {
-        "voice_pattern" => { let pattern = text("patternText", ""); if pattern.trim().is_empty() { return Err("Das Sprachmuster benötigt einen Text.".into()); } tx.execute("INSERT INTO character_voice_patterns(id,project_id,character_id,related_character_id,pattern_type,pattern_text,description,context_condition,confidence,status,author_confirmed,occurrence_count,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'confirmed',1,1,?10,?10)", params![id,project,subject,payload.get("relatedCharacterId").and_then(|v|v.as_str()),text("patternType","signature_phrase"),pattern,text("description",""),text("contextCondition",""),payload.get("confidence").and_then(|v|v.as_f64()).unwrap_or(0.7),stamp]).map_err(|e| sql_error("Sprachmuster konnte nicht übernommen werden",e))?; }
-        "experience" => { let title=text("title",""); if title.trim().is_empty() { return Err("Das Erlebnis benötigt einen Titel.".into()); } tx.execute("INSERT INTO character_experiences(id,project_id,character_id,event_entity_id,scene_id,title,objective_summary,subjective_interpretation,emotional_impact,lasting_effect,significance,memory_reliability,status,author_confirmed,created_at,updated_at) VALUES(?1,?2,?3,NULL,?4,?5,?6,?7,?8,?9,?10,?11,'confirmed',1,?12,?12)",params![id,project,subject,scene,title,text("objectiveSummary",""),text("subjectiveInterpretation",""),text("emotionalImpact",""),text("lastingEffect",""),text("significance","supporting"),text("memoryReliability","reliable"),stamp]).map_err(|e| sql_error("Erlebnis konnte nicht übernommen werden",e))?; }
-        "relationship_memory" => { let related=payload.get("relatedCharacterId").and_then(|v|v.as_str()).unwrap_or_default(); let (a,b)=normalize_pair(subject,related)?; tx.execute("INSERT INTO relationship_memories(id,project_id,character_a_id,character_b_id,scene_id,memory_type,title,summary,private_meaning,relationship_effect,significance,status,author_confirmed,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'confirmed',1,?12)",params![id,project,a,b,scene,text("memoryType","shared_memory"),text("title","Beziehungserinnerung"),text("summary",""),text("privateMeaning",""),text("relationshipEffect",""),text("significance","supporting"),stamp]).map_err(|e| sql_error("Beziehungserinnerung konnte nicht übernommen werden",e))?; }
-        "knowledge_change" => { let fact=payload.get("factEntityId").and_then(|v|v.as_str()).unwrap_or_default(); if fact.is_empty() { return Err("Ein Wissensstand benötigt einen Fakt.".into()); } tx.execute("INSERT INTO character_knowledge_states(id,project_id,character_id,fact_entity_id,knowledge_state,acquired_scene_id,changed_scene_id,source_character_id,certainty,notes,status,author_confirmed,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?6,NULL,?7,?8,'confirmed',1,?9)",params![id,project,subject,fact,text("knowledgeState","knows"),scene,payload.get("certainty").and_then(|v|v.as_f64()).unwrap_or(0.7),text("notes",""),stamp]).map_err(|e| sql_error("Wissensstand konnte nicht übernommen werden",e))?; }
-        "dialogue_memory" => { let summary=text("summary",""); if summary.trim().is_empty() { return Err("Eine Dialogerinnerung benötigt eine Zusammenfassung.".into()); } tx.execute("INSERT INTO character_dialogue_memories(id,project_id,speaker_id,scene_id,dialogue_kind,topic,summary,exact_excerpt,emotional_tone,hidden_intent,significance,truthfulness,status,author_confirmed,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,'confirmed',1,?13,?13)",params![id,project,subject,scene,text("dialogueKind","statement"),text("topic",""),summary,text("exactExcerpt",""),text("emotionalTone",""),text("hiddenIntent",""),text("significance","supporting"),text("truthfulness","unknown"),stamp]).map_err(|e| sql_error("Dialogerinnerung konnte nicht übernommen werden",e))?; tx.execute("INSERT INTO dialogue_memory_participants(dialogue_memory_id,character_id,role) VALUES(?1,?2,'speaker')",params![id,subject]).map_err(|e| sql_error("Dialogsprecher konnte nicht gespeichert werden",e))?; }
+        "voice_pattern" => { let pattern = text("patternText", ""); if pattern.trim().is_empty() { return Err("Das Sprachmuster benötigt einen Text.".into()); } tx.execute("INSERT INTO character_voice_patterns(id,project_id,character_id,related_character_id,pattern_type,pattern_text,description,context_condition,confidence,status,author_confirmed,occurrence_count,first_observed_scene_id,last_observed_scene_id,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,1,?12,?12,?13,?13) ON CONFLICT(id) DO UPDATE SET occurrence_count=character_voice_patterns.occurrence_count+1,confidence=excluded.confidence,status=excluded.status,author_confirmed=excluded.author_confirmed,last_observed_scene_id=excluded.last_observed_scene_id,updated_at=excluded.updated_at", params![id,project,subject,payload.get("relatedCharacterId").and_then(|v|v.as_str()),text("patternType","signature_phrase"),pattern,text("description",""),text("contextCondition",""),payload.get("confidence").and_then(|v|v.as_f64()).unwrap_or(0.7),memory_status,author_confirmed,scene,stamp]).map_err(|e| sql_error("Sprachmuster konnte nicht übernommen werden",e))?; }
+        "experience" => { let title=text("title",""); if title.trim().is_empty() { return Err("Das Erlebnis benötigt einen Titel.".into()); } tx.execute("INSERT INTO character_experiences(id,project_id,character_id,event_entity_id,scene_id,title,objective_summary,subjective_interpretation,emotional_impact,lasting_effect,significance,memory_reliability,status,author_confirmed,created_at,updated_at) VALUES(?1,?2,?3,NULL,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?14)",params![id,project,subject,scene,title,text("objectiveSummary",""),text("subjectiveInterpretation",""),text("emotionalImpact",""),text("lastingEffect",""),text("significance","supporting"),text("memoryReliability","reliable"),memory_status,author_confirmed,stamp]).map_err(|e| sql_error("Erlebnis konnte nicht übernommen werden",e))?; }
+        "relationship_memory" => { let related=payload.get("relatedCharacterId").and_then(|v|v.as_str()).unwrap_or_default(); let (a,b)=normalize_pair(subject,related)?; tx.execute("INSERT INTO relationship_memories(id,project_id,character_a_id,character_b_id,scene_id,memory_type,title,summary,private_meaning,relationship_effect,significance,status,author_confirmed,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",params![id,project,a,b,scene,text("memoryType","shared_memory"),text("title","Beziehungserinnerung"),text("summary",""),text("privateMeaning",""),text("relationshipEffect",""),text("significance","supporting"),memory_status,author_confirmed,stamp]).map_err(|e| sql_error("Beziehungserinnerung konnte nicht übernommen werden",e))?; }
+        "knowledge_change" => { let fact=payload.get("factEntityId").and_then(|v|v.as_str()).unwrap_or_default(); if fact.is_empty() { return Err("Ein Wissensstand benötigt einen Fakt.".into()); } tx.execute("INSERT INTO character_knowledge_states(id,project_id,character_id,fact_entity_id,knowledge_state,acquired_scene_id,changed_scene_id,source_character_id,certainty,notes,status,author_confirmed,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?6,NULL,?7,?8,?9,?10,?11,?11)",params![id,project,subject,fact,text("knowledgeState","knows"),scene,payload.get("certainty").and_then(|v|v.as_f64()).unwrap_or(0.7),text("notes",""),memory_status,author_confirmed,stamp]).map_err(|e| sql_error("Wissensstand konnte nicht übernommen werden",e))?; }
+        "dialogue_memory" => {
+            let summary = text("summary", "");
+            if summary.trim().is_empty() {
+                return Err("Eine Dialogerinnerung benötigt eine Zusammenfassung.".into());
+            }
+            tx.execute("INSERT INTO character_dialogue_memories(id,project_id,speaker_id,scene_id,dialogue_kind,topic,summary,exact_excerpt,emotional_tone,hidden_intent,significance,truthfulness,status,author_confirmed,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15)",params![id,project,subject,scene,text("dialogueKind","statement"),text("topic",""),summary,text("exactExcerpt",""),text("emotionalTone",""),text("hiddenIntent",""),text("significance","supporting"),text("truthfulness","unknown"),memory_status,author_confirmed,stamp]).map_err(|e| sql_error("Dialogerinnerung konnte nicht übernommen werden",e))?;
+            let participants = payload.get("participants").and_then(|value| value.as_array()).ok_or("Dialogteilnehmer fehlen.")?;
+            let mut seen = std::collections::HashSet::new();
+            let mut speaker_count = 0;
+            for participant in participants {
+                let character_id = participant.get("characterId").and_then(|value| value.as_str()).ok_or("Ungültiger Dialogteilnehmer.")?;
+                let role = participant.get("role").and_then(|value| value.as_str()).ok_or("Ungültige Teilnehmerrolle.")?;
+                validate_character(tx, project, character_id)?;
+                validate_participant_role(role)?;
+                if !seen.insert((character_id.to_string(), role.to_string())) {
+                    return Err("Ein Dialogteilnehmer wurde doppelt angegeben.".into());
+                }
+                if character_id == subject && role == "speaker" { speaker_count += 1; }
+                tx.execute("INSERT INTO dialogue_memory_participants(dialogue_memory_id,character_id,role) VALUES(?1,?2,?3)", params![id, character_id, role]).map_err(|e| sql_error("Dialogteilnehmer konnten nicht gespeichert werden",e))?;
+            }
+            if speaker_count != 1 { return Err("Der Sprecher muss genau einmal als speaker teilnehmen.".into()); }
+        }
         "profile_observation" | "character_relation" => return Err("Dieser Vorschlagstyp benötigt die manuelle Charakterpflege und wurde nicht automatisch übernommen.".into()),
         _ => return Err("Unbekannter Character-Memory-Proposal-Typ.".into()),
     }
-    Ok(())
+    Ok((id, kind.to_string()))
 }
 #[tauri::command]
 pub fn complete_character_memory_review(
@@ -2882,7 +3156,7 @@ pub fn complete_character_memory_review(
         return Err("Bitte prüfe zuerst alle Charaktergedächtnis-Vorschläge.".into());
     }
     db.execute("UPDATE character_memory_update_runs SET status='reviewed',completed_at=COALESCE(completed_at,?1) WHERE id=?2",params![now(),run_id]).map_err(|e|sql_error("Character-Memory-Run konnte nicht abgeschlossen werden",e))?;
-    db.query_row("SELECT id,project_id,scene_id,content_hash,extractor_id,status,created_at,completed_at,error_message FROM character_memory_update_runs WHERE id=?1",params![run_id],memory_run_from_row).map_err(|e|sql_error("Character-Memory-Run konnte nicht geladen werden",e))
+    db.query_row("SELECT id,project_id,scene_id,content_hash,extractor_id,analyzed_content,status,created_at,completed_at,error_message FROM character_memory_update_runs WHERE id=?1",params![run_id],memory_run_from_row).map_err(|e|sql_error("Character-Memory-Run konnte nicht geladen werden",e))
 }
 
 fn json_array<T: serde::de::DeserializeOwned>(value: String) -> Result<Vec<T>, String> {
@@ -3024,15 +3298,17 @@ fn job_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ChapterGenerationJob> {
         status: row.get(8)?,
         active_provider: row.get(9)?,
         content_context_hash: row.get(10)?,
-        created_at: row.get(11)?,
-        updated_at: row.get(12)?,
-        completed_at: row.get(13)?,
-        error_message: row.get(14)?,
+        context_override_accepted: row.get::<_, i64>(11)? != 0,
+        last_resumed_at: row.get(12)?,
+        created_at: row.get(13)?,
+        updated_at: row.get(14)?,
+        completed_at: row.get(15)?,
+        error_message: row.get(16)?,
     })
 }
 
 fn load_job(db: &Connection, id: &str) -> Result<ChapterGenerationJob, String> {
-    db.query_row("SELECT id,project_id,target_book_id,target_after_chapter_id,requested_pages,target_words,requested_scene_count,user_instruction,status,active_provider,content_context_hash,created_at,updated_at,completed_at,error_message FROM chapter_generation_jobs WHERE id=?1", params![id], job_from_row).map_err(|e| sql_error("Schreibauftrag konnte nicht geladen werden", e))
+    db.query_row("SELECT id,project_id,target_book_id,target_after_chapter_id,requested_pages,target_words,requested_scene_count,user_instruction,status,active_provider,content_context_hash,context_override_accepted,last_resumed_at,created_at,updated_at,completed_at,error_message FROM chapter_generation_jobs WHERE id=?1", params![id], job_from_row).map_err(|e| sql_error("Schreibauftrag konnte nicht geladen werden", e))
 }
 
 #[tauri::command]
@@ -3078,7 +3354,7 @@ pub fn list_chapter_generation_jobs(
     project_id: String,
 ) -> Result<Vec<ChapterGenerationJob>, String> {
     let db = lock_db(&state)?;
-    let mut statement=db.prepare("SELECT id,project_id,target_book_id,target_after_chapter_id,requested_pages,target_words,requested_scene_count,user_instruction,status,active_provider,content_context_hash,created_at,updated_at,completed_at,error_message FROM chapter_generation_jobs WHERE project_id=?1 ORDER BY updated_at DESC").map_err(|e|sql_error("Schreibaufträge konnten nicht geladen werden",e))?;
+    let mut statement=db.prepare("SELECT id,project_id,target_book_id,target_after_chapter_id,requested_pages,target_words,requested_scene_count,user_instruction,status,active_provider,content_context_hash,context_override_accepted,last_resumed_at,created_at,updated_at,completed_at,error_message FROM chapter_generation_jobs WHERE project_id=?1 ORDER BY updated_at DESC").map_err(|e|sql_error("Schreibaufträge konnten nicht geladen werden",e))?;
     let rows = statement
         .query_map(params![project_id], job_from_row)
         .map_err(|e| sql_error("Schreibaufträge konnten nicht geladen werden", e))?
@@ -3112,6 +3388,19 @@ pub fn update_chapter_generation_job_status(
     let db = lock_db(&state)?;
     let stamp = now();
     db.execute("UPDATE chapter_generation_jobs SET status=?1,error_message=?2,updated_at=?3,completed_at=CASE WHEN ?1 IN ('accepted','cancelled','failed') THEN COALESCE(completed_at,?3) ELSE completed_at END WHERE id=?4",params![status,error_message,stamp,job_id]).map_err(|e|sql_error("Schreibauftragsstatus konnte nicht aktualisiert werden",e))?;
+    load_job(&db, &job_id)
+}
+
+#[tauri::command]
+pub fn accept_chapter_generation_context_override(
+    state: State<'_, DbState>,
+    job_id: String,
+) -> Result<ChapterGenerationJob, String> {
+    let db = lock_db(&state)?;
+    let changed = db.execute("UPDATE chapter_generation_jobs SET context_override_accepted=1,updated_at=?1,last_resumed_at=?1 WHERE id=?2", params![now(), job_id]).map_err(|e| sql_error("Kontextübernahme konnte nicht gespeichert werden", e))?;
+    if changed == 0 {
+        return Err("Schreibauftrag nicht gefunden.".into());
+    }
     load_job(&db, &job_id)
 }
 
@@ -3280,16 +3569,86 @@ pub fn list_chapter_generation_reviews(
 }
 
 #[tauri::command]
+pub fn save_chapter_generation_reviews(
+    state: State<'_, DbState>,
+    job_id: String,
+    reviews: Vec<SaveChapterGenerationReviewInput>,
+) -> Result<Vec<ChapterGenerationReview>, String> {
+    let db = lock_db(&state)?;
+    let _ = load_job(&db, &job_id)?;
+    let tx = db
+        .unchecked_transaction()
+        .map_err(|e| sql_error("Kapitelprüfung konnte nicht gestartet werden", e))?;
+    for review in reviews {
+        if !matches!(review.review_scope.as_str(), "section" | "chapter")
+            || !matches!(review.severity.as_str(), "info" | "warning" | "blocking")
+            || review.title.chars().count() > 300
+            || review.description.chars().count() > 4000
+        {
+            return Err("Ungültige Kapitelprüfung.".into());
+        }
+        let id = new_id();
+        let related_entities = serde_json::to_string(&review.related_entity_ids)
+            .map_err(|e| sql_error("Prüfungsbezug konnte nicht serialisiert werden", e))?;
+        let related_sources = serde_json::to_string(&review.related_source_ids)
+            .map_err(|e| sql_error("Prüfungsquellen konnten nicht serialisiert werden", e))?;
+        tx.execute("INSERT INTO chapter_generation_reviews(id,job_id,section_id,review_scope,issue_type,severity,title,description,related_entity_ids_json,related_source_ids_json,suggested_action,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13)", params![id, job_id, review.section_id, review.review_scope, review.issue_type, review.severity, review.title, review.description, related_entities, related_sources, review.suggested_action, review.status, now()]).map_err(|e| sql_error("Kapitelprüfung konnte nicht gespeichert werden", e))?;
+    }
+    tx.commit()
+        .map_err(|e| sql_error("Kapitelprüfung konnte nicht abgeschlossen werden", e))?;
+    let mut stmt = db.prepare("SELECT id,job_id,section_id,review_scope,issue_type,severity,title,description,related_entity_ids_json,related_source_ids_json,suggested_action,status,created_at,updated_at FROM chapter_generation_reviews WHERE job_id=?1 ORDER BY created_at").map_err(|e| sql_error("Kapitelprüfungen konnten nicht geladen werden", e))?;
+    let result = stmt
+        .query_map(params![job_id], review_from_row)
+        .map_err(|e| sql_error("Kapitelprüfungen konnten nicht geladen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Kapitelprüfungen konnten nicht geladen werden", e));
+    result
+}
+
+#[tauri::command]
+pub fn delete_chapter_generation_reviews_for_section(
+    state: State<'_, DbState>,
+    job_id: String,
+    section_id: String,
+) -> Result<(), String> {
+    let db = lock_db(&state)?;
+    db.execute(
+        "DELETE FROM chapter_generation_reviews WHERE job_id=?1 AND section_id=?2",
+        params![job_id, section_id],
+    )
+    .map_err(|e| sql_error("Kapitelprüfungen konnten nicht gelöscht werden", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn update_chapter_generation_review_status(
+    state: State<'_, DbState>,
+    id: String,
+    status: String,
+) -> Result<ChapterGenerationReview, String> {
+    if !matches!(
+        status.as_str(),
+        "open" | "accepted" | "exception" | "resolved"
+    ) {
+        return Err("Ungültiger Prüfstatus.".into());
+    }
+    let db = lock_db(&state)?;
+    db.execute(
+        "UPDATE chapter_generation_reviews SET status=?1,updated_at=?2 WHERE id=?3",
+        params![status, now(), id],
+    )
+    .map_err(|e| sql_error("Prüfstatus konnte nicht aktualisiert werden", e))?;
+    db.query_row("SELECT id,job_id,section_id,review_scope,issue_type,severity,title,description,related_entity_ids_json,related_source_ids_json,suggested_action,status,created_at,updated_at FROM chapter_generation_reviews WHERE id=?1", params![id], review_from_row).map_err(|e| sql_error("Kapitelprüfung konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
 pub fn accept_chapter_generation_job(
     state: State<'_, DbState>,
     job_id: String,
 ) -> Result<ChapterGenerationJob, String> {
     let db = lock_db(&state)?;
     let job = load_job(&db, &job_id)?;
-    if !matches!(
-        job.status.as_str(),
-        "draft_ready" | "reviewing" | "plan_ready"
-    ) {
+    if job.status != "draft_ready" {
         return Err("Der Entwurf ist noch nicht zur Übernahme bereit.".into());
     }
     let plan = db
@@ -3299,17 +3658,41 @@ pub fn accept_chapter_generation_job(
     if sections.is_empty() {
         return Err("Der Entwurf enthält noch keine Abschnitte.".into());
     }
+    if plan.review_status != "accepted"
+        || sections
+            .iter()
+            .any(|section| section.content.trim().is_empty())
+    {
+        return Err("Plan und alle Abschnitte müssen vor der Übernahme bestätigt sein.".into());
+    }
+    let blocking: i64 = db.query_row("SELECT COUNT(*) FROM chapter_generation_reviews WHERE job_id=?1 AND severity='blocking' AND status='open'", params![job_id], |row| row.get(0)).map_err(|e| sql_error("Kapitelprüfungen konnten nicht geprüft werden", e))?;
+    if blocking > 0 {
+        return Err("Offene blockierende Kapitelprüfung verhindert die Übernahme.".into());
+    }
     let tx = db
         .unchecked_transaction()
         .map_err(|e| sql_error("Übernahmetransaktion konnte nicht gestartet werden", e))?;
     let title = plan.chapter_title.trim();
-    let order: i64 = tx
-        .query_row(
+    let order: i64 = if let Some(after_id) = &job.target_after_chapter_id {
+        let after_order: i64 = tx
+            .query_row(
+                "SELECT order_index FROM chapters WHERE id=?1 AND book_id=?2",
+                params![after_id, job.target_book_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| sql_error("Kapitelposition konnte nicht ermittelt werden", e))?
+            .ok_or("Das Zielkapitel wurde seit Beginn des Entwurfs verschoben oder gelöscht.")?;
+        tx.execute("UPDATE chapters SET order_index=order_index+1,updated_at=?1 WHERE book_id=?2 AND order_index>?3", params![now(), job.target_book_id, after_order]).map_err(|e| sql_error("Kapitelreihenfolge konnte nicht aktualisiert werden", e))?;
+        after_order + 1
+    } else {
+        tx.query_row(
             "SELECT COALESCE(MAX(order_index),0)+1 FROM chapters WHERE book_id=?1",
             params![job.target_book_id],
             |r| r.get(0),
         )
-        .map_err(|e| sql_error("Kapitelposition konnte nicht ermittelt werden", e))?;
+        .map_err(|e| sql_error("Kapitelposition konnte nicht ermittelt werden", e))?
+    };
     let chapter_id = new_id();
     tx.execute(
         "INSERT INTO chapters(id,book_id,title,order_index) VALUES(?1,?2,?3,?4)",
@@ -3318,7 +3701,34 @@ pub fn accept_chapter_generation_job(
     .map_err(|e| sql_error("Kapitel konnte nicht übernommen werden", e))?;
     for (index, section) in sections.iter().enumerate() {
         let scene_id = new_id();
-        tx.execute("INSERT INTO scenes(id,chapter_id,title,order_index,content,pov,location,story_time,status,goal,notes) VALUES(?1,?2,?3,?4,?5,?6,'','','draft',?7,'')",params![scene_id,chapter_id,format!("Szene {}",index+1),index as i64+1,section.content,plan.pov_character_id.clone().unwrap_or_default(),plan.chapter_goal]).map_err(|e|sql_error("Szene konnte nicht übernommen werden",e))?;
+        let beat = plan.beats.get(index);
+        let title = beat
+            .map(|item| item.title.clone())
+            .unwrap_or_else(|| format!("Szene {}", index + 1));
+        let pov = beat
+            .and_then(|item| item.pov_character_id.clone())
+            .or_else(|| plan.pov_character_id.clone())
+            .unwrap_or_default();
+        let location = beat
+            .and_then(|item| item.location.clone())
+            .unwrap_or_default();
+        tx.execute("INSERT INTO scenes(id,chapter_id,title,order_index,content,pov,location,story_time,status,goal,notes) VALUES(?1,?2,?3,?4,?5,?6,?7,'','draft',?8,'')",params![scene_id,chapter_id,title,index as i64+1,section.content,pov,location,plan.chapter_goal]).map_err(|e|sql_error("Szene konnte nicht übernommen werden",e))?;
+        let scene = Scene {
+            id: scene_id.clone(),
+            chapter_id: chapter_id.clone(),
+            title,
+            order_index: index as i64 + 1,
+            content: section.content.clone(),
+            pov,
+            location,
+            story_time: String::new(),
+            status: "draft".into(),
+            goal: plan.chapter_goal.clone(),
+            notes: String::new(),
+            created_at: now(),
+            updated_at: now(),
+        };
+        insert_scene_version_in_transaction(&tx, &scene, &now(), "manual")?;
     }
     tx.execute("UPDATE chapter_generation_jobs SET status='accepted',completed_at=?1,updated_at=?1 WHERE id=?2",params![now(),job.id]).map_err(|e|sql_error("Schreibauftrag konnte nicht abgeschlossen werden",e))?;
     tx.commit()
@@ -3874,7 +4284,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            11
+            12
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);
@@ -3963,7 +4373,7 @@ mod tests {
                 .unwrap());
         }
         let tx = db.unchecked_transaction().unwrap();
-        apply_memory_payload(&tx, "project-zugestellt", "scene-3", "experience", serde_json::json!({"subjectCharacterId":"entity-marek","title":"Das Paket","objectiveSummary":"Marek sieht die abweichende Nummer.","subjectiveInterpretation":"Er zweifelt zunächst an sich.","emotionalImpact":"Verunsicherung","lastingEffect":"Mehr Vorsicht"}), "accepted").unwrap();
+        apply_memory_payload(&tx, "project-zugestellt", "scene-3", "experience", serde_json::json!({"subjectCharacterId":"entity-marek","title":"Das Paket","objectiveSummary":"Marek sieht die abweichende Nummer.","subjectiveInterpretation":"Er zweifelt zunächst an sich.","emotionalImpact":"Verunsicherung","lastingEffect":"Mehr Vorsicht"}), "accepted", None).unwrap();
         tx.commit().unwrap();
         assert_eq!(
             db.query_row(

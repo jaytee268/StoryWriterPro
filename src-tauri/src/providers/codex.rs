@@ -347,7 +347,24 @@ const BIBLE_SCHEMA: &str = r#"{
 }"#;
 const CHAT_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["answer","usedEntityIds","usedSourceIds","uncertainty","warnings"],"properties":{"answer":{"type":"string","minLength":1,"maxLength":6000},"usedEntityIds":{"type":"array","maxItems":100,"items":{"type":"string"}},"usedSourceIds":{"type":"array","maxItems":8,"items":{"type":"string"}},"uncertainty":{"enum":["low","medium","high"]},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
 const CHARACTER_MEMORY_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["proposals","warnings"],"properties":{"proposals":{"type":"array","maxItems":100,"items":{"type":"object","required":["proposalKind","subjectCharacterId","relatedCharacterId","targetEntityId","payload","classification","confidence","evidenceExcerpt","startOffset","endOffset","reason"],"properties":{"proposalKind":{"enum":["voice_pattern","experience","dialogue_memory","relationship_memory","knowledge_change","profile_observation","character_relation"]},"subjectCharacterId":{"type":["string","null"]},"relatedCharacterId":{"type":["string","null"]},"targetEntityId":{"type":["string","null"]},"payload":{"type":"object"},"classification":{"enum":["observable","interpretation","author_decision_required","possible_contradiction"]},"confidence":{"type":"number","minimum":0,"maximum":1},"evidenceExcerpt":{"type":"string","maxLength":1000},"startOffset":{"type":["integer","null"],"minimum":0},"endOffset":{"type":["integer","null"],"minimum":0},"reason":{"type":"string","maxLength":1000}}}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
-const LONGFORM_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["warnings"],"properties":{"warnings":{"type":"array","items":{"type":"string","maxLength":500}},"chapterTitle":{"type":"string","maxLength":300},"chapterGoal":{"type":"string","maxLength":2000},"chapterSummary":{"type":"string","maxLength":6000},"content":{"type":"string","maxLength":50000},"continuationSummary":{"type":"string","maxLength":2000},"observations":{"type":"array","maxItems":100},"issues":{"type":"array","maxItems":100},"beats":{"type":"array","maxItems":12}}}"#;
+const STYLE_ANALYSIS_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["observations","overallSummary","warnings"],"properties":{"observations":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["observationType","observationText","recommendation","confidence","evidence"],"properties":{"observationType":{"type":"string"},"observationText":{"type":"string","maxLength":4000},"recommendation":{"type":"string","maxLength":2000},"confidence":{"type":"number","minimum":0,"maximum":1},"evidence":{"type":"array","maxItems":10,"items":{"type":"string"}}}}},"overallSummary":{"type":"string","maxLength":6000},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
+const SUMMARY_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["summary","importantEvents","openThreads","characterChanges","knowledgeChanges","relationshipEffects","warnings"],"properties":{"summary":{"type":"string","maxLength":8000},"importantEvents":{"type":"array","items":{"type":"string","maxLength":1000}},"openThreads":{"type":"array","items":{"type":"string","maxLength":1000}},"characterChanges":{"type":"array","items":{"type":"string","maxLength":1000}},"knowledgeChanges":{"type":"array","items":{"type":"string","maxLength":1000}},"relationshipEffects":{"type":"array","items":{"type":"string","maxLength":1000}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
+const CHAPTER_PLAN_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["chapterTitle","chapterGoal","povCharacterId","startingState","endingState","chapterSummary","endingConnection","newInformation","withheldInformation","assumptions","beats","warnings"],"properties":{"chapterTitle":{"type":"string","minLength":1,"maxLength":300},"chapterGoal":{"type":"string","maxLength":2000},"povCharacterId":{"type":["string","null"]},"startingState":{"type":"string","maxLength":3000},"endingState":{"type":"string","maxLength":3000},"chapterSummary":{"type":"string","maxLength":6000},"endingConnection":{"type":"string","maxLength":3000},"newInformation":{"type":"array","items":{"type":"string","maxLength":1000}},"withheldInformation":{"type":"array","items":{"type":"string","maxLength":1000}},"assumptions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["type","text"],"properties":{"type":{"type":"string"},"text":{"type":"string","maxLength":2000}}}},"beats":{"type":"array","minItems":1,"maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["id","orderIndex","title","purpose","participatingCharacterIds","startingState","event","conflict","newInformation","knowledgeChanges","relationshipChanges","cluesUsed","loreEntityIds","endingHook","targetWords"],"properties":{"id":{"type":"string"},"orderIndex":{"type":"integer","minimum":0},"title":{"type":"string","maxLength":300},"purpose":{"type":"string","maxLength":2000},"participatingCharacterIds":{"type":"array","items":{"type":"string"}},"startingState":{"type":"string"},"event":{"type":"string"},"conflict":{"type":"string"},"newInformation":{"type":"array","items":{"type":"string"}},"knowledgeChanges":{"type":"array","items":{"type":"object"}},"relationshipChanges":{"type":"array","items":{"type":"object"}},"cluesUsed":{"type":"array","items":{"type":"string"}},"loreEntityIds":{"type":"array","items":{"type":"string"}},"endingHook":{"type":"string"},"targetWords":{"type":"integer","minimum":1}}}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
+const CHAPTER_SECTION_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["content","continuationSummary","continuityState","usedEntityIds","usedMemoryIds","usedSourceIds","warnings"],"properties":{"content":{"type":"string","minLength":1,"maxLength":50000},"continuationSummary":{"type":"string","maxLength":3000},"continuityState":{"type":"object","additionalProperties":false,"required":["currentLocation","currentStoryTime","presentCharacterIds","characterStates","establishedFacts","knowledgeChanges","relationshipChanges","movedObjects","injuries","cluesIntroduced","promisesCreated","unresolvedActions","lastParagraphSummary"],"properties":{"currentLocation":{"type":"string"},"currentStoryTime":{"type":"string"},"presentCharacterIds":{"type":"array","items":{"type":"string"}},"characterStates":{"type":"array","items":{"type":"object"}},"establishedFacts":{"type":"array","items":{"type":"string"}},"knowledgeChanges":{"type":"array","items":{"type":"object"}},"relationshipChanges":{"type":"array","items":{"type":"object"}},"movedObjects":{"type":"array","items":{"type":"object"}},"injuries":{"type":"array","items":{"type":"object"}},"cluesIntroduced":{"type":"array","items":{"type":"string"}},"promisesCreated":{"type":"array","items":{"type":"string"}},"unresolvedActions":{"type":"array","items":{"type":"string"}},"lastParagraphSummary":{"type":"string"}}},"usedEntityIds":{"type":"array","items":{"type":"string"}},"usedMemoryIds":{"type":"array","items":{"type":"string"}},"usedSourceIds":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
+const REVIEW_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["issues","warnings"],"properties":{"issues":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["reviewScope","issueType","severity","title","description","relatedEntityIds","relatedSourceIds","suggestedAction","status"],"properties":{"reviewScope":{"enum":["section","chapter"]},"issueType":{"type":"string"},"severity":{"enum":["info","warning","blocking"]},"title":{"type":"string","maxLength":300},"description":{"type":"string","maxLength":4000},"relatedEntityIds":{"type":"array","items":{"type":"string"}},"relatedSourceIds":{"type":"array","items":{"type":"string"}},"suggestedAction":{"type":"string","maxLength":1000},"status":{"type":"string"}}}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
+
+fn schema_for_task(kind: &CodexTaskKind) -> &'static str {
+    match kind {
+        CodexTaskKind::AnalyzeProjectStyle => STYLE_ANALYSIS_SCHEMA,
+        CodexTaskKind::SummarizeScene
+        | CodexTaskKind::SummarizeChapter
+        | CodexTaskKind::SummarizeBook => SUMMARY_SCHEMA,
+        CodexTaskKind::PlanChapterDraft => CHAPTER_PLAN_SCHEMA,
+        CodexTaskKind::DraftChapterSection => CHAPTER_SECTION_SCHEMA,
+        CodexTaskKind::ReviewChapterSection | CodexTaskKind::ReviewCompleteChapter => REVIEW_SCHEMA,
+        _ => CHAT_SCHEMA,
+    }
+}
 
 fn prompt_for(kind: &CodexTaskKind) -> (&'static str, &'static str) {
     match kind {
@@ -537,24 +554,10 @@ fn create_snapshot(input: &RunCodexTaskInput) -> Result<CodexSnapshotGuard, Code
         write_read_only(&directory.join("request.json"), &serialized)?;
         write_read_only(
             &directory.join("output-schema.json"),
-            if input.task_kind == CodexTaskKind::ExtractBiblePatch {
-                BIBLE_SCHEMA.as_bytes()
-            } else if input.task_kind == CodexTaskKind::ExtractCharacterMemoryPatch {
-                CHARACTER_MEMORY_SCHEMA.as_bytes()
-            } else if matches!(
-                input.task_kind,
-                CodexTaskKind::AnalyzeProjectStyle
-                    | CodexTaskKind::SummarizeScene
-                    | CodexTaskKind::SummarizeChapter
-                    | CodexTaskKind::SummarizeBook
-                    | CodexTaskKind::PlanChapterDraft
-                    | CodexTaskKind::DraftChapterSection
-                    | CodexTaskKind::ReviewChapterSection
-                    | CodexTaskKind::ReviewCompleteChapter
-            ) {
-                LONGFORM_SCHEMA.as_bytes()
-            } else {
-                CHAT_SCHEMA.as_bytes()
+            match input.task_kind {
+                CodexTaskKind::ExtractBiblePatch => BIBLE_SCHEMA.as_bytes(),
+                CodexTaskKind::ExtractCharacterMemoryPatch => CHARACTER_MEMORY_SCHEMA.as_bytes(),
+                _ => schema_for_task(&input.task_kind).as_bytes(),
             },
         )?;
         write_read_only(
@@ -1093,6 +1096,58 @@ pub fn validate_longform_result(result: &Value) -> Result<Value, CodexError> {
     Ok(result.clone())
 }
 
+fn validate_longform_result_for_task(
+    result: &Value,
+    kind: &CodexTaskKind,
+) -> Result<Value, CodexError> {
+    let value = validate_longform_result(result)?;
+    let required: &[&str] = match kind {
+        CodexTaskKind::AnalyzeProjectStyle => &["observations", "overallSummary"],
+        CodexTaskKind::SummarizeScene
+        | CodexTaskKind::SummarizeChapter
+        | CodexTaskKind::SummarizeBook => &[
+            "summary",
+            "importantEvents",
+            "openThreads",
+            "characterChanges",
+            "knowledgeChanges",
+            "relationshipEffects",
+        ],
+        CodexTaskKind::PlanChapterDraft => &[
+            "chapterTitle",
+            "chapterGoal",
+            "povCharacterId",
+            "startingState",
+            "endingState",
+            "chapterSummary",
+            "endingConnection",
+            "newInformation",
+            "withheldInformation",
+            "assumptions",
+            "beats",
+        ],
+        CodexTaskKind::DraftChapterSection => &[
+            "content",
+            "continuationSummary",
+            "continuityState",
+            "usedEntityIds",
+            "usedMemoryIds",
+            "usedSourceIds",
+        ],
+        CodexTaskKind::ReviewChapterSection | CodexTaskKind::ReviewCompleteChapter => &["issues"],
+        _ => &[],
+    };
+    for field in required {
+        if value.get(*field).is_none() {
+            return Err(CodexError::new(
+                "CODEX_SCHEMA_VALIDATION_FAILED",
+                format!("Langformergebnis benötigt {field}."),
+            ));
+        }
+    }
+    Ok(value)
+}
+
 pub fn validate_chat_result(result: &Value, request: &Value) -> Result<Value, CodexError> {
     let object = result.as_object().ok_or_else(|| {
         CodexError::new(
@@ -1434,7 +1489,9 @@ pub fn run_task(
         | CodexTaskKind::PlanChapterDraft
         | CodexTaskKind::DraftChapterSection
         | CodexTaskKind::ReviewChapterSection
-        | CodexTaskKind::ReviewCompleteChapter => validate_longform_result(&raw)?,
+        | CodexTaskKind::ReviewCompleteChapter => {
+            validate_longform_result_for_task(&raw, &input.task_kind)?
+        }
     };
     if let Some(extra) = validated.get("warnings").and_then(Value::as_array) {
         warnings.extend(extra.iter().filter_map(Value::as_str).map(str::to_owned));
