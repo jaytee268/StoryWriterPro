@@ -446,3 +446,30 @@ body { background: var(--bg); color: var(--text); }
   .simple-mode.sidebar-collapsed { grid-template-columns: 68px minmax(560px, 1fr); }
 }
 .simple-editor-layout.outline-collapsed .simple-manuscript .manuscript-page { border-radius: 0 3px 3px 0; }
+
+/* Timeline paper: same calm, hand-drawn workspace as the mindmap. */
+.simple-timeline-view .view-heading { align-items: center; }
+.timeline-paper-actions { display: flex; align-items: center; gap: 6px; color: #786c5d; font: 12px "DM Mono", monospace; }
+.timeline-paper-filters { display: flex; align-items: center; gap: 7px; margin-top: 25px; padding: 8px 10px; overflow-x: auto; white-space: nowrap; color: #786c5d; font: 12px "Comic Sans MS", "Bradley Hand", cursive; }
+.timeline-paper-filters span { margin-right: 4px; }
+.timeline-paper-filters button { padding: 7px 12px; border: 1px solid transparent; border-radius: 999px; color: #756b5f; background: transparent; font: inherit; }
+.timeline-paper-filters button:hover, .timeline-paper-filters button.active { border-color: #c4a77d; color: #684f36; background: #fffaf0; box-shadow: 1px 2px 0 #8b6d4420; }
+.timeline-paper-board { position: relative; min-height: 570px; margin-top: 10px; overflow: auto; border: 1px solid #c4b9a9; border-radius: 12px; background-color: #e9e2d4; background-image: radial-gradient(circle at 20% 20%, #ffffff45 0 1px, transparent 1px), linear-gradient(#cfc5b555 1px, transparent 1px), linear-gradient(90deg, #cfc5b555 1px, transparent 1px); background-size: 17px 17px, 34px 34px, 34px 34px; box-shadow: inset 0 0 55px #8f806322, 0 8px 24px #4e42300d; }
+.timeline-paper-world { position: relative; min-height: 540px; padding: 34px 38px 40px; transform-origin: top left; }
+.timeline-paper-ruler { display: flex; justify-content: space-between; width: 1490px; margin: 0 0 30px 126px; color: #897b6b; font: 13px "DM Mono", monospace; }
+.timeline-paper-spine { position: absolute; top: 77px; left: 160px; right: 50px; height: 3px; border-radius: 4px; background: #765b3e; box-shadow: 0 2px 0 #fffaf080; }
+.timeline-paper-track { position: relative; display: flex; min-height: 105px; }
+.timeline-paper-track-label { display: flex; align-items: flex-start; gap: 8px; width: 125px; flex: none; padding-top: 28px; color: #6e604f; font: 15px "Comic Sans MS", "Bradley Hand", cursive; }
+.timeline-track-dot { width: 10px; height: 10px; margin-top: 4px; border-radius: 50%; background: #7ca77d; box-shadow: 0 1px 0 #fffaf0; }
+.track-1 { background: #a891c9; }.track-2 { background: #d5ae5c; }.track-3 { background: #c88762; }
+.timeline-paper-events { position: relative; display: flex; align-items: flex-start; gap: 24px; min-width: 1490px; padding: 13px 0 25px; }
+.timeline-paper-card { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 7px; width: 245px; min-height: 94px; padding: 14px 16px; border: 0; border-radius: 4px 9px 5px 7px; color: #403a34; background: #fffdf3; box-shadow: 2px 4px 0 #9f8c7340, 0 9px 13px #685a451c; text-align: left; font-family: "Comic Sans MS", "Bradley Hand", cursive; transform: rotate(-.8deg); }
+.timeline-paper-card:nth-child(2n) { transform: rotate(1deg); background: #fff8df; }.timeline-paper-card:nth-child(3n) { transform: rotate(-.3deg); background: #f3f8e8; }
+.timeline-paper-card:hover, .timeline-paper-card.selected { outline: 2px solid #8b6d44; box-shadow: 3px 6px 0 #8b6d4440, 0 12px 18px #685a4528; }
+.timeline-paper-card.uncertain { background: #fff1d6; }
+.timeline-paper-card strong { font-size: 16px; line-height: 1.2; }.timeline-paper-card > span:last-child { color: #817464; font-size: 12px; }.timeline-paper-time { display: flex; align-items: center; gap: 5px; color: #8b6d44; font: 12px "DM Mono", monospace; }
+.timeline-paper-empty { margin: 45px 0 0 125px; color: #786c5d; font: 16px "Comic Sans MS", "Bradley Hand", cursive; }
+.timeline-paper-hint { position: sticky; bottom: 14px; left: 16px; display: inline-block; margin: 0 0 14px 16px; padding: 8px 11px; color: #684f36; background: #fffaf0e8; border: 1px solid #c4a77d; border-radius: 8px; font: 12px "Comic Sans MS", "Bradley Hand", cursive; box-shadow: 0 3px 8px #685a4514; }
+.timeline-paper-detail { display: grid; grid-template-columns: 1.15fr 1fr auto; gap: 24px; align-items: center; margin-top: 18px; padding: 22px 24px; border: 1px solid #c4b9a9; border-radius: 10px; color: #403a34; background: #fffdf3; box-shadow: 0 7px 18px #4e423012; }
+.timeline-paper-detail h2 { margin: 8px 0 6px; font: 24px "Comic Sans MS", "Bradley Hand", cursive; }.timeline-paper-detail p { margin: 0; color: #786c5d; font: 14px/1.55 "Comic Sans MS", "Bradley Hand", cursive; }.timeline-paper-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; color: #786c5d; font: 13px "Comic Sans MS", "Bradley Hand", cursive; }.timeline-paper-facts span { display: flex; flex-direction: column; gap: 3px; }.timeline-paper-facts b { color: #9a8469; font: 10px "DM Mono", monospace; text-transform: uppercase; }
+@media (max-width: 900px) { .timeline-paper-detail { grid-template-columns: 1fr; }.timeline-paper-detail .text-button { justify-self: start; } }
