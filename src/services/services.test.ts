@@ -10,6 +10,7 @@ import { buildCodexBibleRequest, providerRouter } from './aiProviderService';
 import { canonicalizeSceneForAi, contentHash as canonicalContentHash, unicodeIndexOf, unicodeSlice } from '../utils/aiText';
 import { editorContentToPlainText } from '../utils/editorContent';
 import { LocalPrototypeCharacterMemoryExtractor } from './characterMemoryExtractor';
+import { contextHashForLongform } from './longformWorkflow';
 
 const store = new Map<string, string>();
 vi.stubGlobal('localStorage', { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => store.set(key, value), removeItem: (key: string) => store.delete(key) });
@@ -228,5 +229,60 @@ describe('Story-Bible-Review und grounded context', () => {
     expect(reviews[0]!.severity).toBe('blocking');
     const exception = await repository.updateReviewStatus(reviews[0]!.id, 'exception');
     expect(exception.status).toBe('exception');
+  });
+
+  it('verwendet aktuelles Wissen ohne Historie und schließt spätere Szenenzustände aus', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const character = workspace.entities.find((entity) => entity.type === 'character')!;
+    const fact = workspace.entities.find((entity) => entity.type === 'fact' || entity.type === 'clue')!;
+    const firstScene = workspace.chapters[0]!.scenes[0]!;
+    const lastScene = workspace.chapters.at(-1)!.scenes.at(-1)!;
+    await repository.saveCharacterKnowledgeState({ projectId: workspace.project.id, characterId: character.id, factEntityId: fact.id, knowledgeState: 'knows', acquiredSceneId: firstScene.id, changedSceneId: firstScene.id, certainty: 1, notes: '', status: 'confirmed', authorConfirmed: true });
+    await repository.saveCharacterSceneState({ projectId: workspace.project.id, characterEntityId: character.id, sceneId: lastScene.id, emotionalState: 'später', physicalState: '', goal: '', conflict: '', knowledgeNotes: 'spätere Notiz', relationshipState: '', changeNote: '' });
+    const context = await new DeterministicProjectContextBuilder(repository).build({ projectId: workspace.project.id, currentSceneId: firstScene.id, userQuestion: character.name });
+    expect(context.characterKnowledgeStates?.some((state) => state.factEntityId === fact.id && state.knowledgeState === 'knows')).toBe(true);
+    expect(context.characterStates?.some((state) => state.sceneId === lastScene.id)).toBe(false);
+  });
+
+  it('verwendet historische Wissensstände nur bis zur Zielszene', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const character = workspace.entities.find((entity) => entity.type === 'character')!;
+    const fact = workspace.entities.find((entity) => entity.type === 'fact' || entity.type === 'clue')!;
+    const scenes = workspace.chapters.flatMap((chapter) => chapter.scenes);
+    const first = await repository.saveCharacterKnowledgeState({ projectId: workspace.project.id, characterId: character.id, factEntityId: fact.id, knowledgeState: 'suspects', acquiredSceneId: scenes[0]!.id, changedSceneId: scenes[0]!.id, certainty: 0.4, notes: '', status: 'confirmed', authorConfirmed: true });
+    await repository.saveCharacterKnowledgeState({ ...first, knowledgeState: 'knows', acquiredSceneId: scenes[1]!.id, changedSceneId: scenes[1]!.id });
+    const context = await new DeterministicProjectContextBuilder(repository).build({ projectId: workspace.project.id, currentSceneId: scenes[0]!.id, userQuestion: character.name });
+    expect(context.characterKnowledgeStates?.find((state) => state.factEntityId === fact.id)?.knowledgeState).toBe('suspects');
+  });
+
+  it('verwendet nur akzeptierte Stilbeobachtungen und bestätigt aktuelle Summaries', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const run = await repository.createProjectStyleAnalysisRun({ projectId: workspace.project.id, sourceHash: 'style-hash', providerId: 'local-prototype' });
+    const [accepted, rejected] = await repository.saveProjectStyleObservations(run.id, [
+      { runId: run.id, projectId: workspace.project.id, observationType: 'dialogue', observationText: 'Kurze Dialogzeilen.', recommendation: 'Beibehalten', confidence: 0.9, evidence: [] },
+      { runId: run.id, projectId: workspace.project.id, observationType: 'pacing', observationText: 'Zu viele Nebenwege.', recommendation: 'Kürzen', confidence: 0.8, evidence: [] },
+    ]);
+    await repository.reviewProjectStyleObservation(accepted!.id, 'accepted');
+    await repository.reviewProjectStyleObservation(rejected!.id, 'rejected');
+    await repository.saveNarrativeSummary({ projectId: workspace.project.id, scopeType: 'project', scopeId: workspace.project.id, contentHash: 'summary-1', summary: 'Bestätigte Zusammenfassung.', importantEvents: [], openThreads: [], characterChanges: [], status: 'confirmed', authorConfirmed: true });
+    const context = await new DeterministicProjectContextBuilder(repository).build({ projectId: workspace.project.id, currentSceneId: workspace.chapters[0]!.scenes[0]!.id, userQuestion: 'Dialog' });
+    expect(context.acceptedStyleObservations?.map((item) => item.id)).toEqual([accepted!.id]);
+    expect(context.narrativeSummaries?.some((item) => item.status === 'confirmed')).toBe(true);
+  });
+
+  it('markiert eine Summary nach Contentänderung als outdated und ändert den Longform-Hash', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const scene = workspace.chapters[0]!.scenes[0]!;
+    const saved = await repository.saveNarrativeSummary({ projectId: workspace.project.id, scopeType: 'scene', scopeId: scene.id, contentHash: 'old', summary: 'Alt', importantEvents: [], openThreads: [], characterChanges: [], status: 'confirmed', authorConfirmed: true });
+    await repository.markNarrativeSummaryOutdated(workspace.project.id, 'scene', scene.id, 'new');
+    expect((await repository.listNarrativeSummaries(workspace.project.id, 'scene', scene.id)).find((item) => item.id === saved.id)?.status).toBe('outdated');
+    const acceptedObservation = { id: 'style-observation', runId: 'style-run', projectId: workspace.project.id, observationType: 'dialogue' as const, observationText: 'Kurze Dialogzeilen.', recommendation: 'Beibehalten', confidence: 0.9, evidence: [], reviewStatus: 'accepted' as const, createdAt: '2026-08-03T00:00:00Z' };
+    const before = contextHashForLongform(workspace.project, workspace.chapters, undefined, { projectId: workspace.project.id, relevantEntities: [], relevantSources: [], openPlotThreads: [], possibleContradictions: [], acceptedStyleObservations: [acceptedObservation], narrativeSummaries: [saved] });
+    const after = contextHashForLongform(workspace.project, workspace.chapters, undefined, { projectId: workspace.project.id, relevantEntities: [], relevantSources: [], openPlotThreads: [], possibleContradictions: [], acceptedStyleObservations: [{ ...acceptedObservation, reviewStatus: 'edited', observationText: 'Geändert.' }], narrativeSummaries: [{ ...saved, status: 'outdated' }] });
+    expect(after).not.toBe(before);
   });
 });

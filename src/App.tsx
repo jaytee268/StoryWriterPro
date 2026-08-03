@@ -47,6 +47,7 @@ export function App() {
   const [reviewProposals, setReviewProposals] = useState<BibleProposal[]>([]);
   const [activeMemoryRun, setActiveMemoryRun] = useState<CharacterMemoryUpdateRun>();
   const [memoryProposals, setMemoryProposals] = useState<CharacterMemoryProposal[]>([]);
+  const [resumeMemoryReview, setResumeMemoryReview] = useState<{ run: CharacterMemoryUpdateRun; proposals: CharacterMemoryProposal[] }>();
   const [providerSettings, setProviderSettings] = useState<AiProviderSettings>(defaultAiProviderSettings);
   const [providerNotice, setProviderNotice] = useState('');
   const [bibleUpdateProvider, setBibleUpdateProvider] = useState<StoryAiProvider>();
@@ -65,6 +66,17 @@ export function App() {
   useEffect(() => { void providerRouter.getSettings().then(setProviderSettings).catch(() => setProviderSettings(defaultAiProviderSettings)); }, []);
 
   const workspace = loadState.status === 'ready' ? loadState.workspace : undefined;
+  useEffect(() => {
+    if (!workspace?.project.id || activeMemoryRun) return;
+    let cancelled = false;
+    void repository.listCharacterMemoryUpdateRuns(workspace.project.id).then(async (runs) => {
+      const open = runs.filter((run) => ['pending', 'running', 'completed'].includes(run.status)).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+      if (!open) return;
+      const proposals = await repository.listCharacterMemoryProposals(open.id);
+      if (!cancelled && proposals.some((proposal) => proposal.reviewStatus === 'pending')) setResumeMemoryReview({ run: open, proposals });
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [activeMemoryRun, workspace?.project.id]);
   useEffect(() => {
     if (!workspace) return;
     const sceneIds = workspace.chapters.flatMap((chapter) => chapter.scenes).map((scene) => scene.id);
@@ -332,6 +344,7 @@ export function App() {
       <div className="content-scroll">{providerNotice && <div className="provider-notice" role="status"><span>{providerNotice}</span><button className="text-button" onClick={() => setProviderNotice('')}>Ausblenden</button></div>}{viewError && <div className="save-error workspace-save-error" role="alert"><strong>Speichern erforderlich</strong><span>{viewError}</span><button className="text-button" onClick={() => void retryEditorSave()}>Erneut versuchen</button></div>}{loadState.status === 'loading' && <LoadingView mode={repository.mode} />}{loadState.status === 'error' && <ErrorView message={loadState.message} detail={loadState.detail} onRetry={() => void loadWorkspace()} />}{loadState.status === 'ready' && renderView()}</div>
     </main>
     {assistantOpen && <div className="assistant-drawer"><button className="drawer-close" onClick={() => setAssistantOpen(false)} aria-label="Assistent schließen"><X size={20} /></button>{workspace && <ChatPanel messages={messages} onMessagesChange={setMessages} contextBuilder={contextBuilder} contextRequest={{ projectId: workspace.project.id, currentChapterId: currentChapter?.id, currentSceneId: currentScene?.id }} onOpenSourceReference={(reference) => void openSourceReference(reference)} providerRouter={providerRouter} onLongformRequest={(instruction) => { setLongformInstruction(instruction); setAssistantOpen(false); }} />}</div>}
+    {resumeMemoryReview && !activeMemoryRun && <div className="provider-notice" role="status"><span>Ein offener Character-Memory-Review wartet auf deine Entscheidung.</span><button className="primary-button" onClick={() => { setActiveMemoryRun(resumeMemoryReview.run); setMemoryProposals(resumeMemoryReview.proposals); setResumeMemoryReview(undefined); void requestViewChange('bible'); }}>Review fortsetzen</button><button className="text-button" onClick={() => setResumeMemoryReview(undefined)}>Später</button></div>}
     {longformInstruction && workspace && <div className="longform-overlay"><LongformDraftView project={workspace.project} chapters={workspace.chapters} entities={workspace.entities} repository={longformRepository} instruction={longformInstruction} activeProvider={providerSettings.activeProvider} onClose={() => setLongformInstruction(undefined)} onAccepted={async () => { setLongformInstruction(undefined); await loadWorkspace(); await requestViewChange('editor'); }} /></div>}
     {activeModal && <Modal type={activeModal} onClose={() => setActiveModal(null)} />}
     {closePrompt && <ClosePrompt message={closePrompt} onRetry={() => void finishClose(false)} onForceClose={() => void finishClose(true)} onCancel={() => setClosePrompt('')} />}

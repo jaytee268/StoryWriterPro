@@ -4,8 +4,10 @@ import type { Chapter, ChapterGenerationJob, ChapterGenerationPlan, ChapterGener
 import type { LongformRepository } from '../../services/longformRepository';
 import { buildPreflight, contextHashForLongform, parseLongformIntent, targetWords } from '../../services/longformWorkflow';
 import { createLongformAiProvider } from '../../services/longformAiService';
+import { providerRouter } from '../../services/aiProviderService';
 import { createStoryRepository } from '../../services/storyRepository';
 import { LongformContextBundleBuilder } from '../../services/longformContext';
+import { editorContentToPlainText } from '../../utils/editorContent';
 
 interface Props { project: Project; chapters: Chapter[]; entities: StoryEntity[]; repository: LongformRepository; instruction: string; activeProvider: string; onClose: () => void; onAccepted: (plan: ChapterGenerationPlan, sections: ChapterGenerationSection[]) => Promise<void>; }
 
@@ -27,12 +29,15 @@ export function LongformDraftView({ project, chapters, entities, repository, ins
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [contextOverrideRequired, setContextOverrideRequired] = useState(false);
+  const [summaryBusy, setSummaryBusy] = useState(false);
+  const ai = useMemo(() => preferences ? createLongformAiProvider(activeProvider, preferences) : undefined, [activeProvider, preferences]);
 
   useEffect(() => {
     void Promise.all([repository.getStoryDirection(project.id), repository.getWritingPreferences(project.id)])
       .then(([loadedDirection, loadedPreferences]) => { setDirection(loadedDirection); setDirectionDraft(loadedDirection ?? emptyDirection(project.id)); setPreferences(loadedPreferences); })
       .catch((cause) => setError(cause instanceof Error ? cause.message : 'Langformdaten konnten nicht geladen werden.'));
   }, [project.id, repository]);
+
 
   useEffect(() => {
     void repository.listJobs(project.id).then(async (jobs) => {
@@ -60,13 +65,27 @@ export function LongformDraftView({ project, chapters, entities, repository, ins
     finally { setBusy(false); }
   };
 
+  const createProjectSummary = async () => {
+    if (!preferences) return;
+    setSummaryBusy(true); setError('');
+    try {
+      const active = await providerRouter.getActiveProvider();
+      const content = chapters.flatMap((chapter) => chapter.scenes.map((scene) => editorContentToPlainText(scene.content))).join('\n\n');
+      const result = await active.provider.summarize('project', project.id, Array.from(content).slice(0, 40000).join(''), active.settings.bibleUpdateTimeoutSeconds);
+      if (!result.summary.trim()) throw new Error(result.warnings[0] ?? 'Keine Zusammenfassung erhalten.');
+      await sourceRepository.saveNarrativeSummary({ projectId: project.id, scopeType: 'project', scopeId: project.id, contentHash: contextHashForLongform(project, chapters, direction, context), summary: result.summary, importantEvents: result.importantEvents, openThreads: result.openThreads, characterChanges: result.characterChanges, status: 'proposed', authorConfirmed: false });
+      setError('Zusammenfassung wurde als Vorschlag gespeichert. Bitte vor der Planung bestätigen.');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Zusammenfassung konnte nicht erzeugt werden.'); }
+    finally { setSummaryBusy(false); }
+  };
+
+
   const start = async () => {
-    if (!preferences || !preflight?.canPlan || !preflight.targetBookId) return;
+    if (!preferences || !preflight?.canPlan || !preflight.targetBookId || !ai) return;
     setBusy(true); setError('');
     try {
       const created = await repository.createJob({ projectId: project.id, targetBookId: preflight.targetBookId, targetAfterChapterId: preflight.afterChapterId, requestedPages: intent.pages, targetWords: totalWords, requestedSceneCount: intent.sceneCount ?? preferences.defaultSceneCount, userInstruction: instruction, activeProvider, contentContextHash: contextHashForLongform(project, chapters, direction, context) });
       setJob(created);
-      const ai = createLongformAiProvider(activeProvider, preferences);
       const frame = await ai.createPlan({ project, chapters, entities, direction, preferences, job: created, context });
       const savedPlan = await repository.savePlan({ ...frame, jobId: created.id, reviewStatus: 'pending' });
       setPlan(savedPlan); setStep('plan');
@@ -92,7 +111,7 @@ export function LongformDraftView({ project, chapters, entities, repository, ins
     try {
       const savedPlan = await repository.savePlan({ ...plan, reviewStatus: 'accepted' });
       setPlan(savedPlan);
-      const ai = createLongformAiProvider(activeProvider, preferences);
+      if (!ai) throw new Error('Der Longform-Anbieter ist noch nicht bereit.');
       const nextSections: ChapterGenerationSection[] = [];
       for (const beat of savedPlan.beats) {
         const existing = sections.find((section) => section.orderIndex === beat.orderIndex && section.content.trim());
@@ -122,7 +141,7 @@ export function LongformDraftView({ project, chapters, entities, repository, ins
     try {
       await repository.deleteReviewsForSection(job.id, section.id);
       const previous = sections.filter((item) => item.orderIndex < section.orderIndex).sort((a, b) => a.orderIndex - b.orderIndex);
-      const ai = createLongformAiProvider(activeProvider, preferences);
+      if (!ai) throw new Error('Der Longform-Anbieter ist noch nicht bereit.');
       const beat = plan.beats.find((item) => item.orderIndex === section.orderIndex);
       if (!beat) throw new Error('Der zugehörige Plan-Beat wurde nicht gefunden.');
       const generated = await ai.draftSection({ project, chapters, entities, direction, preferences, job, plan, section, previousSections: previous, context });
@@ -162,13 +181,23 @@ export function LongformDraftView({ project, chapters, entities, repository, ins
     finally { setBusy(false); }
   };
 
+  const cancelGeneration = async () => {
+    if (!ai || !job) return;
+    try {
+      await ai.cancelActive();
+      const saved = await repository.updateJobStatus(job.id, 'reviewing');
+      setJob(saved);
+      setError('Der Codex-Aufruf wurde abgebrochen. Der Schreibauftrag kann fortgesetzt werden.');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Der Codex-Aufruf konnte nicht abgebrochen werden.'); }
+  };
+
   if (!preferences) return <section className="longform-view"><p>Vorbereitung wird geladen …</p></section>;
   const wordCount = sections.reduce((sum, section) => sum + section.actualWords, 0);
   return <section className="longform-view">
-    <header className="longform-head"><button className="ghost-button" onClick={onClose}><ChevronLeft size={16} /> Zurück zum Assistenten</button><div><span className="eyebrow">GEFÜHRTER KAPITELENTWURF</span><h1>{step === 'preflight' ? 'Vorbereitung' : plan?.chapterTitle ?? 'Kapitelentwurf'}</h1><p>{instruction}</p></div><button className="icon-button" onClick={onClose} aria-label="Workflow schließen"><X size={18} /></button></header>
+    <header className="longform-head"><button className="ghost-button" onClick={busy ? () => void cancelGeneration() : onClose}><ChevronLeft size={16} /> {busy ? 'Generierung abbrechen' : 'Zurück zum Assistenten'}</button><div><span className="eyebrow">GEFÜHRTER KAPITELENTWURF</span><h1>{step === 'preflight' ? 'Vorbereitung' : plan?.chapterTitle ?? 'Kapitelentwurf'}</h1><p>{instruction}</p></div><button className="icon-button" onClick={busy ? () => void cancelGeneration() : onClose} aria-label={busy ? 'Generierung abbrechen' : 'Workflow schließen'}>{busy ? <X size={18} /> : <X size={18} />}</button></header>
     {error && <div className="save-error" role="alert">{error}</div>}
     <div className="longform-steps"><span className={step === 'preflight' ? 'active' : 'done'}>1 Umfang & Kontext</span><span className={step === 'plan' ? 'active' : step === 'draft' ? 'done' : ''}>2 Plan bestätigen</span><span className={step === 'draft' ? 'active' : ''}>3 Entwurf prüfen</span></div>
-    {step === 'preflight' && <div className="longform-grid"><div className="longform-card"><span className="eyebrow">ZIELUMFANG</span><strong className="longform-number">{intent.pages ? `${intent.pages} Seiten` : `${intent.words ?? totalWords} Wörter`}</strong><p>{intent.pages ? `${intent.pages} Seiten entsprechen in diesem Projekt ungefähr ${totalWords.toLocaleString('de-DE')} Wörtern.` : 'Die Zielwortzahl ist eine Schätzung für die Planung, keine exakte Export-Seitenzahl.'}</p><label className="field-label">Zielwörter<input type="number" value={totalWords} readOnly /></label></div><div className="longform-card"><span className="eyebrow">PREFLIGHT</span>{preflight?.items.map((item) => <div className={`preflight-row ${item.level}`} key={`${item.level}-${item.label}`}><span>{item.level === 'blocking' ? 'Blockierend' : item.level === 'recommended' ? 'Empfohlen' : 'Optional'}</span><div><strong>{item.label}</strong><p>{item.detail}</p></div></div>)}</div><div className="longform-card direction-card"><div className="card-title-row"><div><span className="eyebrow">STORY-RICHTUNG</span><h2>Was soll die Geschichte gerade tun?</h2></div><button className="ghost-button" onClick={() => void saveDirection()} disabled={busy}><Save size={15} /> Speichern</button></div><div className="form-grid"><label className="field-label full-field">Prämisse<textarea value={directionDraft.premise} onChange={(event) => setDirectionDraft({ ...directionDraft, premise: event.target.value })} rows={2} /></label><label className="field-label">Geplantes Ende<textarea value={directionDraft.plannedEnding} onChange={(event) => setDirectionDraft({ ...directionDraft, plannedEnding: event.target.value })} rows={2} /></label><label className="field-label">Endstatus<select value={directionDraft.endingStatus} onChange={(event) => setDirectionDraft({ ...directionDraft, endingStatus: event.target.value as StoryDirection['endingStatus'] })}><option value="open">Noch offen</option><option value="preferred">Bevorzugt</option><option value="fixed">Fest</option></select></label><label className="field-label">Nächster Wendepunkt<input value={directionDraft.nextTurningPoint} onChange={(event) => setDirectionDraft({ ...directionDraft, nextTurningPoint: event.target.value })} /></label></div></div><div className="longform-actions"><button className="ghost-button" onClick={onClose}>Auftrag abbrechen</button><button className="primary-button large" disabled={busy || !preflight?.canPlan} onClick={() => void start()}>{busy ? 'Bereite vor …' : 'Kapitelplan erstellen'}</button></div></div>}
+    {step === 'preflight' && <div className="longform-grid"><div className="longform-card"><span className="eyebrow">ZIELUMFANG</span><strong className="longform-number">{intent.pages ? `${intent.pages} Seiten` : `${intent.words ?? totalWords} Wörter`}</strong><p>{intent.pages ? `${intent.pages} Seiten entsprechen in diesem Projekt ungefähr ${totalWords.toLocaleString('de-DE')} Wörtern.` : 'Die Zielwortzahl ist eine Schätzung für die Planung, keine exakte Export-Seitenzahl.'}</p><label className="field-label">Zielwörter<input type="number" value={totalWords} readOnly /></label></div><div className="longform-card"><span className="eyebrow">PREFLIGHT</span>{preflight?.items.map((item) => <div className={`preflight-row ${item.level}`} key={`${item.level}-${item.label}`}><span>{item.level === 'blocking' ? 'Blockierend' : item.level === 'recommended' ? 'Empfohlen' : 'Optional'}</span><div><strong>{item.label}</strong><p>{item.detail}</p></div></div>)}{context?.narrativeSummaries?.some((summary) => summary.status === 'outdated') && <div className="preflight-row recommended"><span>Empfohlen</span><div><strong>Zusammenfassungen</strong><p>Mindestens eine Zusammenfassung ist veraltet und wird für diesen Plan nicht verwendet. Prüfe sie vor der Planung.</p></div></div>}<button className="ghost-button" onClick={() => void createProjectSummary()} disabled={summaryBusy}>{summaryBusy ? 'Zusammenfassung wird erstellt …' : 'Zusammenfassung prüfen'}</button></div><div className="longform-card direction-card"><div className="card-title-row"><div><span className="eyebrow">STORY-RICHTUNG</span><h2>Was soll die Geschichte gerade tun?</h2></div><button className="ghost-button" onClick={() => void saveDirection()} disabled={busy}><Save size={15} /> Speichern</button></div><div className="form-grid"><label className="field-label full-field">Prämisse<textarea value={directionDraft.premise} onChange={(event) => setDirectionDraft({ ...directionDraft, premise: event.target.value })} rows={2} /></label><label className="field-label">Geplantes Ende<textarea value={directionDraft.plannedEnding} onChange={(event) => setDirectionDraft({ ...directionDraft, plannedEnding: event.target.value })} rows={2} /></label><label className="field-label">Endstatus<select value={directionDraft.endingStatus} onChange={(event) => setDirectionDraft({ ...directionDraft, endingStatus: event.target.value as StoryDirection['endingStatus'] })}><option value="open">Noch offen</option><option value="preferred">Bevorzugt</option><option value="fixed">Fest</option></select></label><label className="field-label">Nächster Wendepunkt<input value={directionDraft.nextTurningPoint} onChange={(event) => setDirectionDraft({ ...directionDraft, nextTurningPoint: event.target.value })} /></label></div></div><div className="longform-actions"><button className="ghost-button" onClick={onClose}>Auftrag abbrechen</button><button className="primary-button large" disabled={busy || !preflight?.canPlan} onClick={() => void start()}>{busy ? 'Bereite vor …' : 'Kapitelplan erstellen'}</button></div></div>}
     {step === 'plan' && plan && <div className="longform-card plan-card"><div className="card-title-row"><div><span className="eyebrow">PLAN VOR DER GENERIERUNG</span><h2>{plan.chapterTitle}</h2><p>{plan.chapterGoal}</p></div><span className="status-pill yellow"><LockKeyhole size={13} /> Noch nicht bestätigt</span></div><label className="field-label">Kapitelziel<textarea value={plan.chapterGoal} onChange={(event) => setPlan({ ...plan, chapterGoal: event.target.value })} rows={2} /></label><div className="beat-list">{plan.beats.map((beat, index) => <article className="beat-card" key={beat.id}><span className="beat-number">{index + 1}</span><div><input value={beat.title} onChange={(event) => setPlan({ ...plan, beats: plan.beats.map((item) => item.id === beat.id ? { ...item, title: event.target.value } : item) })} /><p>{beat.purpose}</p><label className="field-label">Ereignis<textarea value={beat.event} onChange={(event) => setPlan({ ...plan, beats: plan.beats.map((item) => item.id === beat.id ? { ...item, event: event.target.value } : item) })} rows={2} /></label></div><strong>{beat.targetWords} W</strong></article>)}</div><div className="longform-actions"><button className="ghost-button" onClick={() => setStep('preflight')}>Zurück</button><button className="primary-button large" disabled={busy} onClick={() => void confirmPlan()}><Check size={16} /> Plan bestätigen</button></div></div>}
     {step === 'draft' && job && plan && <div className="longform-card draft-card"><div className="card-title-row"><div><span className="eyebrow">ENTWURF · {wordCount.toLocaleString('de-DE')} WÖRTER</span><h2>{plan.chapterTitle}</h2></div><span className={`status-pill ${job.status === 'draft_ready' ? 'green' : 'yellow'}`}><FileText size={13} /> {job.status === 'draft_ready' ? 'Geprüfter Entwurf' : 'Prüfung erforderlich'}</span></div><div className="draft-notice"><LockKeyhole size={17} /><span>Der Text wird nicht automatisch ins Manuskript geschrieben. Abschnitts- und Gesamtreview bleiben sichtbar.</span></div>{contextOverrideRequired && <div className="save-error"><strong>Projektkontext geändert.</strong><button className="text-button" onClick={() => void continueWithOldContext()} disabled={busy}>Mit altem Kontext bewusst fortfahren</button></div>}{reviews.map((review) => <article className={`review-card ${review.severity}`} key={review.id}><strong>{review.title}</strong><p>{review.description}</p><small>{review.severity} · {review.suggestedAction}</small>{review.severity === 'blocking' && <button className="text-button" onClick={() => { const section = sections.find((item) => item.id === review.sectionId); if (section) void regenerateSection(section); }}>Abschnitt neu erzeugen</button>}<button className="text-button" onClick={() => void repository.updateReviewStatus(review.id, 'exception')}>Als bewusste Ausnahme markieren</button></article>)}{sections.map((section, index) => <div className="draft-section" key={section.id}><div className="section-heading"><strong>Abschnitt {index + 1}</strong><span>Ziel: {section.targetWords} Wörter · {section.actualWords} Wörter</span></div><textarea value={section.content} onChange={(event) => void updateSection(section, event.target.value)} placeholder="Abschnitt prüfen oder nach Codex-Generierung bearbeiten …" rows={10} /></div>)}<div className="longform-actions"><button className="ghost-button" onClick={() => setStep('plan')}>Plan öffnen</button><button className="primary-button large" disabled={busy || sections.some((section) => !section.content.trim()) || job.status !== 'draft_ready' || reviews.some((review) => review.severity === 'blocking' && review.status === 'open')} onClick={() => void accept()}><Plus size={16} /> Als Entwurf übernehmen</button></div></div>}
   </section>;

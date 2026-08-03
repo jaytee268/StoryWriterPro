@@ -353,14 +353,25 @@ const CHAPTER_PLAN_SCHEMA: &str = r#"{"type":"object","additionalProperties":fal
 const CHAPTER_SECTION_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["content","continuationSummary","continuityState","usedEntityIds","usedMemoryIds","usedSourceIds","warnings"],"properties":{"content":{"type":"string","minLength":1,"maxLength":50000},"continuationSummary":{"type":"string","maxLength":3000},"continuityState":{"type":"object","additionalProperties":false,"required":["currentLocation","currentStoryTime","presentCharacterIds","characterStates","establishedFacts","knowledgeChanges","relationshipChanges","movedObjects","injuries","cluesIntroduced","promisesCreated","unresolvedActions","lastParagraphSummary"],"properties":{"currentLocation":{"type":"string"},"currentStoryTime":{"type":"string"},"presentCharacterIds":{"type":"array","items":{"type":"string"}},"characterStates":{"type":"array","items":{"type":"object"}},"establishedFacts":{"type":"array","items":{"type":"string"}},"knowledgeChanges":{"type":"array","items":{"type":"object"}},"relationshipChanges":{"type":"array","items":{"type":"object"}},"movedObjects":{"type":"array","items":{"type":"object"}},"injuries":{"type":"array","items":{"type":"object"}},"cluesIntroduced":{"type":"array","items":{"type":"string"}},"promisesCreated":{"type":"array","items":{"type":"string"}},"unresolvedActions":{"type":"array","items":{"type":"string"}},"lastParagraphSummary":{"type":"string"}}},"usedEntityIds":{"type":"array","items":{"type":"string"}},"usedMemoryIds":{"type":"array","items":{"type":"string"}},"usedSourceIds":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
 const REVIEW_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["issues","warnings"],"properties":{"issues":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["reviewScope","issueType","severity","title","description","relatedEntityIds","relatedSourceIds","suggestedAction","status"],"properties":{"reviewScope":{"enum":["section","chapter"]},"issueType":{"type":"string"},"severity":{"enum":["info","warning","blocking"]},"title":{"type":"string","maxLength":300},"description":{"type":"string","maxLength":4000},"relatedEntityIds":{"type":"array","items":{"type":"string"}},"relatedSourceIds":{"type":"array","items":{"type":"string"}},"suggestedAction":{"type":"string","maxLength":1000},"status":{"type":"string"}}}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
 
+const CHARACTER_MEMORY_SCHEMA_STRICT: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["proposals","warnings"],"properties":{"proposals":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["proposalKind","subjectCharacterId","relatedCharacterId","targetEntityId","payload","classification","confidence","evidenceExcerpt","startOffset","endOffset","reason"],"properties":{"proposalKind":{"enum":["voice_pattern","experience","dialogue_memory","relationship_memory","knowledge_change","profile_observation","character_relation"]},"subjectCharacterId":{"type":["string","null"]},"relatedCharacterId":{"type":["string","null"]},"targetEntityId":{"type":["string","null"]},"payload":{"oneOf":[{"type":"object","additionalProperties":false,"required":["patternType","patternText","description","contextCondition"],"properties":{"patternType":{"type":"string"},"patternText":{"type":"string","minLength":1,"maxLength":4000},"description":{"type":"string","maxLength":4000},"contextCondition":{"type":"string","maxLength":1000},"relatedCharacterId":{"type":"string"}}},{"type":"object","additionalProperties":false,"required":["title","objectiveSummary","subjectiveInterpretation","emotionalImpact","lastingEffect","significance","memoryReliability"],"properties":{"title":{"type":"string","minLength":1,"maxLength":4000},"objectiveSummary":{"type":"string","maxLength":4000},"subjectiveInterpretation":{"type":"string","maxLength":4000},"emotionalImpact":{"type":"string","maxLength":2000},"lastingEffect":{"type":"string","maxLength":2000},"significance":{"type":"string"},"memoryReliability":{"type":"string"},"eventEntityId":{"type":"string"}}},{"type":"object","additionalProperties":false,"required":["dialogueKind","topic","summary","exactExcerpt","emotionalTone","hiddenIntent","significance","truthfulness","participants"],"properties":{"dialogueKind":{"type":"string"},"topic":{"type":"string","maxLength":1000},"summary":{"type":"string","minLength":1,"maxLength":4000},"exactExcerpt":{"type":"string","maxLength":4000},"emotionalTone":{"type":"string","maxLength":1000},"hiddenIntent":{"type":"string","maxLength":2000},"significance":{"type":"string"},"truthfulness":{"type":"string"},"participants":{"type":"array","minItems":1,"maxItems":30,"items":{"type":"object","additionalProperties":false,"required":["characterId","role"],"properties":{"characterId":{"type":"string"},"role":{"enum":["speaker","listener","present","mentioned"]}}}}}},{"type":"object","additionalProperties":false,"required":["relatedCharacterId","memoryType","title","summary","privateMeaning","relationshipEffect","significance"],"properties":{"relatedCharacterId":{"type":"string"},"memoryType":{"type":"string"},"title":{"type":"string","minLength":1,"maxLength":4000},"summary":{"type":"string","minLength":1,"maxLength":4000},"privateMeaning":{"type":"string","maxLength":3000},"relationshipEffect":{"type":"string","maxLength":3000},"significance":{"type":"string"}}},{"type":"object","additionalProperties":false,"required":["factEntityId","knowledgeState","certainty","notes"],"properties":{"factEntityId":{"type":"string"},"knowledgeState":{"enum":["knows","suspects","believes_false","denies","forgot","unknown"]},"certainty":{"type":"number","minimum":0,"maximum":1},"sourceCharacterId":{"type":"string"},"notes":{"type":"string","maxLength":3000}}},{"type":"object","additionalProperties":false,"required":["field","observedBehavior","possibleInterpretation"],"properties":{"field":{"type":"string","minLength":1,"maxLength":4000},"observedBehavior":{"type":"string","minLength":1,"maxLength":4000},"possibleInterpretation":{"type":"string","maxLength":3000}}},{"type":"object","additionalProperties":false,"required":["relationType","label"],"properties":{"relationType":{"type":"string"},"label":{"type":"string","maxLength":160}}}]},"classification":{"enum":["observable","interpretation","author_decision_required","possible_contradiction"]},"confidence":{"type":"number","minimum":0,"maximum":1},"evidenceExcerpt":{"type":"string","maxLength":1000},"startOffset":{"type":["integer","null"],"minimum":0},"endOffset":{"type":["integer","null"],"minimum":0},"reason":{"type":"string","maxLength":1000}}}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
+
+const CHAPTER_PLAN_SCHEMA_STRICT: &str = r#"{"type":"object","additionalProperties":false,"required":["chapterTitle","chapterGoal","povCharacterId","startingState","endingState","chapterSummary","endingConnection","newInformation","withheldInformation","assumptions","beats","warnings"],"properties":{"chapterTitle":{"type":"string","minLength":1,"maxLength":300},"chapterGoal":{"type":"string","maxLength":2000},"povCharacterId":{"type":["string","null"]},"startingState":{"type":"string","maxLength":3000},"endingState":{"type":"string","maxLength":3000},"chapterSummary":{"type":"string","maxLength":6000},"endingConnection":{"type":"string","maxLength":3000},"newInformation":{"type":"array","items":{"type":"string","maxLength":1000}},"withheldInformation":{"type":"array","items":{"type":"string","maxLength":1000}},"assumptions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["type","text"],"properties":{"type":{"type":"string"},"text":{"type":"string","maxLength":2000}}}},"beats":{"type":"array","minItems":1,"maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["id","orderIndex","title","purpose","participatingCharacterIds","startingState","event","conflict","newInformation","knowledgeChanges","relationshipChanges","cluesUsed","loreEntityIds","endingHook","targetWords"],"properties":{"id":{"type":"string"},"orderIndex":{"type":"integer","minimum":0},"title":{"type":"string","maxLength":300},"purpose":{"type":"string","maxLength":2000},"participatingCharacterIds":{"type":"array","items":{"type":"string"}},"startingState":{"type":"string"},"event":{"type":"string"},"conflict":{"type":"string"},"newInformation":{"type":"array","items":{"type":"string"}},"knowledgeChanges":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["characterId","factEntityId","nextState","reason"],"properties":{"characterId":{"type":"string"},"factEntityId":{"type":"string"},"nextState":{"enum":["knows","suspects","believes_false","denies","forgot","unknown"]},"reason":{"type":"string","maxLength":1000}}}},"relationshipChanges":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["characterAId","characterBId","change","reason"],"properties":{"characterAId":{"type":"string"},"characterBId":{"type":"string"},"change":{"type":"string","maxLength":1000},"reason":{"type":"string","maxLength":1000}}}},"cluesUsed":{"type":"array","items":{"type":"string"}},"loreEntityIds":{"type":"array","items":{"type":"string"}},"endingHook":{"type":"string"},"targetWords":{"type":"integer","minimum":1}}}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
+
+const CHAPTER_SECTION_SCHEMA_STRICT: &str = r#"{"type":"object","additionalProperties":false,"required":["content","continuationSummary","continuityState","usedEntityIds","usedMemoryIds","usedSourceIds","warnings"],"properties":{"content":{"type":"string","minLength":1,"maxLength":50000},"continuationSummary":{"type":"string","maxLength":3000},"continuityState":{"type":"object","additionalProperties":false,"required":["currentLocation","currentStoryTime","presentCharacterIds","characterStates","establishedFacts","knowledgeChanges","relationshipChanges","movedObjects","injuries","cluesIntroduced","promisesCreated","unresolvedActions","lastParagraphSummary"],"properties":{"currentLocation":{"type":"string"},"currentStoryTime":{"type":"string"},"presentCharacterIds":{"type":"array","items":{"type":"string"}},"characterStates":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["characterId","state","change"],"properties":{"characterId":{"type":"string"},"state":{"type":"string"},"change":{"type":"string"}}}},"establishedFacts":{"type":"array","items":{"type":"string"}},"knowledgeChanges":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["characterId","factEntityId","nextState","reason"],"properties":{"characterId":{"type":"string"},"factEntityId":{"type":"string"},"nextState":{"enum":["knows","suspects","believes_false","denies","forgot","unknown"]},"reason":{"type":"string","maxLength":1000}}}},"relationshipChanges":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["characterAId","characterBId","change","reason"],"properties":{"characterAId":{"type":"string"},"characterBId":{"type":"string"},"change":{"type":"string","maxLength":1000},"reason":{"type":"string","maxLength":1000}}}},"movedObjects":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["objectId","location","state"],"properties":{"objectId":{"type":"string"},"location":{"type":"string"},"state":{"type":"string"}}}},"injuries":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["characterId","description","severity"],"properties":{"characterId":{"type":"string"},"description":{"type":"string"},"severity":{"type":"string"}}}},"cluesIntroduced":{"type":"array","items":{"type":"string"}},"promisesCreated":{"type":"array","items":{"type":"string"}},"unresolvedActions":{"type":"array","items":{"type":"string"}},"lastParagraphSummary":{"type":"string"}}},"usedEntityIds":{"type":"array","items":{"type":"string"}},"usedMemoryIds":{"type":"array","items":{"type":"string"}},"usedSourceIds":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
+
 fn schema_for_task(kind: &CodexTaskKind) -> &'static str {
+    let _legacy_schemas = (
+        CHARACTER_MEMORY_SCHEMA,
+        CHAPTER_PLAN_SCHEMA,
+        CHAPTER_SECTION_SCHEMA,
+    );
     match kind {
         CodexTaskKind::AnalyzeProjectStyle => STYLE_ANALYSIS_SCHEMA,
         CodexTaskKind::SummarizeScene
         | CodexTaskKind::SummarizeChapter
         | CodexTaskKind::SummarizeBook => SUMMARY_SCHEMA,
-        CodexTaskKind::PlanChapterDraft => CHAPTER_PLAN_SCHEMA,
-        CodexTaskKind::DraftChapterSection => CHAPTER_SECTION_SCHEMA,
+        CodexTaskKind::PlanChapterDraft => CHAPTER_PLAN_SCHEMA_STRICT,
+        CodexTaskKind::DraftChapterSection => CHAPTER_SECTION_SCHEMA_STRICT,
         CodexTaskKind::ReviewChapterSection | CodexTaskKind::ReviewCompleteChapter => REVIEW_SCHEMA,
         _ => CHAT_SCHEMA,
     }
@@ -556,7 +567,9 @@ fn create_snapshot(input: &RunCodexTaskInput) -> Result<CodexSnapshotGuard, Code
             &directory.join("output-schema.json"),
             match input.task_kind {
                 CodexTaskKind::ExtractBiblePatch => BIBLE_SCHEMA.as_bytes(),
-                CodexTaskKind::ExtractCharacterMemoryPatch => CHARACTER_MEMORY_SCHEMA.as_bytes(),
+                CodexTaskKind::ExtractCharacterMemoryPatch => {
+                    CHARACTER_MEMORY_SCHEMA_STRICT.as_bytes()
+                }
                 _ => schema_for_task(&input.task_kind).as_bytes(),
             },
         )?;
@@ -689,7 +702,49 @@ fn bounded_diagnostic(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn extract_final_json(stdout: &[u8]) -> Result<(Value, Vec<String>, bool), CodexError> {
+fn result_matches_task(value: &Value, task: &CodexTaskKind) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    match task {
+        CodexTaskKind::ExtractBiblePatch | CodexTaskKind::ExtractCharacterMemoryPatch => {
+            object.contains_key("proposals")
+        }
+        CodexTaskKind::AnswerWithProjectContext => object.contains_key("answer"),
+        CodexTaskKind::AnalyzeProjectStyle => {
+            object.contains_key("observations") && object.contains_key("overallSummary")
+        }
+        CodexTaskKind::SummarizeScene
+        | CodexTaskKind::SummarizeChapter
+        | CodexTaskKind::SummarizeBook => {
+            object.contains_key("summary") && object.contains_key("importantEvents")
+        }
+        CodexTaskKind::PlanChapterDraft => {
+            object.contains_key("chapterTitle") && object.contains_key("beats")
+        }
+        CodexTaskKind::DraftChapterSection => {
+            object.contains_key("content") && object.contains_key("continuityState")
+        }
+        CodexTaskKind::ReviewChapterSection | CodexTaskKind::ReviewCompleteChapter => {
+            object.contains_key("issues")
+        }
+    }
+}
+
+fn extract_candidate(value: &Value, task: &CodexTaskKind) -> Option<Value> {
+    if result_matches_task(value, task) {
+        return Some(value.clone());
+    }
+    value
+        .as_str()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .and_then(|parsed| extract_candidate(&parsed, task))
+}
+
+fn extract_final_json(
+    stdout: &[u8],
+    task: &CodexTaskKind,
+) -> Result<(Value, Vec<String>, bool), CodexError> {
     let text = String::from_utf8(stdout.to_vec())
         .map_err(|_| CodexError::new("CODEX_INVALID_JSONL", "Codex lieferte ungültiges UTF-8."))?;
     let mut final_value = None;
@@ -743,20 +798,12 @@ fn extract_final_json(stdout: &[u8]) -> Result<(Value, Vec<String>, bool), Codex
             event.get("item").and_then(|item| item.get("text")),
         ];
         for candidate in candidates.into_iter().flatten() {
-            if let Some(object) = candidate.as_object() {
-                if object.contains_key("proposals") || object.contains_key("answer") {
-                    final_value = Some(Value::Object(object.clone()));
-                }
-            } else if let Some(string) = candidate.as_str() {
-                if let Ok(value) = serde_json::from_str::<Value>(string) {
-                    if value.get("proposals").is_some() || value.get("answer").is_some() {
-                        final_value = Some(value);
-                    }
-                }
+            if let Some(value) = extract_candidate(candidate, task) {
+                final_value = Some(value);
             }
         }
-        if event.get("proposals").is_some() || event.get("answer").is_some() {
-            final_value = Some(event);
+        if let Some(value) = extract_candidate(&event, task) {
+            final_value = Some(value);
         }
     }
     if !completed {
@@ -1213,6 +1260,7 @@ pub fn validate_chat_result(result: &Value, request: &Value) -> Result<Value, Co
 }
 
 pub struct CodexInvocation {
+    pub task_kind: CodexTaskKind,
     pub binary: PathBuf,
     pub args: Vec<OsString>,
     pub snapshot: PathBuf,
@@ -1376,7 +1424,8 @@ impl CodexProcessRunner for SystemCodexProcessRunner {
                 ),
             ));
         }
-        let (result, mut warnings, turn_completed) = extract_final_json(&stdout)?;
+        let (result, mut warnings, turn_completed) =
+            extract_final_json(&stdout, &invocation.task_kind)?;
         if !stderr.is_empty() {
             warnings.push("Codex hat zusätzliche Diagnoseausgaben geschrieben.".into());
         }
@@ -1402,10 +1451,11 @@ impl CodexProcessRunner for FakeCodexProcessRunner {
 
     fn run(
         &self,
-        _invocation: CodexInvocation,
+        invocation: CodexInvocation,
         _cancellation: Arc<AtomicBool>,
     ) -> Result<CodexProcessResult, CodexError> {
-        let (result, mut warnings, turn_completed) = extract_final_json(&self.stdout)?;
+        let (result, mut warnings, turn_completed) =
+            extract_final_json(&self.stdout, &invocation.task_kind)?;
         if !self.stderr.is_empty() {
             warnings.push("Codex hat zusätzliche Diagnoseausgaben geschrieben.".into());
         }
@@ -1428,6 +1478,7 @@ fn run_process(
         SystemCodexProcessRunner
             .run(
                 CodexInvocation {
+                    task_kind: input.task_kind.clone(),
                     binary,
                     args,
                     snapshot: snapshot.path().to_path_buf(),
@@ -1558,6 +1609,17 @@ mod tests {
     }
 
     #[test]
+    fn strict_task_schemas_are_valid_json() {
+        for schema in [
+            CHARACTER_MEMORY_SCHEMA_STRICT,
+            CHAPTER_PLAN_SCHEMA_STRICT,
+            CHAPTER_SECTION_SCHEMA_STRICT,
+        ] {
+            serde_json::from_str::<Value>(schema).expect("structured task schema must be JSON");
+        }
+    }
+
+    #[test]
     fn missing_binary_is_not_installed() {
         assert!(resolve_binary_with_path(
             Some("/definitely/not/a/codex"),
@@ -1594,6 +1656,7 @@ mod tests {
         let result = runner
             .run(
                 CodexInvocation {
+                    task_kind: CodexTaskKind::AnswerWithProjectContext,
                     binary: PathBuf::from("/not-used"),
                     args: Vec::new(),
                     snapshot: PathBuf::from("/not-used"),
@@ -1707,15 +1770,20 @@ mod tests {
         let warning = br#"{"type":"item.failed"}
 {"type":"tool.failed"}
 {"type":"turn.completed","result":{"answer":"ok","usedEntityIds":[],"usedSourceIds":[],"uncertainty":"low","warnings":[]}}"#;
-        let (_, warnings, completed) = extract_final_json(warning).expect("non-fatal item events");
+        let (_, warnings, completed) =
+            extract_final_json(warning, &CodexTaskKind::AnswerWithProjectContext)
+                .expect("non-fatal item events");
         assert_eq!(warnings.len(), 2);
         assert!(completed);
         for fatal in ["turn.failed", "error", "fatal"] {
             let input = format!(r#"{{"type":"{fatal}"}}"#);
-            assert!(extract_final_json(input.as_bytes()).is_err());
+            assert!(
+                extract_final_json(input.as_bytes(), &CodexTaskKind::AnswerWithProjectContext)
+                    .is_err()
+            );
         }
         let incomplete = br#"{"type":"message","result":{"answer":"ok"}}"#;
-        assert!(extract_final_json(incomplete).is_err());
+        assert!(extract_final_json(incomplete, &CodexTaskKind::AnswerWithProjectContext).is_err());
     }
 
     #[test]
@@ -1725,7 +1793,12 @@ mod tests {
             "x".repeat(MAX_JSONL_LINE)
         );
         assert_eq!(
-            extract_final_json(long_line.as_bytes()).unwrap_err().code,
+            extract_final_json(
+                long_line.as_bytes(),
+                &CodexTaskKind::AnswerWithProjectContext
+            )
+            .unwrap_err()
+            .code,
             "CODEX_INVALID_JSONL"
         );
         let many = (0..=MAX_JSONL_EVENTS)
@@ -1733,8 +1806,74 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert_eq!(
-            extract_final_json(many.as_bytes()).unwrap_err().code,
+            extract_final_json(many.as_bytes(), &CodexTaskKind::AnswerWithProjectContext)
+                .unwrap_err()
+                .code,
             "CODEX_INVALID_JSONL"
+        );
+    }
+
+    fn synthetic_task_result(kind: CodexTaskKind) -> Value {
+        match kind {
+            CodexTaskKind::ExtractBiblePatch | CodexTaskKind::ExtractCharacterMemoryPatch => {
+                json!({"proposals":[],"warnings":[]})
+            }
+            CodexTaskKind::AnswerWithProjectContext => {
+                json!({"answer":"ok","usedEntityIds":[],"usedSourceIds":[],"uncertainty":"low","warnings":[]})
+            }
+            CodexTaskKind::AnalyzeProjectStyle => {
+                json!({"observations":[],"overallSummary":"ok","warnings":[]})
+            }
+            CodexTaskKind::SummarizeScene
+            | CodexTaskKind::SummarizeChapter
+            | CodexTaskKind::SummarizeBook => {
+                json!({"summary":"ok","importantEvents":[],"openThreads":[],"characterChanges":[],"knowledgeChanges":[],"relationshipEffects":[],"warnings":[]})
+            }
+            CodexTaskKind::PlanChapterDraft => {
+                json!({"chapterTitle":"Kapitel","chapterGoal":"Ziel","povCharacterId":null,"startingState":"start","endingState":"end","chapterSummary":"summary","endingConnection":"hook","newInformation":[],"withheldInformation":[],"assumptions":[],"beats":[],"warnings":[]})
+            }
+            CodexTaskKind::DraftChapterSection => {
+                json!({"content":"Text","continuationSummary":"weiter","continuityState":{},"usedEntityIds":[],"usedMemoryIds":[],"usedSourceIds":[],"warnings":[]})
+            }
+            CodexTaskKind::ReviewChapterSection | CodexTaskKind::ReviewCompleteChapter => {
+                json!({"issues":[],"warnings":[]})
+            }
+        }
+    }
+
+    #[test]
+    fn fake_runner_parses_every_task_result_shape() {
+        let kinds = [
+            CodexTaskKind::ExtractBiblePatch,
+            CodexTaskKind::ExtractCharacterMemoryPatch,
+            CodexTaskKind::AnswerWithProjectContext,
+            CodexTaskKind::AnalyzeProjectStyle,
+            CodexTaskKind::SummarizeScene,
+            CodexTaskKind::SummarizeChapter,
+            CodexTaskKind::SummarizeBook,
+            CodexTaskKind::PlanChapterDraft,
+            CodexTaskKind::DraftChapterSection,
+            CodexTaskKind::ReviewChapterSection,
+            CodexTaskKind::ReviewCompleteChapter,
+        ];
+        for kind in kinds {
+            let result = synthetic_task_result(kind.clone());
+            let stdout = format!("{{\"type\":\"turn.completed\",\"result\":{result}}}");
+            let (parsed, _, completed) =
+                extract_final_json(stdout.as_bytes(), &kind).expect("task result");
+            assert!(completed);
+            assert!(result_matches_task(&parsed, &kind));
+        }
+    }
+
+    #[test]
+    fn parser_rejects_result_for_the_wrong_task() {
+        let stdout = br#"{"type":"turn.completed","result":{"answer":"ok","usedEntityIds":[],"usedSourceIds":[],"uncertainty":"low","warnings":[]}}"#;
+        assert_eq!(
+            extract_final_json(stdout, &CodexTaskKind::PlanChapterDraft)
+                .unwrap_err()
+                .code,
+            "CODEX_PROCESS_FAILED"
         );
     }
 

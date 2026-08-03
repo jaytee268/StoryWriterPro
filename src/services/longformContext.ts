@@ -1,4 +1,4 @@
-import type { Chapter, ProjectContext, Project, StoryDirection, StoryEntity, WritingPreferences } from '../types/domain';
+import type { Chapter, DraftContinuityState, ProjectContext, Project, StoryDirection, StoryEntity, WritingPreferences } from '../types/domain';
 import type { StoryRepository } from './storyRepository';
 import { DeterministicProjectContextBuilder } from './contextBuilder';
 
@@ -8,7 +8,7 @@ export interface LongformContextBundle extends ProjectContext {
   writingPreferences: WritingPreferences;
   recentScenes: Array<{ id: string; chapterId: string; title: string; content: string; pov: string; location: string; storyTime: string }>;
   relevantEarlierScenes: Array<{ id: string; chapterId: string; title: string; content: string; pov: string; location: string; storyTime: string }>;
-  previousSections?: Array<{ orderIndex: number; continuationSummary: string; contentTail: string; continuityState: unknown }>;
+  previousSections?: Array<{ orderIndex: number; continuationSummary: string; contentTail: string; continuityState: DraftContinuityState }>;
   targetWords: number;
   remainingWords: number;
 }

@@ -14,6 +14,16 @@ export const characterMemoryPayloadSchemas = {
   character_relation: z.object({ relationType: z.enum(['affects', 'explains', 'contradicts', 'reveals', 'hides', 'depends_on', 'applies_to', 'caused_by', 'connected_to']), label: z.string().max(160) }).strict(),
 } as const;
 
+export const characterMemoryPayloadSchema = z.union([
+  characterMemoryPayloadSchemas.voice_pattern,
+  characterMemoryPayloadSchemas.experience,
+  characterMemoryPayloadSchemas.dialogue_memory,
+  characterMemoryPayloadSchemas.relationship_memory,
+  characterMemoryPayloadSchemas.knowledge_change,
+  characterMemoryPayloadSchemas.profile_observation,
+  characterMemoryPayloadSchemas.character_relation,
+]);
+
 export function validateCharacterMemoryPayload(kind: string, payload: unknown): unknown {
   const schema = characterMemoryPayloadSchemas[kind as keyof typeof characterMemoryPayloadSchemas];
   if (!schema) throw new Error(`Unbekannter Character-Memory-Typ: ${kind}`);

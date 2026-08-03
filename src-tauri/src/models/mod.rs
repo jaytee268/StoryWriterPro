@@ -521,6 +521,98 @@ pub struct ProjectStyle {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProjectStyleAnalysisRun {
+    pub id: String,
+    pub project_id: String,
+    pub source_hash: String,
+    pub provider_id: String,
+    pub status: String,
+    pub created_at: String,
+    pub completed_at: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateProjectStyleAnalysisRunInput {
+    pub project_id: String,
+    pub source_hash: String,
+    pub provider_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectStyleObservationEvidence {
+    pub source_id: Option<String>,
+    pub style_reference_id: Option<String>,
+    pub excerpt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectStyleObservation {
+    pub id: String,
+    pub run_id: String,
+    pub project_id: String,
+    pub observation_type: String,
+    pub observation_text: String,
+    pub recommendation: String,
+    pub confidence: f64,
+    pub evidence: Vec<ProjectStyleObservationEvidence>,
+    pub review_status: String,
+    pub reviewed_at: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProjectStyleObservationInput {
+    pub run_id: String,
+    pub project_id: String,
+    pub observation_type: String,
+    pub observation_text: String,
+    pub recommendation: String,
+    pub confidence: f64,
+    pub evidence: Vec<ProjectStyleObservationEvidence>,
+    pub review_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NarrativeSummary {
+    pub id: String,
+    pub project_id: String,
+    pub scope_type: String,
+    pub scope_id: String,
+    pub content_hash: String,
+    pub summary: String,
+    pub important_events: Vec<String>,
+    pub open_threads: Vec<String>,
+    pub character_changes: Vec<String>,
+    pub status: String,
+    pub author_confirmed: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveNarrativeSummaryInput {
+    pub id: Option<String>,
+    pub project_id: String,
+    pub scope_type: String,
+    pub scope_id: String,
+    pub content_hash: String,
+    pub summary: String,
+    pub important_events: Vec<String>,
+    pub open_threads: Vec<String>,
+    pub character_changes: Vec<String>,
+    pub status: String,
+    pub author_confirmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateStyleReferenceInput {
     pub project_id: String,
     pub chapter_id: Option<String>,
@@ -1191,6 +1283,66 @@ pub struct CreateChapterGenerationJobInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PlannedKnowledgeChange {
+    pub character_id: String,
+    pub fact_entity_id: String,
+    pub next_state: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlannedRelationshipChange {
+    pub character_a_id: String,
+    pub character_b_id: String,
+    pub change: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftCharacterState {
+    pub character_id: String,
+    pub state: String,
+    pub change: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftObjectState {
+    pub object_id: String,
+    pub location: String,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftInjuryState {
+    pub character_id: String,
+    pub description: String,
+    pub severity: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftContinuityState {
+    pub current_location: String,
+    pub current_story_time: String,
+    pub present_character_ids: Vec<String>,
+    pub character_states: Vec<DraftCharacterState>,
+    pub established_facts: Vec<String>,
+    pub knowledge_changes: Vec<PlannedKnowledgeChange>,
+    pub relationship_changes: Vec<PlannedRelationshipChange>,
+    pub moved_objects: Vec<DraftObjectState>,
+    pub injuries: Vec<DraftInjuryState>,
+    pub clues_introduced: Vec<String>,
+    pub promises_created: Vec<String>,
+    pub unresolved_actions: Vec<String>,
+    pub last_paragraph_summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChapterPlanBeat {
     pub id: String,
     pub order_index: i64,
@@ -1203,8 +1355,8 @@ pub struct ChapterPlanBeat {
     pub event: String,
     pub conflict: String,
     pub new_information: Vec<String>,
-    pub knowledge_changes: Vec<serde_json::Value>,
-    pub relationship_changes: Vec<serde_json::Value>,
+    pub knowledge_changes: Vec<PlannedKnowledgeChange>,
+    pub relationship_changes: Vec<PlannedRelationshipChange>,
     pub clues_used: Vec<String>,
     pub lore_entity_ids: Vec<String>,
     pub ending_hook: String,
@@ -1260,7 +1412,7 @@ pub struct ChapterGenerationSection {
     pub actual_words: i64,
     pub content: String,
     pub continuation_summary: String,
-    pub continuity_state: serde_json::Value,
+    pub continuity_state: DraftContinuityState,
     pub status: String,
     pub provider_id: Option<String>,
     pub created_at: String,
@@ -1276,7 +1428,7 @@ pub struct SaveChapterGenerationSectionInput {
     pub target_words: i64,
     pub content: String,
     pub continuation_summary: String,
-    pub continuity_state: serde_json::Value,
+    pub continuity_state: DraftContinuityState,
     pub status: String,
     pub provider_id: Option<String>,
 }

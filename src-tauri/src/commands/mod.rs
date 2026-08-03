@@ -21,20 +21,21 @@ use crate::{
         CharacterMemoryUpdateRun, CharacterProfile, CharacterSceneState, CharacterVoicePattern,
         CreateBibleUpdateRunInput, CreateChapterGenerationJobInput, CreateChapterInput,
         CreateCharacterMemoryUpdateRunInput, CreateLoreEntryInput, CreateProjectInput,
-        CreateSceneInput, CreateSceneVersionInput, CreateSourceReferenceInput,
-        CreateStoryEntityInput, CreateStoryEntityRelationInput, CreateStyleReferenceInput,
-        DatabaseInfo, DialogueMemoryParticipant, EditorPreferences, LoreEntry, LoreMetadata,
-        Project, ProjectStyle, ProviderStatus, RelationshipMemory, RestoreSceneVersionInput,
+        CreateProjectStyleAnalysisRunInput, CreateSceneInput, CreateSceneVersionInput,
+        CreateSourceReferenceInput, CreateStoryEntityInput, CreateStoryEntityRelationInput,
+        CreateStyleReferenceInput, DatabaseInfo, DialogueMemoryParticipant, EditorPreferences,
+        LoreEntry, LoreMetadata, NarrativeSummary, Project, ProjectStyle, ProjectStyleAnalysisRun,
+        ProjectStyleObservation, ProviderStatus, RelationshipMemory, RestoreSceneVersionInput,
         ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput,
         SaveChapterGenerationPlanInput, SaveChapterGenerationReviewInput,
         SaveChapterGenerationSectionInput, SaveCharacterDialogueMemoryInput,
         SaveCharacterExperienceInput, SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput,
         SaveCharacterSceneStateInput, SaveCharacterVoicePatternInput, SaveLoreMetadataInput,
-        SaveProjectStyleInput, SaveRelationshipMemoryInput, SaveStoryDirectionInput,
-        SaveWritingPreferencesInput, Scene, SceneInput, SceneVersion, StoryDirection, StoryEntity,
-        StoryEntityInput, StoryEntityRelation, StorySourceReference, StyleReference,
-        UpdateChapterInput, UpdateStoryEntityInput, UpdateStyleReferenceInput, WorkspaceSnapshot,
-        WritingPreferences,
+        SaveNarrativeSummaryInput, SaveProjectStyleInput, SaveProjectStyleObservationInput,
+        SaveRelationshipMemoryInput, SaveStoryDirectionInput, SaveWritingPreferencesInput, Scene,
+        SceneInput, SceneVersion, StoryDirection, StoryEntity, StoryEntityInput,
+        StoryEntityRelation, StorySourceReference, StyleReference, UpdateChapterInput,
+        UpdateStoryEntityInput, UpdateStyleReferenceInput, WorkspaceSnapshot, WritingPreferences,
     },
 };
 use chrono::Utc;
@@ -55,6 +56,54 @@ fn new_id() -> String {
 }
 fn now() -> String {
     Utc::now().to_rfc3339()
+}
+
+fn canonical_editor_text(content: &str) -> String {
+    let mut output = String::with_capacity(content.len());
+    let mut inside_tag = false;
+    let mut tag = String::new();
+    for character in content.chars() {
+        if character == '<' {
+            inside_tag = true;
+            tag.clear();
+            continue;
+        }
+        if inside_tag {
+            if character == '>' {
+                let normalized = tag.trim().to_ascii_lowercase();
+                if normalized.starts_with("br")
+                    || normalized.starts_with("/p")
+                    || normalized.starts_with("/div")
+                    || normalized.starts_with("/li")
+                    || normalized.starts_with("/blockquote")
+                {
+                    output.push('\n');
+                }
+                inside_tag = false;
+            } else {
+                tag.push(character);
+            }
+            continue;
+        }
+        output.push(if character == '\u{00a0}' {
+            ' '
+        } else {
+            character
+        });
+    }
+    while output.ends_with('\n') {
+        output.pop();
+    }
+    output
+}
+
+fn canonical_content_hash(content: &str) -> String {
+    let mut hash = 2_166_136_261_u32;
+    for character in canonical_editor_text(content).chars() {
+        hash ^= character as u32;
+        hash = hash.wrapping_mul(16_777_619);
+    }
+    format!("{hash:08x}")
 }
 fn required(value: &str, label: &str) -> Result<(), String> {
     if value.trim().is_empty() {
@@ -160,6 +209,13 @@ fn update_scene_in_transaction(
             params![timestamp, input.chapter_id],
         )
         .map_err(|error| sql_error("Projektzeitpunkt konnte nicht aktualisiert werden", error))?;
+    let current_hash = canonical_content_hash(&input.content);
+    transaction
+        .execute(
+            "UPDATE narrative_summaries SET status='outdated', updated_at=?1 WHERE project_id=(SELECT books.project_id FROM books JOIN chapters ON chapters.book_id=books.id WHERE chapters.id=?2) AND scope_type='scene' AND scope_id=?3 AND content_hash<>?4 AND status='confirmed'",
+            params![timestamp, input.chapter_id, input.id, current_hash],
+        )
+        .map_err(|error| sql_error("Zusammenfassung konnte nicht aktualisiert werden", error))?;
     Ok(())
 }
 
@@ -1808,6 +1864,330 @@ pub fn save_project_style(
     let timestamp = now();
     db.execute("INSERT INTO project_styles (project_id, narrative_pov, tense, sentence_style, dialogue_style, description_density, inner_monologue, preferred_patterns_json, avoided_patterns_json, notes, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?11) ON CONFLICT(project_id) DO UPDATE SET narrative_pov=excluded.narrative_pov, tense=excluded.tense, sentence_style=excluded.sentence_style, dialogue_style=excluded.dialogue_style, description_density=excluded.description_density, inner_monologue=excluded.inner_monologue, preferred_patterns_json=excluded.preferred_patterns_json, avoided_patterns_json=excluded.avoided_patterns_json, notes=excluded.notes, updated_at=excluded.updated_at", params![input.project_id, input.narrative_pov, input.tense, input.sentence_style, input.dialogue_style, input.description_density, input.inner_monologue, preferred, avoided, input.notes, timestamp]).map_err(|error| sql_error("Projektstil konnte nicht gespeichert werden", error))?;
     db.query_row("SELECT project_id, narrative_pov, tense, sentence_style, dialogue_style, description_density, inner_monologue, preferred_patterns_json, avoided_patterns_json, notes, created_at, updated_at FROM project_styles WHERE project_id=?1", params![input.project_id], style_from_row).map_err(|error| sql_error("Gespeicherter Projektstil konnte nicht geladen werden", error))
+}
+
+fn style_analysis_run_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ProjectStyleAnalysisRun> {
+    Ok(ProjectStyleAnalysisRun {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        source_hash: row.get(2)?,
+        provider_id: row.get(3)?,
+        status: row.get(4)?,
+        created_at: row.get(5)?,
+        completed_at: row.get(6)?,
+        error_message: row.get(7)?,
+    })
+}
+
+fn style_observation_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ProjectStyleObservation> {
+    let evidence_json: String = row.get(7)?;
+    Ok(ProjectStyleObservation {
+        id: row.get(0)?,
+        run_id: row.get(1)?,
+        project_id: row.get(2)?,
+        observation_type: row.get(3)?,
+        observation_text: row.get(4)?,
+        recommendation: row.get(5)?,
+        confidence: row.get(6)?,
+        evidence: serde_json::from_str(&evidence_json).unwrap_or_default(),
+        review_status: row.get(8)?,
+        reviewed_at: row.get(9)?,
+        created_at: row.get(10)?,
+    })
+}
+
+fn narrative_summary_from_row(row: &rusqlite::Row<'_>) -> SqlResult<NarrativeSummary> {
+    Ok(NarrativeSummary {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        scope_type: row.get(2)?,
+        scope_id: row.get(3)?,
+        content_hash: row.get(4)?,
+        summary: row.get(5)?,
+        important_events: serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or_default(),
+        open_threads: serde_json::from_str(&row.get::<_, String>(7)?).unwrap_or_default(),
+        character_changes: serde_json::from_str(&row.get::<_, String>(8)?).unwrap_or_default(),
+        status: row.get(9)?,
+        author_confirmed: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+    })
+}
+
+fn validate_style_observation_type(value: &str) -> Result<(), String> {
+    if matches!(
+        value,
+        "narrative_pov"
+            | "tense"
+            | "sentence_rhythm"
+            | "dialogue"
+            | "description"
+            | "inner_monologue"
+            | "humor"
+            | "pacing"
+            | "vocabulary"
+            | "transitions"
+            | "tension"
+            | "avoidance"
+            | "character_voice_separation"
+    ) {
+        Ok(())
+    } else {
+        Err(format!("Unbekannter Stilbeobachtungstyp: {value}"))
+    }
+}
+
+fn validate_style_analysis_status(value: &str) -> Result<(), String> {
+    if matches!(value, "pending" | "running" | "completed" | "failed") {
+        Ok(())
+    } else {
+        Err(format!("Ungültiger Stilanalyse-Status: {value}"))
+    }
+}
+
+#[tauri::command]
+pub fn create_project_style_analysis_run(
+    state: State<'_, DbState>,
+    input: CreateProjectStyleAnalysisRunInput,
+) -> Result<ProjectStyleAnalysisRun, String> {
+    required(&input.source_hash, "Der Stil-Hash")?;
+    let db = lock_db(&state)?;
+    project_from_db(&db, &input.project_id)?;
+    let id = new_id();
+    let stamp = now();
+    db.execute("INSERT INTO project_style_analysis_runs(id,project_id,source_hash,provider_id,status,created_at) VALUES(?1,?2,?3,?4,'running',?5)", params![id, input.project_id, input.source_hash, input.provider_id, stamp]).map_err(|e| sql_error("Stilanalyse konnte nicht angelegt werden", e))?;
+    db.query_row("SELECT id,project_id,source_hash,provider_id,status,created_at,completed_at,error_message FROM project_style_analysis_runs WHERE id=?1", params![id], style_analysis_run_from_row).map_err(|e| sql_error("Stilanalyse konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn complete_project_style_analysis_run(
+    state: State<'_, DbState>,
+    id: String,
+) -> Result<ProjectStyleAnalysisRun, String> {
+    let db = lock_db(&state)?;
+    let changed = db.execute("UPDATE project_style_analysis_runs SET status='completed',completed_at=?1,error_message=NULL WHERE id=?2", params![now(), id]).map_err(|e| sql_error("Stilanalyse konnte nicht abgeschlossen werden", e))?;
+    if changed == 0 {
+        return Err("Stilanalyse nicht gefunden.".into());
+    }
+    db.query_row("SELECT id,project_id,source_hash,provider_id,status,created_at,completed_at,error_message FROM project_style_analysis_runs WHERE id=?1", params![id], style_analysis_run_from_row).map_err(|e| sql_error("Stilanalyse konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn fail_project_style_analysis_run(
+    state: State<'_, DbState>,
+    id: String,
+    error_message: String,
+) -> Result<ProjectStyleAnalysisRun, String> {
+    let db = lock_db(&state)?;
+    let changed = db.execute("UPDATE project_style_analysis_runs SET status='failed',completed_at=?1,error_message=?2 WHERE id=?3", params![now(), error_message.chars().take(1000).collect::<String>(), id]).map_err(|e| sql_error("Stilanalyse konnte nicht fehlgeschlagen markiert werden", e))?;
+    if changed == 0 {
+        return Err("Stilanalyse nicht gefunden.".into());
+    }
+    db.query_row("SELECT id,project_id,source_hash,provider_id,status,created_at,completed_at,error_message FROM project_style_analysis_runs WHERE id=?1", params![id], style_analysis_run_from_row).map_err(|e| sql_error("Stilanalyse konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn list_project_style_analysis_runs(
+    state: State<'_, DbState>,
+    project_id: String,
+) -> Result<Vec<ProjectStyleAnalysisRun>, String> {
+    let db = lock_db(&state)?;
+    let mut statement = db.prepare("SELECT id,project_id,source_hash,provider_id,status,created_at,completed_at,error_message FROM project_style_analysis_runs WHERE project_id=?1 ORDER BY created_at DESC").map_err(|e| sql_error("Stilanalysen konnten nicht geladen werden", e))?;
+    let result = statement
+        .query_map(params![project_id], style_analysis_run_from_row)
+        .map_err(|e| sql_error("Stilanalysen konnten nicht geladen werden", e))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| sql_error("Stilanalysen konnten nicht geladen werden", e));
+    result
+}
+
+#[tauri::command]
+pub fn save_project_style_observations(
+    state: State<'_, DbState>,
+    run_id: String,
+    observations: Vec<SaveProjectStyleObservationInput>,
+) -> Result<Vec<ProjectStyleObservation>, String> {
+    if observations.len() > 100 {
+        return Err("Zu viele Stilbeobachtungen.".into());
+    }
+    let db = lock_db(&state)?;
+    let run: (String, String) = db
+        .query_row(
+            "SELECT project_id,status FROM project_style_analysis_runs WHERE id=?1",
+            params![run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|e| sql_error("Stilanalyse konnte nicht geprüft werden", e))?;
+    let tx = db
+        .unchecked_transaction()
+        .map_err(|e| sql_error("Stilbeobachtungen konnten nicht gestartet werden", e))?;
+    for observation in observations {
+        if observation.run_id != run_id || observation.project_id != run.0 {
+            return Err("Stilbeobachtung gehört nicht zum Analyse-Lauf.".into());
+        }
+        validate_style_observation_type(&observation.observation_type)?;
+        if !(0.0..=1.0).contains(&observation.confidence)
+            || observation.observation_text.trim().is_empty()
+            || observation.observation_text.chars().count() > 2000
+            || observation.recommendation.chars().count() > 2000
+        {
+            return Err("Ungültige Stilbeobachtung.".into());
+        }
+        let review_status = observation.review_status.as_deref().unwrap_or("pending");
+        if !matches!(
+            review_status,
+            "pending" | "accepted" | "edited" | "rejected"
+        ) {
+            return Err("Ungültiger Reviewstatus der Stilbeobachtung.".into());
+        }
+        let evidence = serde_json::to_string(&observation.evidence)
+            .map_err(|e| sql_error("Stilbeleg konnte nicht serialisiert werden", e))?;
+        tx.execute("INSERT INTO project_style_observations(id,run_id,project_id,observation_type,observation_text,recommendation,confidence,evidence_json,review_status,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)", params![new_id(), observation.run_id, observation.project_id, observation.observation_type, observation.observation_text, observation.recommendation, observation.confidence, evidence, review_status, now()]).map_err(|e| sql_error("Stilbeobachtung konnte nicht gespeichert werden", e))?;
+    }
+    tx.commit()
+        .map_err(|e| sql_error("Stilbeobachtungen konnten nicht gespeichert werden", e))?;
+    list_project_style_observations_from_db(&db, &run.0, Some(&run_id))
+}
+
+fn list_project_style_observations_from_db(
+    db: &Connection,
+    project_id: &str,
+    run_id: Option<&str>,
+) -> Result<Vec<ProjectStyleObservation>, String> {
+    let mut statement = db.prepare("SELECT id,run_id,project_id,observation_type,observation_text,recommendation,confidence,evidence_json,review_status,reviewed_at,created_at FROM project_style_observations WHERE project_id=?1 AND (?2 IS NULL OR run_id=?2) ORDER BY created_at ASC").map_err(|e| sql_error("Stilbeobachtungen konnten nicht geladen werden", e))?;
+    let result = statement
+        .query_map(params![project_id, run_id], style_observation_from_row)
+        .map_err(|e| sql_error("Stilbeobachtungen konnten nicht geladen werden", e))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| sql_error("Stilbeobachtungen konnten nicht geladen werden", e));
+    result
+}
+
+#[tauri::command]
+pub fn list_project_style_observations(
+    state: State<'_, DbState>,
+    project_id: String,
+    run_id: Option<String>,
+) -> Result<Vec<ProjectStyleObservation>, String> {
+    let db = lock_db(&state)?;
+    list_project_style_observations_from_db(&db, &project_id, run_id.as_deref())
+}
+
+#[tauri::command]
+pub fn review_project_style_observation(
+    state: State<'_, DbState>,
+    id: String,
+    review_status: String,
+    observation_text: Option<String>,
+    recommendation: Option<String>,
+) -> Result<ProjectStyleObservation, String> {
+    if !matches!(
+        review_status.as_str(),
+        "pending" | "accepted" | "edited" | "rejected"
+    ) {
+        return Err("Ungültiger Reviewstatus der Stilbeobachtung.".into());
+    }
+    let db = lock_db(&state)?;
+    let changed = db.execute("UPDATE project_style_observations SET review_status=?1,observation_text=COALESCE(?2,observation_text),recommendation=COALESCE(?3,recommendation),reviewed_at=?4 WHERE id=?5", params![review_status, observation_text, recommendation, now(), id]).map_err(|e| sql_error("Stilbeobachtung konnte nicht reviewt werden", e))?;
+    if changed == 0 {
+        return Err("Stilbeobachtung nicht gefunden.".into());
+    }
+    db.query_row("SELECT id,run_id,project_id,observation_type,observation_text,recommendation,confidence,evidence_json,review_status,reviewed_at,created_at FROM project_style_observations WHERE id=?1", params![id], style_observation_from_row).map_err(|e| sql_error("Stilbeobachtung konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn list_narrative_summaries(
+    state: State<'_, DbState>,
+    project_id: String,
+    scope_type: Option<String>,
+    scope_id: Option<String>,
+) -> Result<Vec<NarrativeSummary>, String> {
+    let db = lock_db(&state)?;
+    let mut statement = db.prepare("SELECT id,project_id,scope_type,scope_id,content_hash,summary,important_events_json,open_threads_json,character_changes_json,status,author_confirmed,created_at,updated_at FROM narrative_summaries WHERE project_id=?1 AND (?2 IS NULL OR scope_type=?2) AND (?3 IS NULL OR scope_id=?3) ORDER BY updated_at DESC").map_err(|e| sql_error("Zusammenfassungen konnten nicht geladen werden", e))?;
+    let result = statement
+        .query_map(
+            params![project_id, scope_type, scope_id],
+            narrative_summary_from_row,
+        )
+        .map_err(|e| sql_error("Zusammenfassungen konnten nicht geladen werden", e))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| sql_error("Zusammenfassungen konnten nicht geladen werden", e));
+    result
+}
+
+fn validate_summary_scope(value: &str) -> Result<(), String> {
+    if matches!(value, "scene" | "chapter" | "book" | "project") {
+        Ok(())
+    } else {
+        Err(format!("Ungültiger Zusammenfassungsbereich: {value}"))
+    }
+}
+fn validate_summary_status(value: &str) -> Result<(), String> {
+    if matches!(value, "proposed" | "confirmed" | "outdated" | "rejected") {
+        Ok(())
+    } else {
+        Err(format!("Ungültiger Zusammenfassungsstatus: {value}"))
+    }
+}
+
+#[tauri::command]
+pub fn save_narrative_summary(
+    state: State<'_, DbState>,
+    input: SaveNarrativeSummaryInput,
+) -> Result<NarrativeSummary, String> {
+    validate_summary_scope(&input.scope_type)?;
+    validate_summary_status(&input.status)?;
+    required(&input.scope_id, "Die Zusammenfassungs-ID")?;
+    required(&input.content_hash, "Der Zusammenfassungs-Hash")?;
+    required(&input.summary, "Die Zusammenfassung")?;
+    if input.summary.chars().count() > 20_000
+        || input.important_events.len() > 100
+        || input.open_threads.len() > 100
+        || input.character_changes.len() > 100
+    {
+        return Err("Die Zusammenfassung ist zu groß.".into());
+    }
+    let db = lock_db(&state)?;
+    project_from_db(&db, &input.project_id)?;
+    let events = serde_json::to_string(&input.important_events)
+        .map_err(|e| sql_error("Zusammenfassung konnte nicht serialisiert werden", e))?;
+    let threads = serde_json::to_string(&input.open_threads)
+        .map_err(|e| sql_error("Zusammenfassung konnte nicht serialisiert werden", e))?;
+    let changes = serde_json::to_string(&input.character_changes)
+        .map_err(|e| sql_error("Zusammenfassung konnte nicht serialisiert werden", e))?;
+    let id = input.id.unwrap_or_else(new_id);
+    let stamp = now();
+    db.execute("INSERT INTO narrative_summaries(id,project_id,scope_type,scope_id,content_hash,summary,important_events_json,open_threads_json,character_changes_json,status,author_confirmed,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?12) ON CONFLICT(project_id,scope_type,scope_id,content_hash) DO UPDATE SET summary=excluded.summary,important_events_json=excluded.important_events_json,open_threads_json=excluded.open_threads_json,character_changes_json=excluded.character_changes_json,status=excluded.status,author_confirmed=excluded.author_confirmed,updated_at=excluded.updated_at", params![id,input.project_id,input.scope_type,input.scope_id,input.content_hash,input.summary,events,threads,changes,input.status,input.author_confirmed,stamp]).map_err(|e| sql_error("Zusammenfassung konnte nicht gespeichert werden", e))?;
+    db.query_row("SELECT id,project_id,scope_type,scope_id,content_hash,summary,important_events_json,open_threads_json,character_changes_json,status,author_confirmed,created_at,updated_at FROM narrative_summaries WHERE project_id=?1 AND scope_type=?2 AND scope_id=?3 AND content_hash=?4", params![input.project_id,input.scope_type,input.scope_id,input.content_hash], narrative_summary_from_row).map_err(|e| sql_error("Gespeicherte Zusammenfassung konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn mark_narrative_summary_outdated(
+    state: State<'_, DbState>,
+    project_id: String,
+    scope_type: String,
+    scope_id: String,
+    content_hash: String,
+) -> Result<(), String> {
+    validate_summary_scope(&scope_type)?;
+    let db = lock_db(&state)?;
+    db.execute("UPDATE narrative_summaries SET status='outdated',updated_at=?1 WHERE project_id=?2 AND scope_type=?3 AND scope_id=?4 AND content_hash<>?5 AND status='confirmed'", params![now(),project_id,scope_type,scope_id,content_hash]).map_err(|e| sql_error("Zusammenfassung konnte nicht veraltet markiert werden", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn review_narrative_summary(
+    state: State<'_, DbState>,
+    id: String,
+    status: String,
+) -> Result<NarrativeSummary, String> {
+    validate_summary_status(&status)?;
+    let db = lock_db(&state)?;
+    let changed = db.execute("UPDATE narrative_summaries SET status=?1,author_confirmed=?2,updated_at=?3 WHERE id=?4", params![status, if status == "confirmed" { 1 } else { 0 }, now(), id]).map_err(|e| sql_error("Zusammenfassung konnte nicht reviewt werden", e))?;
+    if changed == 0 {
+        return Err("Zusammenfassung nicht gefunden.".into());
+    }
+    db.query_row("SELECT id,project_id,scope_type,scope_id,content_hash,summary,important_events_json,open_threads_json,character_changes_json,status,author_confirmed,created_at,updated_at FROM narrative_summaries WHERE id=?1", params![id], narrative_summary_from_row).map_err(|e| sql_error("Zusammenfassung konnte nicht geladen werden", e))
 }
 
 #[tauri::command]
@@ -3491,8 +3871,16 @@ fn section_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ChapterGenerationSecti
         actual_words: row.get(5)?,
         content: row.get(6)?,
         continuation_summary: row.get(7)?,
-        continuity_state: serde_json::from_str(&row.get::<_, String>(8)?)
-            .unwrap_or_else(|_| serde_json::json!({})),
+        continuity_state: serde_json::from_str(&row.get::<_, String>(8)?).map_err(|_| {
+            rusqlite::Error::FromSqlConversionFailure(
+                8,
+                rusqlite::types::Type::Text,
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Ungültiger Continuity State",
+                )),
+            )
+        })?,
         status: row.get(9)?,
         provider_id: row.get(10)?,
         created_at: row.get(11)?,
@@ -3945,6 +4333,32 @@ mod tests {
             update_scene_in_db(&db, input.clone()).unwrap();
         }
         assert!(load_scene_versions(&db, "scene-1").unwrap().is_empty());
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn scene_update_marks_confirmed_summary_outdated_when_content_changes() {
+        let (path, db) = connection("summary-outdated");
+        let mut input = scene_input_from_scene(&load_scene(&db, "scene-1").unwrap());
+        input.content = "Marek blieb stehen.".into();
+        update_scene_in_db(&db, input.clone()).unwrap();
+        db.execute(
+            "INSERT INTO narrative_summaries(id,project_id,scope_type,scope_id,content_hash,summary,status,author_confirmed) VALUES('summary-outdated','project-zugestellt','scene','scene-1',?1,'Alt','confirmed',1)",
+            params![canonical_content_hash(&input.content)],
+        )
+        .unwrap();
+        input.content = "<p>Marek lief weiter.</p>".into();
+        update_scene_in_db(&db, input).unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT status FROM narrative_summaries WHERE id='summary-outdated'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            "outdated"
+        );
         drop(db);
         let _ = fs::remove_file(path);
     }
