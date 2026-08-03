@@ -1,5 +1,6 @@
 import type { Chapter, ContextRequest, ProjectContext, StorySourceReference } from '../types/domain';
 import type { StoryRepository } from './storyRepository';
+import { editorContentToPlainText } from '../utils/editorContent';
 
 const tokens = (value: string): string[] => value.toLocaleLowerCase().split(/[^\p{L}\p{N}]+/u).filter((token) => token.length > 2);
 
@@ -15,7 +16,7 @@ export class DeterministicProjectContextBuilder implements ProjectContextBuilder
     const entities = workspace.entities.filter((entity) => entity.projectId === input.projectId && entity.status !== 'archived');
     const sources = await this.repository.listSourceReferences(input.projectId);
     const questionTokens = tokens(input.userQuestion);
-    const sceneTokens = tokens(currentScene?.content ?? '');
+    const sceneTokens = tokens(editorContentToPlainText(currentScene?.content ?? ''));
     const relevantEntities = entities.filter((entity) => {
       const searchable = tokens(`${entity.name} ${entity.description} ${entity.tags.join(' ')} ${entity.chapter} ${entity.scene}`);
       const sameChapter = currentChapter && (entity.chapter === currentChapter.title || sources.some((source) => source.entityId === entity.id && source.chapterId === currentChapter.id));
