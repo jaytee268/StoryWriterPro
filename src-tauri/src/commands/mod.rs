@@ -6,12 +6,14 @@ use crate::{
     database::DbState,
     models::{
         validate_character_memory_status, validate_character_significance,
-        validate_character_voice_pattern_type, validate_dialogue_kind, validate_entity_status,
+        validate_character_voice_pattern_type, validate_continuity_state_kind,
+        validate_continuity_state_status, validate_dialogue_kind, validate_entity_status,
         validate_evidence_role, validate_knowledge_state, validate_lore_category,
         validate_lore_entity_type, validate_lore_importance, validate_lore_reveal_state,
         validate_lore_scope, validate_memory_kind, validate_memory_reliability,
-        validate_participant_role, validate_proposal_action, validate_proposal_classification,
-        validate_relation_type, validate_relationship_memory_type, validate_review_status,
+        validate_participant_role, validate_project_rule_scope, validate_project_rule_status,
+        validate_proposal_action, validate_proposal_classification, validate_relation_type,
+        validate_relationship_memory_type, validate_review_status, validate_rule_proposal_status,
         validate_scene_status, validate_scene_version_reason, validate_style_reference_category,
         validate_truthfulness, AddCharacterMemoryEvidenceInput, BibleProposal, BibleProposalInput,
         BibleUpdateRun, Book, Chapter, ChapterGenerationJob, ChapterGenerationPlan,
@@ -19,24 +21,26 @@ use crate::{
         CharacterDialogueMemory, CharacterExperience, CharacterKnowledgeState,
         CharacterMemoryEvidence, CharacterMemoryProposal, CharacterMemoryProposalDraft,
         CharacterMemoryUpdateRun, CharacterProfile, CharacterSceneState, CharacterVoicePattern,
-        CreateBibleUpdateRunInput, CreateChapterGenerationJobInput, CreateChapterInput,
-        CreateCharacterMemoryUpdateRunInput, CreateLoreEntryInput, CreateProjectInput,
-        CreateProjectStyleAnalysisRunInput, CreateSceneInput, CreateSceneVersionInput,
-        CreateSourceReferenceInput, CreateStoryEntityInput, CreateStoryEntityRelationInput,
-        CreateStyleReferenceInput, DatabaseInfo, DialogueMemoryParticipant, EditorPreferences,
-        LoreEntry, LoreMetadata, ManuscriptImportInput, ManuscriptImportResult, NarrativeSummary,
-        Project, ProjectStyle, ProjectStyleAnalysisRun, ProjectStyleObservation, ProviderStatus,
-        RelationshipMemory, RestoreSceneVersionInput, ReviewBibleProposalInput,
-        ReviewCharacterMemoryProposalInput, SaveChapterGenerationPlanInput,
-        SaveChapterGenerationReviewInput, SaveChapterGenerationSectionInput,
-        SaveCharacterDialogueMemoryInput, SaveCharacterExperienceInput,
-        SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput, SaveCharacterSceneStateInput,
-        SaveCharacterVoicePatternInput, SaveLoreMetadataInput, SaveNarrativeSummaryInput,
-        SaveProjectStyleInput, SaveProjectStyleObservationInput, SaveRelationshipMemoryInput,
-        SaveStoryDirectionInput, SaveWritingPreferencesInput, Scene, SceneInput, SceneVersion,
-        StoryDirection, StoryEntity, StoryEntityInput, StoryEntityRelation, StorySourceReference,
-        StyleReference, UpdateChapterInput, UpdateStoryEntityInput, UpdateStyleReferenceInput,
-        WorkspaceSnapshot, WritingPreferences,
+        ContinuityStateLedgerEntry, CreateBibleUpdateRunInput, CreateChapterGenerationJobInput,
+        CreateChapterInput, CreateCharacterMemoryUpdateRunInput, CreateLoreEntryInput,
+        CreateProjectInput, CreateProjectStyleAnalysisRunInput, CreateSceneInput,
+        CreateSceneVersionInput, CreateSourceReferenceInput, CreateStoryEntityInput,
+        CreateStoryEntityRelationInput, CreateStyleReferenceInput, DatabaseInfo,
+        DialogueMemoryParticipant, EditorPreferences, LoreEntry, LoreMetadata,
+        ManuscriptImportInput, ManuscriptImportResult, ManuscriptPosition, NarrativeSummary,
+        Project, ProjectRule, ProjectRuleProposal, ProjectStyle, ProjectStyleAnalysisRun,
+        ProjectStyleObservation, ProviderStatus, RelationshipMemory, RestoreSceneVersionInput,
+        ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput,
+        SaveChapterGenerationPlanInput, SaveChapterGenerationReviewInput,
+        SaveChapterGenerationSectionInput, SaveCharacterDialogueMemoryInput,
+        SaveCharacterExperienceInput, SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput,
+        SaveCharacterSceneStateInput, SaveCharacterVoicePatternInput, SaveContinuityStateInput,
+        SaveLoreMetadataInput, SaveNarrativeSummaryInput, SaveProjectRuleInput,
+        SaveProjectRuleProposalInput, SaveProjectStyleInput, SaveProjectStyleObservationInput,
+        SaveRelationshipMemoryInput, SaveStoryDirectionInput, SaveWritingPreferencesInput, Scene,
+        SceneInput, SceneVersion, StoryDirection, StoryEntity, StoryEntityInput,
+        StoryEntityRelation, StorySourceReference, StyleReference, UpdateChapterInput,
+        UpdateStoryEntityInput, UpdateStyleReferenceInput, WorkspaceSnapshot, WritingPreferences,
     },
 };
 use chrono::Utc;
@@ -2529,6 +2533,434 @@ pub fn delete_story_entity_relation(state: State<'_, DbState>, id: String) -> Re
     Ok(())
 }
 
+fn json_strings(value: &str) -> Vec<String> {
+    serde_json::from_str(value).unwrap_or_default()
+}
+
+fn project_rule_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ProjectRule> {
+    Ok(ProjectRule {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        title: row.get(2)?,
+        statement: row.get(3)?,
+        scope: row.get(4)?,
+        prerequisites: json_strings(&row.get::<_, String>(5)?),
+        effects: json_strings(&row.get::<_, String>(6)?),
+        exceptions: json_strings(&row.get::<_, String>(7)?),
+        connected_lore_ids: json_strings(&row.get::<_, String>(8)?),
+        source_reference_ids: json_strings(&row.get::<_, String>(9)?),
+        status: row.get(10)?,
+        confidence: row.get(11)?,
+        author_confirmed: row.get(12)?,
+        origin: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
+    })
+}
+
+fn validate_rule_input(db: &Connection, input: &SaveProjectRuleInput) -> Result<(), String> {
+    required(&input.title, "Der Regel-Titel")?;
+    required(&input.statement, "Die Regelaussage")?;
+    if input.title.chars().count() > 200 || input.statement.chars().count() > 4000 {
+        return Err("Die Regel ist zu lang.".into());
+    }
+    validate_project_rule_scope(&input.scope)?;
+    validate_project_rule_status(&input.status)?;
+    validate_probability(input.confidence, "Die Regel-Sicherheit")?;
+    if !matches!(input.origin.as_str(), "manual" | "bible_update" | "edited") {
+        return Err("Ungültige Regelherkunft.".into());
+    }
+    for id in &input.connected_lore_ids {
+        let confirmed_lore: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM story_entities e JOIN lore_metadata l ON l.entity_id=e.id WHERE e.id=?1 AND e.project_id=?2 AND e.status='confirmed' AND e.author_confirmed=1)",
+                params![id, input.project_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| sql_error("Verbundene Lore konnte nicht geprüft werden", error))?;
+        if !confirmed_lore {
+            return Err("Verbundene Lore muss zuerst als bestätigte Aussage vorliegen.".into());
+        }
+    }
+    for id in &input.source_reference_ids {
+        let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2)", params![id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Regelquelle konnte nicht geprüft werden", error))?;
+        if !exists {
+            return Err("Eine Regelquelle gehört nicht zum Projekt.".into());
+        }
+    }
+    Ok(())
+}
+
+fn insert_project_rule_tx(
+    transaction: &rusqlite::Transaction<'_>,
+    input: &SaveProjectRuleInput,
+    id: &str,
+    created_at: &str,
+) -> Result<(), String> {
+    let values = [
+        &input.prerequisites,
+        &input.effects,
+        &input.exceptions,
+        &input.connected_lore_ids,
+        &input.source_reference_ids,
+    ];
+    let json: Vec<String> = values
+        .iter()
+        .map(|value| serde_json::to_string(value).unwrap_or_else(|_| "[]".into()))
+        .collect();
+    transaction.execute("INSERT INTO project_rules (id, project_id, title, statement, scope, prerequisites_json, effects_json, exceptions_json, connected_lore_ids_json, source_reference_ids_json, status, confidence, author_confirmed, origin, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15) ON CONFLICT(id) DO UPDATE SET title=excluded.title, statement=excluded.statement, scope=excluded.scope, prerequisites_json=excluded.prerequisites_json, effects_json=excluded.effects_json, exceptions_json=excluded.exceptions_json, connected_lore_ids_json=excluded.connected_lore_ids_json, source_reference_ids_json=excluded.source_reference_ids_json, status=excluded.status, confidence=excluded.confidence, author_confirmed=excluded.author_confirmed, origin=excluded.origin, updated_at=excluded.updated_at", params![id, input.project_id, input.title, input.statement, input.scope, json[0], json[1], json[2], json[3], json[4], input.status, input.confidence, input.author_confirmed, input.origin, created_at]).map_err(|error| sql_error("Projektregel konnte nicht gespeichert werden", error))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn list_project_rules(
+    state: State<'_, DbState>,
+    project_id: String,
+    active_only: bool,
+) -> Result<Vec<ProjectRule>, String> {
+    let db = lock_db(&state)?;
+    let query = "SELECT id, project_id, title, statement, scope, prerequisites_json, effects_json, exceptions_json, connected_lore_ids_json, source_reference_ids_json, status, confidence, author_confirmed, origin, created_at, updated_at FROM project_rules WHERE project_id=?1 AND (?2=0 OR (status='confirmed' AND author_confirmed=1)) ORDER BY updated_at DESC";
+    let result = db
+        .prepare(query)
+        .map_err(|error| sql_error("Projektregeln konnten nicht geladen werden", error))?
+        .query_map(params![project_id, active_only], project_rule_from_row)
+        .map_err(|error| sql_error("Projektregeln konnten nicht geladen werden", error))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|error| sql_error("Projektregeln konnten nicht geladen werden", error));
+    result
+}
+
+#[tauri::command]
+pub fn save_project_rule(
+    state: State<'_, DbState>,
+    input: SaveProjectRuleInput,
+) -> Result<ProjectRule, String> {
+    let db = lock_db(&state)?;
+    validate_rule_input(&db, &input)?;
+    let id = input.id.clone().unwrap_or_else(new_id);
+    let stamp = now();
+    let transaction = db
+        .unchecked_transaction()
+        .map_err(|error| sql_error("Regeltransaktion konnte nicht gestartet werden", error))?;
+    insert_project_rule_tx(&transaction, &input, &id, &stamp)?;
+    transaction
+        .commit()
+        .map_err(|error| sql_error("Regeltransaktion konnte nicht abgeschlossen werden", error))?;
+    db.query_row("SELECT id, project_id, title, statement, scope, prerequisites_json, effects_json, exceptions_json, connected_lore_ids_json, source_reference_ids_json, status, confidence, author_confirmed, origin, created_at, updated_at FROM project_rules WHERE id=?1", params![id], project_rule_from_row).map_err(|error| sql_error("Gespeicherte Projektregel konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn delete_project_rule(
+    state: State<'_, DbState>,
+    project_id: String,
+    id: String,
+) -> Result<(), String> {
+    let db = lock_db(&state)?;
+    db.execute(
+        "UPDATE project_rules SET status='retired', updated_at=?3 WHERE project_id=?1 AND id=?2",
+        params![project_id, id, now()],
+    )
+    .map_err(|error| sql_error("Projektregel konnte nicht archiviert werden", error))?;
+    Ok(())
+}
+
+fn rule_proposal_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ProjectRuleProposal> {
+    Ok(ProjectRuleProposal {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        target_rule_id: row.get(2)?,
+        title: row.get(3)?,
+        statement: row.get(4)?,
+        scope: row.get(5)?,
+        prerequisites: json_strings(&row.get::<_, String>(6)?),
+        effects: json_strings(&row.get::<_, String>(7)?),
+        exceptions: json_strings(&row.get::<_, String>(8)?),
+        connected_lore_ids: json_strings(&row.get::<_, String>(9)?),
+        source_reference_ids: json_strings(&row.get::<_, String>(10)?),
+        evidence_excerpt: row.get(11)?,
+        chapter_id: row.get(12)?,
+        scene_id: row.get(13)?,
+        start_offset: row.get(14)?,
+        end_offset: row.get(15)?,
+        confidence: row.get(16)?,
+        reason: row.get(17)?,
+        review_status: row.get(18)?,
+        reviewed_at: row.get(19)?,
+        created_at: row.get(20)?,
+    })
+}
+
+#[tauri::command]
+pub fn list_project_rule_proposals(
+    state: State<'_, DbState>,
+    project_id: String,
+    review_status: Option<String>,
+) -> Result<Vec<ProjectRuleProposal>, String> {
+    let db = lock_db(&state)?;
+    if let Some(status) = &review_status {
+        validate_rule_proposal_status(status)?;
+    }
+    let result = db.prepare("SELECT id, project_id, target_rule_id, title, statement, scope, prerequisites_json, effects_json, exceptions_json, connected_lore_ids_json, source_reference_ids_json, evidence_excerpt, chapter_id, scene_id, start_offset, end_offset, confidence, reason, review_status, reviewed_at, created_at FROM project_rule_proposals WHERE project_id=?1 AND (?2 IS NULL OR review_status=?2) ORDER BY created_at DESC").map_err(|error| sql_error("Regelvorschläge konnten nicht geladen werden", error))?.query_map(params![project_id, review_status], rule_proposal_from_row).map_err(|error| sql_error("Regelvorschläge konnten nicht geladen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Regelvorschläge konnten nicht geladen werden", error));
+    result
+}
+
+#[tauri::command]
+pub fn save_project_rule_proposal(
+    state: State<'_, DbState>,
+    input: SaveProjectRuleProposalInput,
+) -> Result<ProjectRuleProposal, String> {
+    let db = lock_db(&state)?;
+    validate_project_rule_scope(&input.scope)?;
+    validate_probability(input.confidence, "Die Regel-Sicherheit")?;
+    if input.title.chars().count() > 200 || input.statement.chars().count() > 4000 {
+        return Err("Der Regelvorschlag ist zu lang.".into());
+    }
+    let project_exists: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+            params![input.project_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| sql_error("Projekt konnte nicht geprüft werden", error))?;
+    if !project_exists {
+        return Err("Das Projekt wurde nicht gefunden.".into());
+    }
+    for id in &input.connected_lore_ids {
+        project_entity_exists(&db, &input.project_id, id, None)?;
+    }
+    for id in &input.source_reference_ids {
+        let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2)", params![id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Regelquelle konnte nicht geprüft werden", error))?;
+        if !exists {
+            return Err("Eine Regelquelle gehört nicht zum Projekt.".into());
+        }
+    }
+    if let Some(scene_id) = &input.scene_id {
+        validate_scene_project(&db, &input.project_id, scene_id)?;
+    }
+    let id = input.id.clone().unwrap_or_else(new_id);
+    let status = input
+        .review_status
+        .clone()
+        .unwrap_or_else(|| "pending".into());
+    validate_rule_proposal_status(&status)?;
+    let json = [
+        &input.prerequisites,
+        &input.effects,
+        &input.exceptions,
+        &input.connected_lore_ids,
+        &input.source_reference_ids,
+    ]
+    .iter()
+    .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "[]".into()))
+    .collect::<Vec<_>>();
+    db.execute("INSERT INTO project_rule_proposals (id, project_id, target_rule_id, title, statement, scope, prerequisites_json, effects_json, exceptions_json, connected_lore_ids_json, source_reference_ids_json, evidence_excerpt, chapter_id, scene_id, start_offset, end_offset, confidence, reason, review_status, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20) ON CONFLICT(id) DO UPDATE SET title=excluded.title, statement=excluded.statement, review_status=excluded.review_status", params![id, input.project_id, input.target_rule_id, input.title, input.statement, input.scope, json[0], json[1], json[2], json[3], json[4], input.evidence_excerpt, input.chapter_id, input.scene_id, input.start_offset, input.end_offset, input.confidence, input.reason, status, now()]).map_err(|error| sql_error("Regelvorschlag konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT id, project_id, target_rule_id, title, statement, scope, prerequisites_json, effects_json, exceptions_json, connected_lore_ids_json, source_reference_ids_json, evidence_excerpt, chapter_id, scene_id, start_offset, end_offset, confidence, reason, review_status, reviewed_at, created_at FROM project_rule_proposals WHERE id=?1", params![id], rule_proposal_from_row).map_err(|error| sql_error("Gespeicherter Regelvorschlag konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn review_project_rule_proposal(
+    state: State<'_, DbState>,
+    id: String,
+    review_status: String,
+    input: Option<SaveProjectRuleInput>,
+) -> Result<ProjectRuleProposal, String> {
+    validate_rule_proposal_status(&review_status)?;
+    if review_status == "pending" {
+        return Err("Ein Regelvorschlag kann nicht auf ausstehend geprüft werden.".into());
+    }
+    let db = lock_db(&state)?;
+    let proposal = db.query_row("SELECT id, project_id, target_rule_id, title, statement, scope, prerequisites_json, effects_json, exceptions_json, connected_lore_ids_json, source_reference_ids_json, evidence_excerpt, chapter_id, scene_id, start_offset, end_offset, confidence, reason, review_status, reviewed_at, created_at FROM project_rule_proposals WHERE id=?1", params![id], rule_proposal_from_row).map_err(|error| sql_error("Regelvorschlag konnte nicht geladen werden", error))?;
+    if proposal.review_status != "pending" {
+        return Err("Dieser Regelvorschlag wurde bereits geprüft.".into());
+    }
+    let transaction = db
+        .unchecked_transaction()
+        .map_err(|error| sql_error("Regelreview konnte nicht gestartet werden", error))?;
+    if review_status != "rejected" {
+        let mut rule_input = input.unwrap_or(SaveProjectRuleInput {
+            id: proposal.target_rule_id.clone(),
+            project_id: proposal.project_id.clone(),
+            title: proposal.title.clone(),
+            statement: proposal.statement.clone(),
+            scope: proposal.scope.clone(),
+            prerequisites: proposal.prerequisites.clone(),
+            effects: proposal.effects.clone(),
+            exceptions: proposal.exceptions.clone(),
+            connected_lore_ids: proposal.connected_lore_ids.clone(),
+            source_reference_ids: proposal.source_reference_ids.clone(),
+            status: "confirmed".into(),
+            confidence: proposal.confidence,
+            author_confirmed: true,
+            origin: if review_status == "edited" {
+                "edited".into()
+            } else {
+                "bible_update".into()
+            },
+        });
+        validate_rule_input(&db, &rule_input)?;
+        if rule_input.source_reference_ids.is_empty()
+            && !proposal.evidence_excerpt.trim().is_empty()
+            && proposal.chapter_id.is_some()
+            && proposal.scene_id.is_some()
+        {
+            let source_id = insert_source_reference_if_missing_tx(
+                &transaction,
+                &CreateSourceReferenceInput {
+                    project_id: proposal.project_id.clone(),
+                    entity_id: None,
+                    proposal_id: Some(proposal.id.clone()),
+                    chapter_id: proposal.chapter_id.clone().unwrap_or_default(),
+                    scene_id: proposal.scene_id.clone().unwrap_or_default(),
+                    excerpt: proposal.evidence_excerpt.clone(),
+                    start_offset: proposal.start_offset,
+                    end_offset: proposal.end_offset,
+                },
+            )?;
+            rule_input.source_reference_ids.push(source_id);
+        }
+        insert_project_rule_tx(
+            &transaction,
+            &rule_input,
+            &rule_input.id.clone().unwrap_or_else(new_id),
+            &now(),
+        )?;
+    }
+    transaction
+        .execute(
+            "UPDATE project_rule_proposals SET review_status=?2, reviewed_at=?3 WHERE id=?1",
+            params![id, review_status, now()],
+        )
+        .map_err(|error| sql_error("Regelreview konnte nicht gespeichert werden", error))?;
+    transaction
+        .commit()
+        .map_err(|error| sql_error("Regelreview konnte nicht abgeschlossen werden", error))?;
+    db.query_row("SELECT id, project_id, target_rule_id, title, statement, scope, prerequisites_json, effects_json, exceptions_json, connected_lore_ids_json, source_reference_ids_json, evidence_excerpt, chapter_id, scene_id, start_offset, end_offset, confidence, reason, review_status, reviewed_at, created_at FROM project_rule_proposals WHERE id=?1", params![id], rule_proposal_from_row).map_err(|error| sql_error("Regelreview konnte nicht geladen werden", error))
+}
+
+fn ledger_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ContinuityStateLedgerEntry> {
+    Ok(ContinuityStateLedgerEntry {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        entity_id: row.get(2)?,
+        related_entity_id: row.get(3)?,
+        state_kind: row.get(4)?,
+        previous_state: row.get(5)?,
+        new_state: row.get(6)?,
+        chapter_id: row.get(7)?,
+        scene_id: row.get(8)?,
+        start_offset: row.get(9)?,
+        end_offset: row.get(10)?,
+        source_reference_id: row.get(11)?,
+        status: row.get(12)?,
+        confidence: row.get(13)?,
+        author_confirmed: row.get(14)?,
+        created_at: row.get(15)?,
+        updated_at: row.get(16)?,
+    })
+}
+
+fn validate_continuity_input(
+    db: &Connection,
+    input: &SaveContinuityStateInput,
+) -> Result<(), String> {
+    required(&input.new_state, "Der neue Zustand")?;
+    if input.new_state.chars().count() > 4000 || input.previous_state.chars().count() > 4000 {
+        return Err("Der Zustandswert ist zu lang.".into());
+    }
+    validate_continuity_state_kind(&input.state_kind)?;
+    validate_continuity_state_status(&input.status)?;
+    validate_probability(input.confidence, "Die Zustands-Sicherheit")?;
+    project_entity_exists(db, &input.project_id, &input.entity_id, None)?;
+    if let Some(id) = &input.related_entity_id {
+        project_entity_exists(db, &input.project_id, id, None)?;
+    }
+    if let (Some(chapter_id), Some(scene_id)) = (&input.chapter_id, &input.scene_id) {
+        let matches: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM scenes WHERE id=?1 AND chapter_id=?2)",
+                params![scene_id, chapter_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| sql_error("Kapitel und Szene konnten nicht geprüft werden", error))?;
+        if !matches {
+            return Err("Kapitel und Szene passen nicht zusammen.".into());
+        }
+        validate_scene_project(db, &input.project_id, scene_id)?;
+    }
+    if let Some(source_id) = &input.source_reference_id {
+        let ok: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2)", params![source_id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Quelle konnte nicht geprüft werden", error))?;
+        if !ok {
+            return Err("Die Quelle gehört nicht zum Projekt.".into());
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn list_continuity_state_ledger(
+    state: State<'_, DbState>,
+    project_id: String,
+    entity_id: Option<String>,
+    state_kind: Option<String>,
+) -> Result<Vec<ContinuityStateLedgerEntry>, String> {
+    let db = lock_db(&state)?;
+    if let Some(kind) = &state_kind {
+        validate_continuity_state_kind(kind)?;
+    }
+    let result = db.prepare("SELECT id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, chapter_id, scene_id, start_offset, end_offset, source_reference_id, status, confidence, author_confirmed, created_at, updated_at FROM continuity_state_ledger WHERE project_id=?1 AND (?2 IS NULL OR entity_id=?2) AND (?3 IS NULL OR state_kind=?3) ORDER BY created_at DESC").map_err(|error| sql_error("Zustandsverlauf konnte nicht geladen werden", error))?.query_map(params![project_id, entity_id, state_kind], ledger_from_row).map_err(|error| sql_error("Zustandsverlauf konnte nicht geladen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Zustandsverlauf konnte nicht geladen werden", error));
+    result
+}
+
+#[tauri::command]
+pub fn save_continuity_state_entry(
+    state: State<'_, DbState>,
+    input: SaveContinuityStateInput,
+) -> Result<ContinuityStateLedgerEntry, String> {
+    let db = lock_db(&state)?;
+    validate_continuity_input(&db, &input)?;
+    let id = input.id.clone().unwrap_or_else(new_id);
+    let stamp = now();
+    db.execute("INSERT INTO continuity_state_ledger (id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, chapter_id, scene_id, start_offset, end_offset, source_reference_id, status, confidence, author_confirmed, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?16) ON CONFLICT(id) DO UPDATE SET previous_state=excluded.previous_state, new_state=excluded.new_state, chapter_id=excluded.chapter_id, scene_id=excluded.scene_id, start_offset=excluded.start_offset, end_offset=excluded.end_offset, source_reference_id=excluded.source_reference_id, status=excluded.status, confidence=excluded.confidence, author_confirmed=excluded.author_confirmed, updated_at=excluded.updated_at", params![id, input.project_id, input.entity_id, input.related_entity_id, input.state_kind, input.previous_state, input.new_state, input.chapter_id, input.scene_id, input.start_offset, input.end_offset, input.source_reference_id, input.status, input.confidence, input.author_confirmed, stamp]).map_err(|error| sql_error("Zustandsänderung konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, chapter_id, scene_id, start_offset, end_offset, source_reference_id, status, confidence, author_confirmed, created_at, updated_at FROM continuity_state_ledger WHERE id=?1", params![id], ledger_from_row).map_err(|error| sql_error("Gespeicherte Zustandsänderung konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn get_state_at_position(
+    state: State<'_, DbState>,
+    project_id: String,
+    entity_id: String,
+    state_kind: String,
+    target_position: ManuscriptPosition,
+) -> Result<Option<ContinuityStateLedgerEntry>, String> {
+    validate_continuity_state_kind(&state_kind)?;
+    let db = lock_db(&state)?;
+    validate_scene_project(&db, &project_id, &target_position.scene_id)?;
+    let target: (i64, i64) = db.query_row("SELECT chapters.order_index, scenes.order_index FROM scenes JOIN chapters ON chapters.id=scenes.chapter_id WHERE scenes.id=?1 AND chapters.id=?2", params![target_position.scene_id, target_position.chapter_id], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|error| sql_error("Zielposition konnte nicht geprüft werden", error))?;
+    let mut statement = db.prepare("SELECT l.id, l.project_id, l.entity_id, l.related_entity_id, l.state_kind, l.previous_state, l.new_state, l.chapter_id, l.scene_id, l.start_offset, l.end_offset, l.source_reference_id, l.status, l.confidence, l.author_confirmed, l.created_at, l.updated_at, COALESCE(c.order_index, -1), COALESCE(s.order_index, -1) FROM continuity_state_ledger l LEFT JOIN chapters c ON c.id=l.chapter_id LEFT JOIN scenes s ON s.id=l.scene_id WHERE l.project_id=?1 AND l.entity_id=?2 AND l.state_kind=?3 AND l.status='confirmed' AND l.author_confirmed=1 ORDER BY c.order_index DESC, s.order_index DESC, COALESCE(l.start_offset, -1) DESC").map_err(|error| sql_error("Zustandsverlauf konnte nicht geladen werden", error))?;
+    let rows = statement
+        .query_map(params![project_id, entity_id, state_kind], |row| {
+            let entry = ledger_from_row(row)?;
+            let chapter_order: i64 = row.get(17)?;
+            let scene_order: i64 = row.get(18)?;
+            Ok((entry, chapter_order, scene_order))
+        })
+        .map_err(|error| sql_error("Zustandsverlauf konnte nicht geladen werden", error))?;
+    for row in rows {
+        let (entry, chapter_order, scene_order) =
+            row.map_err(|error| sql_error("Zustand konnte nicht gelesen werden", error))?;
+        let before = chapter_order < target.0
+            || (chapter_order == target.0
+                && (scene_order < target.1
+                    || (scene_order == target.1
+                        && entry.start_offset.unwrap_or(-1)
+                            <= target_position.offset.unwrap_or(i64::MAX))));
+        if before {
+            return Ok(Some(entry));
+        }
+    }
+    Ok(None)
+}
+
 fn validate_character(db: &Connection, project_id: &str, character_id: &str) -> Result<(), String> {
     project_entity_exists(db, project_id, character_id, Some("character"))
 }
@@ -4950,7 +5382,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            13
+            14
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);
@@ -5073,6 +5505,47 @@ mod tests {
         let interval: (String, String) = db.query_row("SELECT effective_from_scene_id,effective_until_scene_id FROM character_knowledge_history WHERE id='history-interval'", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
         assert_eq!(interval, ("scene-1".into(), "scene-3".into()));
         assert_eq!(db.query_row("SELECT effective_from_scene_id FROM character_knowledge_states WHERE id='knowledge-interval'", [], |row| row.get::<_, String>(0)).unwrap(), "scene-3");
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn continuity_graph_migrates_and_unconfirmed_rules_are_inactive() {
+        let (path, db) = connection("continuity-rule-graph");
+        for table in [
+            "project_rules",
+            "project_rule_proposals",
+            "continuity_state_ledger",
+        ] {
+            assert!(db
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                    params![table],
+                    |row| row.get::<_, bool>(0)
+                )
+                .unwrap());
+        }
+        db.execute("INSERT INTO project_rules (id,project_id,title,statement,status,confidence,author_confirmed) VALUES ('rule-test','project-zugestellt','Regel','Eine bestätigte Projektregel.','proposed',0.8,0)", []).unwrap();
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM project_rules WHERE project_id='project-zugestellt' AND status='confirmed' AND author_confirmed=1", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        db.execute(
+            "UPDATE project_rules SET status='confirmed', author_confirmed=1 WHERE id='rule-test'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM project_rules WHERE project_id='project-zugestellt' AND status='confirmed' AND author_confirmed=1", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn continuity_ledger_excludes_future_and_preserves_past_state() {
+        let (path, db) = connection("continuity-ledger");
+        db.execute("INSERT INTO continuity_state_ledger (id,project_id,entity_id,state_kind,new_state,status,confidence,author_confirmed,chapter_id,scene_id) VALUES ('ledger-before','project-zugestellt','entity-package','item_availability','verfügbar','confirmed',1,1,'chapter-1','scene-1')", []).unwrap();
+        db.execute("INSERT INTO continuity_state_ledger (id,project_id,entity_id,state_kind,previous_state,new_state,status,confidence,author_confirmed,chapter_id,scene_id) VALUES ('ledger-after','project-zugestellt','entity-package','item_availability','verfügbar','nicht verfügbar','confirmed',1,1,'chapter-3','scene-3')", []).unwrap();
+        let early: String = db.query_row("SELECT new_state FROM continuity_state_ledger l JOIN chapters c ON c.id=l.chapter_id JOIN scenes s ON s.id=l.scene_id WHERE l.project_id='project-zugestellt' AND l.entity_id='entity-package' AND l.state_kind='item_availability' AND l.status='confirmed' AND l.author_confirmed=1 AND (c.order_index < 2 OR (c.order_index=2 AND s.order_index <= 1)) ORDER BY c.order_index DESC, s.order_index DESC LIMIT 1", [], |row| row.get(0)).unwrap();
+        assert_eq!(early, "verfügbar");
+        let future_count: i64 = db.query_row("SELECT COUNT(*) FROM continuity_state_ledger l JOIN chapters c ON c.id=l.chapter_id WHERE l.id='ledger-after' AND c.order_index < 3", [], |row| row.get(0)).unwrap();
+        assert_eq!(future_count, 0);
         drop(db);
         let _ = fs::remove_file(path);
     }

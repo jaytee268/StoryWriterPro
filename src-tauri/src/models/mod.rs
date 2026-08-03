@@ -213,6 +213,158 @@ pub struct StorySourceReference {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProjectRule {
+    pub id: String,
+    pub project_id: String,
+    pub title: String,
+    pub statement: String,
+    pub scope: String,
+    pub prerequisites: Vec<String>,
+    pub effects: Vec<String>,
+    pub exceptions: Vec<String>,
+    pub connected_lore_ids: Vec<String>,
+    pub source_reference_ids: Vec<String>,
+    pub status: String,
+    pub confidence: f64,
+    pub author_confirmed: bool,
+    pub origin: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProjectRuleInput {
+    pub id: Option<String>,
+    pub project_id: String,
+    pub title: String,
+    pub statement: String,
+    pub scope: String,
+    #[serde(default)]
+    pub prerequisites: Vec<String>,
+    #[serde(default)]
+    pub effects: Vec<String>,
+    #[serde(default)]
+    pub exceptions: Vec<String>,
+    #[serde(default)]
+    pub connected_lore_ids: Vec<String>,
+    pub source_reference_ids: Vec<String>,
+    pub status: String,
+    pub confidence: f64,
+    pub author_confirmed: bool,
+    pub origin: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectRuleProposal {
+    pub id: String,
+    pub project_id: String,
+    pub target_rule_id: Option<String>,
+    pub title: String,
+    pub statement: String,
+    pub scope: String,
+    pub prerequisites: Vec<String>,
+    pub effects: Vec<String>,
+    pub exceptions: Vec<String>,
+    pub connected_lore_ids: Vec<String>,
+    pub source_reference_ids: Vec<String>,
+    pub evidence_excerpt: String,
+    pub chapter_id: Option<String>,
+    pub scene_id: Option<String>,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub confidence: f64,
+    pub reason: String,
+    pub review_status: String,
+    pub reviewed_at: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProjectRuleProposalInput {
+    pub id: Option<String>,
+    pub project_id: String,
+    pub target_rule_id: Option<String>,
+    pub title: String,
+    pub statement: String,
+    pub scope: String,
+    #[serde(default)]
+    pub prerequisites: Vec<String>,
+    #[serde(default)]
+    pub effects: Vec<String>,
+    #[serde(default)]
+    pub exceptions: Vec<String>,
+    #[serde(default)]
+    pub connected_lore_ids: Vec<String>,
+    #[serde(default)]
+    pub source_reference_ids: Vec<String>,
+    #[serde(default)]
+    pub evidence_excerpt: String,
+    pub chapter_id: Option<String>,
+    pub scene_id: Option<String>,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub confidence: f64,
+    #[serde(default)]
+    pub reason: String,
+    pub review_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContinuityStateLedgerEntry {
+    pub id: String,
+    pub project_id: String,
+    pub entity_id: String,
+    pub related_entity_id: Option<String>,
+    pub state_kind: String,
+    pub previous_state: String,
+    pub new_state: String,
+    pub chapter_id: Option<String>,
+    pub scene_id: Option<String>,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub source_reference_id: Option<String>,
+    pub status: String,
+    pub confidence: f64,
+    pub author_confirmed: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveContinuityStateInput {
+    pub id: Option<String>,
+    pub project_id: String,
+    pub entity_id: String,
+    pub related_entity_id: Option<String>,
+    pub state_kind: String,
+    #[serde(default)]
+    pub previous_state: String,
+    pub new_state: String,
+    pub chapter_id: Option<String>,
+    pub scene_id: Option<String>,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub source_reference_id: Option<String>,
+    pub status: String,
+    pub confidence: f64,
+    pub author_confirmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManuscriptPosition {
+    pub chapter_id: String,
+    pub scene_id: String,
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BibleUpdateRun {
     pub id: String,
     pub project_id: String,
@@ -715,6 +867,40 @@ pub fn validate_relation_type(value: &str) -> Result<(), String> {
         "affects" | "explains" | "contradicts" | "reveals" | "hides" | "depends_on"
         | "applies_to" | "caused_by" | "connected_to" => Ok(()),
         _ => Err(format!("Ungültiger Relationstyp: {value}")),
+    }
+}
+pub fn validate_project_rule_scope(value: &str) -> Result<(), String> {
+    match value {
+        "project" | "book" | "arc" => Ok(()),
+        _ => Err(format!("Ungültiger Regelbereich: {value}")),
+    }
+}
+pub fn validate_project_rule_status(value: &str) -> Result<(), String> {
+    match value {
+        "proposed" | "confirmed" | "rejected" | "retired" => Ok(()),
+        _ => Err(format!("Ungültiger Regelstatus: {value}")),
+    }
+}
+pub fn validate_rule_proposal_status(value: &str) -> Result<(), String> {
+    match value {
+        "pending" | "accepted" | "edited" | "rejected" => Ok(()),
+        _ => Err(format!("Ungültiger Regelvorschlagsstatus: {value}")),
+    }
+}
+pub fn validate_continuity_state_kind(value: &str) -> Result<(), String> {
+    match value {
+        "item_existence" | "item_availability" | "ownership" | "location"
+        | "physical_condition" | "injury" | "property" | "knowledge" | "relationship"
+        | "promise" | "goal" | "open_action" => Ok(()),
+        _ => Err(format!("Unbekannte Zustandsart: {value}")),
+    }
+}
+pub fn validate_continuity_state_status(value: &str) -> Result<(), String> {
+    match value {
+        "proposed" | "confirmed" | "uncertain" | "contradicted" | "rejected" | "retconned" => {
+            Ok(())
+        }
+        _ => Err(format!("Ungültiger Zustandsstatus: {value}")),
     }
 }
 pub fn validate_style_reference_category(value: &str) -> Result<(), String> {

@@ -412,6 +412,31 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
     if has_knowledge_intervals == 0 {
         connection.execute("INSERT INTO schema_migrations (version) VALUES (13)", [])?;
     }
+    let has_continuity_graph: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 14",
+        [],
+        |row| row.get(0),
+    )?;
+    connection.execute_batch(include_str!(
+        "../../../migrations/014_continuity_rule_graph.sql"
+    ))?;
+    // If a desktop upgrade was interrupted after creating the tables, the
+    // additive JSON columns are still completed on the next startup.
+    ensure_column(
+        connection,
+        "project_rules",
+        "source_reference_ids_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_column(
+        connection,
+        "project_rule_proposals",
+        "source_reference_ids_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    if has_continuity_graph == 0 {
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (14)", [])?;
+    }
     Ok(())
 }
 
@@ -567,7 +592,7 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            13
+            14
         );
         assert_eq!(
             connection
@@ -767,7 +792,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                13
+                14
             );
             // Running startup migrations again must not change the assignment
             // or fail on the ALTER TABLE statement.
