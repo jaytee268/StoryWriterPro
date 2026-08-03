@@ -145,6 +145,29 @@ describe('Story-Bible-Review und grounded context', () => {
     expect(answer.sources.every((source) => source.id)).toBe(true);
   });
 
+  it('legt Lore atomar an und lädt strukturierte Relationen aus beiden Richtungen', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const lore = await repository.createLoreEntry({ projectId: workspace.project.id, name: 'Die Simulation', entityType: 'secret', description: 'Eine verborgene Ursache.', status: 'confirmed', category: 'mystery', scope: 'book', revealState: 'foreshadowed', importance: 'core', truthStatement: 'Die Räume können abweichen.', rulesText: '', exceptionsText: '', authorKnowledge: 'Der Autor kennt die Ursache.', readerKnowledge: '', revealPlan: '', tags: ['Mysterium'] });
+    const target = workspace.entities.find((entity) => entity.name === 'Veränderte Paketnummer')!;
+    const relation = await repository.createEntityRelation({ projectId: workspace.project.id, sourceEntityId: lore.entity.id, targetEntityId: target.id, relationType: 'explains', label: 'erklärt', authorConfirmed: true });
+    expect((await repository.listEntityRelations(workspace.project.id, lore.entity.id))).toContainEqual(relation);
+    expect((await repository.listEntityRelations(workspace.project.id, target.id))).toContainEqual(relation);
+    expect((await repository.getLoreMetadata(workspace.project.id)).find((item) => item.entityId === lore.entity.id)).toMatchObject({ category: 'mystery', revealState: 'foreshadowed', importance: 'core' });
+  });
+
+  it('speichert eine verankerte Stilreferenz mit Unicode-Offsets ohne den Szenentext zu verändern', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const scene = workspace.chapters[0]!.scenes[0]!;
+    const original = scene.content;
+    const excerpt = 'Karton';
+    const start = Array.from(original).findIndex((_, index) => Array.from(original).slice(index, index + Array.from(excerpt).length).join('') === excerpt);
+    const reference = await repository.createStyleReference({ projectId: workspace.project.id, chapterId: scene.chapterId, sceneId: scene.id, excerpt, startOffset: start, endOffset: start + Array.from(excerpt).length, category: 'description', label: 'Konkrete Beschreibung', notes: '', weight: 2 });
+    expect(reference.startOffset).toBeGreaterThanOrEqual(0);
+    expect((await repository.loadWorkspace()).chapters[0]!.scenes[0]!.content).toBe(original);
+  });
+
   it('begrenzt Chat-Quellen auf die tatsächlich verwendeten Einträge', () => {
     const context: ProjectContext = {
       projectId: 'p',

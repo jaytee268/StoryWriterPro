@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { AlignCenter, AlignLeft, AlignRight, ArrowLeft, Bold, Check, ChevronDown, History, Image, IndentDecrease, IndentIncrease, Italic, Link, List, ListOrdered, LoaderCircle, MessageCircle, MoreHorizontal, Plus, Quote, Sparkles, StickyNote, Strikethrough, Table2, Type, Underline, X } from 'lucide-react';
-import type { Chapter, EditorPreferences, PendingSourceNavigation, Scene, SceneVersion, UpdateChapterInput } from '../../types/domain';
+import type { Chapter, CreateStyleReferenceInput, EditorPreferences, PendingSourceNavigation, Scene, SceneVersion, StyleReference, UpdateChapterInput, StyleReferenceCategory } from '../../types/domain';
 import { SceneSaveQueue, type SceneSaveStatus } from '../../services/sceneSaveQueue';
 import { editorContentToHtml, editorContentToPlainText } from '../../utils/editorContent';
 import { unicodeIndexOf, unicodeSlice } from '../../utils/aiText';
+import { selectionToUnicodeOffsets, type EditorSelectionSnapshot } from '../../utils/editorSelection';
 import { VersionHistory } from './VersionHistory';
 
 interface EditorProps {
+  projectId: string;
   chapters: Chapter[];
   scene?: Scene;
   chapter?: Chapter;
@@ -29,6 +31,7 @@ interface EditorProps {
   onOpenAssistant: () => void;
   onSaveStateChange: (status: SceneSaveStatus) => void;
   onRegisterSaveController: (controller: EditorSaveController | null) => void;
+  onCreateStyleReference: (input: CreateStyleReferenceInput) => Promise<StyleReference>;
 }
 
 export interface EditorSaveController {
@@ -47,7 +50,7 @@ const manuscriptFonts: Record<EditorPreferences['fontFamily'], string> = {
   typewriter: "'DM Mono', 'Courier New', monospace",
 };
 
-export function EditorView({ chapters, scene, chapter, pendingSourceNavigation, onSourceNavigationConsumed, onBack, onSelectScene, onSave, onCreateChapter, onUpdateChapter, onCreateScene, onListVersions, onCreateVersion, onRestoreVersion, onGetEditorPreferences, onSaveEditorPreferences, onBibleUpdate, bibleUpdateBusy, onCancelBibleUpdate, onOpenAssistant, onSaveStateChange, onRegisterSaveController }: EditorProps) {
+export function EditorView({ projectId, chapters, scene, chapter, pendingSourceNavigation, onSourceNavigationConsumed, onBack, onSelectScene, onSave, onCreateChapter, onUpdateChapter, onCreateScene, onListVersions, onCreateVersion, onRestoreVersion, onGetEditorPreferences, onSaveEditorPreferences, onBibleUpdate, bibleUpdateBusy, onCancelBibleUpdate, onOpenAssistant, onSaveStateChange, onRegisterSaveController, onCreateStyleReference }: EditorProps) {
   const [draftScene, setDraftScene] = useState<Scene | undefined>(scene);
   const latestDraft = useRef<Scene | undefined>(scene);
   const queue = useRef<SceneSaveQueue | undefined>(undefined);
@@ -68,6 +71,7 @@ export function EditorView({ chapters, scene, chapter, pendingSourceNavigation, 
   const [chapterTitleDraft, setChapterTitleDraft] = useState(chapter?.title ?? '');
   const [sceneTitleEditing, setSceneTitleEditing] = useState<string | null>(null);
   const [sceneTitleDraft, setSceneTitleDraft] = useState('');
+  const [styleReferenceDraft, setStyleReferenceDraft] = useState<{ selection: EditorSelectionSnapshot; category: StyleReferenceCategory; label: string; notes: string; weight: number }>();
 
   const refreshToolbarState = () => {
     const selection = document.getSelection();
@@ -224,6 +228,21 @@ export function EditorView({ chapters, scene, chapter, pendingSourceNavigation, 
   const addImage = () => { const url = window.prompt('Bild-Adresse eingeben'); if (url?.trim()) runEditorCommand('insertImage', url.trim()); };
   const addComment = () => { const comment = window.prompt('Kurze Notiz für diese Stelle'); if (comment?.trim()) runEditorCommand('insertText', `〔Notiz: ${comment.trim()}〕`); };
   const addTable = () => runEditorCommand('insertHTML', '<table><tbody><tr><td> </td><td> </td></tr><tr><td> </td><td> </td></tr></tbody></table><p><br></p>');
+  const prepareStyleReference = async () => {
+    const selection = document.getSelection();
+    const range = selection && selection.rangeCount ? selection.getRangeAt(0) : undefined;
+    const snapshot = editorRef.current && range ? selectionToUnicodeOffsets(editorRef.current, range) : undefined;
+    if (!snapshot) { setSourceNavigationNotice('Markiere zuerst eine Textpassage.'); return; }
+    if (!await flushBeforeLeaving()) return;
+    setStyleReferenceDraft({ selection: snapshot, category: 'general', label: '', notes: '', weight: 1 });
+  };
+  const saveStyleReference = async () => {
+    if (!styleReferenceDraft || !draftScene || !chapter) return;
+    try {
+      await onCreateStyleReference({ projectId, chapterId: chapter.id, sceneId: draftScene.id, excerpt: styleReferenceDraft.selection.excerpt, startOffset: styleReferenceDraft.selection.startOffset, endOffset: styleReferenceDraft.selection.endOffset, category: styleReferenceDraft.category, label: styleReferenceDraft.label.trim() || 'Stilreferenz', notes: styleReferenceDraft.notes, weight: styleReferenceDraft.weight });
+      setStyleReferenceDraft(undefined); setSourceNavigationNotice('Stilreferenz gespeichert.');
+    } catch (error) { setSourceNavigationNotice(error instanceof Error ? error.message : 'Stilreferenz konnte nicht gespeichert werden.'); }
+  };
 
   const visibleScenes = chapter?.scenes ?? [];
   return <section className="editor-view writing-workspace">
@@ -243,7 +262,7 @@ export function EditorView({ chapters, scene, chapter, pendingSourceNavigation, 
       <main className="writing-editor-area">
         <div className="writing-format-toolbar" aria-label="Textwerkzeuge"><select aria-label="Absatzformat" value={blockFormat} onChange={(event) => applyBlockFormat(event.target.value as 'paragraph' | 'heading')}><option value="paragraph">Absatz</option><option value="heading">Überschrift</option></select><span className="writing-toolbar-divider" /><button className={toolbarState.bold ? 'active' : ''} aria-pressed={toolbarState.bold} title="Fett" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('bold')}><Bold size={19} /></button><button className={toolbarState.italic ? 'active' : ''} aria-pressed={toolbarState.italic} title="Kursiv" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('italic')}><Italic size={19} /></button><button className={toolbarState.underline ? 'active' : ''} aria-pressed={toolbarState.underline} title="Unterstrichen" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('underline')}><Underline size={19} /></button><button className={toolbarState.strikeThrough ? 'active' : ''} aria-pressed={toolbarState.strikeThrough} title="Durchgestrichen" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('strikeThrough')}><Strikethrough size={18} /></button><span className="writing-toolbar-divider" /><button className={toolbarState.unorderedList ? 'active' : ''} aria-pressed={toolbarState.unorderedList} title="Aufzählung" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('insertUnorderedList')}><List size={19} /></button><button className={toolbarState.orderedList ? 'active' : ''} aria-pressed={toolbarState.orderedList} title="Nummerierte Liste" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('insertOrderedList')}><ListOrdered size={19} /></button><button title="Einzug verringern" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('outdent')}><IndentDecrease size={18} /></button><button title="Einzug vergrößern" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('indent')}><IndentIncrease size={18} /></button><span className="writing-toolbar-divider" /><button title="Link" onMouseDown={keepEditorSelection} onClick={addLink}><Link size={18} /></button><button title="Bild" onMouseDown={keepEditorSelection} onClick={addImage}><Image size={18} /></button><button title="Kommentar einfügen" onMouseDown={keepEditorSelection} onClick={addComment}><MessageCircle size={18} /></button><span className="writing-toolbar-divider" /><button title="Tabelle einfügen" onMouseDown={keepEditorSelection} onClick={addTable}><Table2 size={18} /></button><button title="Zitat" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('formatBlock', 'blockquote')}><Quote size={19} /></button><span className="writing-toolbar-divider" /><button className={toolbarState.justifyLeft ? 'active' : ''} aria-pressed={toolbarState.justifyLeft} title="Linksbündig" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('justifyLeft')}><AlignLeft size={18} /></button><button className={toolbarState.justifyCenter ? 'active' : ''} aria-pressed={toolbarState.justifyCenter} title="Zentriert" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('justifyCenter')}><AlignCenter size={18} /></button><button className={toolbarState.justifyRight ? 'active' : ''} aria-pressed={toolbarState.justifyRight} title="Rechtsbündig" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('justifyRight')}><AlignRight size={18} /></button><span className="writing-toolbar-spacer" /><button title="Schrift und Layout" onClick={() => setDisplayOpen((open) => !open)}><Type size={18} /></button></div>
         {displayOpen && <div className="writing-preferences writing-preferences-inline"><label>Schrift<select value={preferences.fontFamily} onChange={(event) => setPreferences((current) => ({ ...current, fontFamily: event.target.value as EditorPreferences['fontFamily'] }))}><option value="serif">Roman · Serif</option><option value="sans">Klar · Sans</option><option value="typewriter">Schreibmaschine · Mono</option></select></label><label>Größe<strong>{preferences.fontSize}px</strong><input type="range" min="14" max="28" step="1" value={preferences.fontSize} onChange={(event) => setPreferences((current) => ({ ...current, fontSize: Number(event.target.value) }))} /></label><label>Zeilenabstand<strong>{preferences.lineHeight.toFixed(2)}</strong><input type="range" min="1.3" max="2.5" step="0.05" value={preferences.lineHeight} onChange={(event) => setPreferences((current) => ({ ...current, lineHeight: Number(event.target.value) }))} /></label></div>}
-        <div className="writing-editor-tools"><span>{draftScene?.title ?? 'Neue Szene'}</span><div><span>{wordCount.toLocaleString('de-DE')} Wörter</span><button className="writing-tool-link" onClick={() => void openHistory()} disabled={!draftScene || bibleUpdateBusy}><History size={15} /> Verlauf</button>{bibleUpdateBusy ? <button className="writing-tool-link writing-tool-primary" onClick={() => void onCancelBibleUpdate()}><LoaderCircle className="spin" size={15} /> Abbrechen</button> : <button className="writing-tool-link writing-tool-primary" onClick={() => void updateBible()} disabled={!draftScene}><Sparkles size={15} /> Story Bible aktualisieren</button>}</div></div>
+        <div className="writing-editor-tools"><span>{draftScene?.title ?? 'Neue Szene'}</span><div><span>{wordCount.toLocaleString('de-DE')} Wörter</span><button className="writing-tool-link" onClick={() => void openHistory()} disabled={!draftScene || bibleUpdateBusy}><History size={15} /> Verlauf</button><button className="writing-tool-link" onClick={() => void prepareStyleReference()} disabled={!draftScene}><StickyNote size={15} /> Als Stilreferenz</button>{bibleUpdateBusy ? <button className="writing-tool-link writing-tool-primary" onClick={() => void onCancelBibleUpdate()}><LoaderCircle className="spin" size={15} /> Abbrechen</button> : <button className="writing-tool-link writing-tool-primary" onClick={() => void updateBible()} disabled={!draftScene}><Sparkles size={15} /> Story Bible aktualisieren</button>}</div></div>
         {sourceNavigationNotice && <div className="source-navigation-notice" role="status">{sourceNavigationNotice}<button className="text-button" onClick={() => setSourceNavigationNotice('')}>Schließen</button></div>}
         <article className="writing-page" style={paperStyle}>{draftScene ? <div ref={editorRef} className="writing-textarea" contentEditable role="textbox" aria-label="Szenentext" lang="de" spellCheck onInput={syncEditorDraft} data-placeholder="Beginne mit dem Schreiben deiner Szene …" /> : <div className="empty-state">Lege ein Kapitel und eine Szene an, um zu schreiben.</div>}</article>
         {saveError && <div className="save-error writing-save-error" role="alert"><strong>{saveLabels.error}</strong><span>{saveError}</span><button className="text-button" onClick={() => { if (latestDraft.current) queue.current?.schedule(latestDraft.current); }}>Erneut speichern</button></div>}
@@ -251,6 +270,7 @@ export function EditorView({ chapters, scene, chapter, pendingSourceNavigation, 
       </main>
     </div>
     {historyOpen && draftScene && <VersionHistory scene={draftScene} onClose={() => setHistoryOpen(false)} onLoad={onListVersions} onCreate={onCreateVersion} onRestore={restoreVersion} />}
+    {styleReferenceDraft && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal simple-modal"><div className="modal-head"><div><span className="eyebrow">PROJEKTSTIL</span><h2>Als Stilreferenz speichern</h2></div><button className="icon-button" onClick={() => setStyleReferenceDraft(undefined)}><X size={17} /></button></div><p className="modal-intro">„{styleReferenceDraft.selection.excerpt}“</p><div className="form-grid"><label className="field-label">Kategorie<select value={styleReferenceDraft.category} onChange={(event) => setStyleReferenceDraft({ ...styleReferenceDraft, category: event.target.value as StyleReferenceCategory })}>{[['general', 'Allgemein'], ['dialogue', 'Dialog'], ['tension', 'Spannung'], ['description', 'Beschreibung'], ['inner_monologue', 'Innerer Monolog'], ['humor', 'Humor']].map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="field-label">Bezeichnung<input autoFocus value={styleReferenceDraft.label} onChange={(event) => setStyleReferenceDraft({ ...styleReferenceDraft, label: event.target.value })} placeholder="z. B. knapper Dialog" /></label><label className="field-label">Gewichtung<input type="number" min="0.1" max="5" step="0.1" value={styleReferenceDraft.weight} onChange={(event) => setStyleReferenceDraft({ ...styleReferenceDraft, weight: Number(event.target.value) })} /></label><label className="field-label full-field">Notizen<textarea rows={3} value={styleReferenceDraft.notes} onChange={(event) => setStyleReferenceDraft({ ...styleReferenceDraft, notes: event.target.value })} /></label></div><div className="modal-actions"><button className="ghost-button" onClick={() => setStyleReferenceDraft(undefined)}>Abbrechen</button><button className="primary-button" onClick={() => void saveStyleReference()}>Speichern</button></div></div></div>}
   </section>;
 }
 

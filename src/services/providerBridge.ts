@@ -41,9 +41,13 @@ export function answerFromProjectContext(question: string, context: ProjectConte
     const style = context.projectStyle;
     return { text: style ? `Der Projektstil ist als ${style.narrativePov || 'Perspektive noch offen'} und ${style.tense || 'Zeitform noch offen'} hinterlegt.${style.sentenceStyle ? ` Satzstil: ${style.sentenceStyle}` : ''}` : 'Für dieses Projekt ist noch kein Projektstil hinterlegt.', sources: [] };
   }
+  if (lower.includes('verbunden') || lower.includes('relation') || lower.includes('mit daniel') || lower.includes('simulation')) {
+    const relationLines = (context.entityRelations ?? []).map((relation) => { const source = entities.find((entity) => entity.id === relation.sourceEntityId); const target = entities.find((entity) => entity.id === relation.targetEntityId); return source && target ? `${source.name} ${relation.label || relation.relationType.replaceAll('_', ' ')} ${target.name}` : undefined; }).filter((line): line is string => Boolean(line));
+    return { text: relationLines.length ? `Gespeicherte Verbindungen: ${relationLines.join(' · ')}` : 'Im aktuellen Projektkontext sind keine passenden Verbindungen gespeichert.', sources: sourcesFor(entities.filter((entity) => (context.entityRelations ?? []).some((relation) => relation.sourceEntityId === entity.id || relation.targetEntityId === entity.id))) };
+  }
   if (lower.includes('weltregel') || lower.includes('lore') || lower.includes('welt')) {
     const lore = context.lore ?? [];
-    return { text: lore.length ? `Relevante Weltgrundlagen: ${lore.map((item) => `${item.truthStatement || 'ohne Aussage'} (${item.truthScope})`).join(' · ')}` : 'Für diese Frage ist noch keine Lore im Projektkontext hinterlegt.', sources: sourcesFor(entities.filter((entity) => lore.some((item) => item.entityId === entity.id))) };
+    return { text: lore.length ? `Relevante Lore: ${lore.map((item) => `${item.truthStatement || 'ohne Aussage'} (${item.category}, ${item.revealState === 'author_only' ? 'nur Autorwissen' : item.revealState === 'foreshadowed' ? 'angedeutet' : 'Leser kennt es'})`).join(' · ')}` : 'Für diese Frage ist noch keine Lore im Projektkontext hinterlegt.', sources: sourcesFor(entities.filter((entity) => lore.some((item) => item.entityId === entity.id))) };
   }
   if (lower.includes('handlungsstrang') || lower.includes('offen')) {
     return { text: context.openPlotThreads.length ? `Offene Handlungsstränge: ${context.openPlotThreads.map((entity) => `${entity.name} (${entity.status})`).join(', ')}.` : 'Für diese Szene ist kein offener Handlungsstrang im geladenen Kontext vermerkt.', sources: sourcesFor(context.openPlotThreads) };
@@ -55,6 +59,10 @@ export function answerFromProjectContext(question: string, context: ProjectConte
   if (lower.includes('weiß') || lower.includes('wissen') || lower.includes('paketnummer')) {
     const matches = entities.filter((entity) => { const searchable = `${entity.name} ${entity.description} ${entity.tags.join(' ')}`.toLocaleLowerCase(); return lower.includes('paketnummer') ? searchable.includes('paket') || searchable.includes('nummer') : searchable.split(/\s+/).some((word) => word.length > 3 && lower.includes(word)); });
     return { text: matches.length ? `Im bestätigten beziehungsweise relevanten Kanon steht: ${matches.map((entity) => `${entity.name}: ${entity.description}`).join(' ')}` : 'Dazu ist im aktuellen bestätigten Kontext keine Information gespeichert.', sources: sourcesFor(matches) };
+  }
+  if (lower.includes('wissensnotiz') || lower.includes('zustand')) {
+    const states = context.characterStates ?? [];
+    return { text: states.length ? `Szenenbezogene Wissensnotizen: ${states.map((state) => { const entity = entities.find((item) => item.id === state.characterEntityId); return `${entity?.name ?? 'Figur'}: ${state.knowledgeNotes || 'keine Notiz'}`; }).join(' · ')}. Diese Notizen sind freie Autorennotizen und kein strukturiertes Figurenwissen.` : 'Für diese Szene ist kein Charakterzustand gespeichert.', sources: [] };
   }
   return { text: context.currentScene ? `Ich habe die aktuelle Szene „${context.currentScene.title}“ und ${entities.length} relevante Story-Bible-Einträge geprüft. Für diese konkrete Frage finde ich im gespeicherten Kontext noch keine sichere Antwort.` : 'Ich finde keine aktuell ausgewählte Szene und kann deshalb keine quellengebundene Antwort geben.', sources: [] };
 }

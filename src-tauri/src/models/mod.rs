@@ -383,7 +383,10 @@ pub struct ProviderStatus {
 pub struct SaveLoreMetadataInput {
     pub entity_id: String,
     pub project_id: String,
-    pub truth_scope: String,
+    pub category: String,
+    pub scope: String,
+    pub reveal_state: String,
+    pub importance: String,
     pub truth_statement: String,
     pub rules_text: String,
     pub exceptions_text: String,
@@ -397,7 +400,10 @@ pub struct SaveLoreMetadataInput {
 pub struct LoreMetadata {
     pub entity_id: String,
     pub project_id: String,
-    pub truth_scope: String,
+    pub category: String,
+    pub scope: String,
+    pub reveal_state: String,
+    pub importance: String,
     pub truth_statement: String,
     pub rules_text: String,
     pub exceptions_text: String,
@@ -457,7 +463,8 @@ pub struct SaveCharacterSceneStateInput {
     pub physical_state: String,
     pub goal: String,
     pub conflict: String,
-    pub knowledge: String,
+    #[serde(alias = "knowledge")]
+    pub knowledge_notes: String,
     pub relationship_state: String,
     pub change_note: String,
 }
@@ -473,7 +480,7 @@ pub struct CharacterSceneState {
     pub physical_state: String,
     pub goal: String,
     pub conflict: String,
-    pub knowledge: String,
+    pub knowledge_notes: String,
     pub relationship_state: String,
     pub change_note: String,
     pub created_at: String,
@@ -516,10 +523,15 @@ pub struct ProjectStyle {
 #[serde(rename_all = "camelCase")]
 pub struct CreateStyleReferenceInput {
     pub project_id: String,
+    pub chapter_id: Option<String>,
     pub scene_id: String,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub category: String,
     pub label: String,
     pub excerpt: String,
     pub notes: String,
+    pub weight: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -527,12 +539,28 @@ pub struct CreateStyleReferenceInput {
 pub struct StyleReference {
     pub id: String,
     pub project_id: String,
+    pub chapter_id: Option<String>,
     pub scene_id: String,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub category: String,
     pub label: String,
     pub excerpt: String,
     pub notes: String,
+    pub weight: f64,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateStyleReferenceInput {
+    pub id: String,
+    pub project_id: String,
+    pub label: String,
+    pub category: String,
+    pub notes: String,
+    pub weight: f64,
 }
 
 pub fn validate_lore_truth_scope(value: &str) -> Result<(), String> {
@@ -540,6 +568,114 @@ pub fn validate_lore_truth_scope(value: &str) -> Result<(), String> {
         "world_truth" | "author_only" | "reader_revealed" | "planned_reveal" => Ok(()),
         _ => Err(format!("Ungültiger Lore-Wissensbereich: {value}")),
     }
+}
+
+pub fn validate_lore_category(value: &str) -> Result<(), String> {
+    match value {
+        "world_rule" | "history" | "objective_truth" | "belief" | "myth" | "mystery"
+        | "terminology" => Ok(()),
+        _ => Err(format!("Ungültige Lore-Kategorie: {value}")),
+    }
+}
+pub fn validate_lore_scope(value: &str) -> Result<(), String> {
+    match value {
+        "series" | "book" | "arc" => Ok(()),
+        _ => Err(format!("Ungültiger Lore-Gültigkeitsbereich: {value}")),
+    }
+}
+pub fn validate_lore_reveal_state(value: &str) -> Result<(), String> {
+    match value {
+        "author_only" | "foreshadowed" | "reader_revealed" => Ok(()),
+        _ => Err(format!("Ungültiger Enthüllungsstatus: {value}")),
+    }
+}
+pub fn validate_lore_importance(value: &str) -> Result<(), String> {
+    match value {
+        "core" | "supporting" | "background" => Ok(()),
+        _ => Err(format!("Ungültige Lore-Bedeutung: {value}")),
+    }
+}
+pub fn validate_relation_type(value: &str) -> Result<(), String> {
+    match value {
+        "affects" | "explains" | "contradicts" | "reveals" | "hides" | "depends_on"
+        | "applies_to" | "caused_by" | "connected_to" => Ok(()),
+        _ => Err(format!("Ungültiger Relationstyp: {value}")),
+    }
+}
+pub fn validate_style_reference_category(value: &str) -> Result<(), String> {
+    match value {
+        "general" | "dialogue" | "tension" | "description" | "inner_monologue" | "humor" => Ok(()),
+        _ => Err(format!("Ungültige Stilreferenz-Kategorie: {value}")),
+    }
+}
+pub fn validate_lore_entity_type(value: &str) -> Result<(), String> {
+    match value {
+        "world_rule" | "fact" | "event" | "secret" | "clue" | "organization" | "place"
+        | "object" | "plot_thread" | "author_note" => Ok(()),
+        _ => Err(format!(
+            "Dieser Entity-Typ ist für Lore nicht zulässig: {value}"
+        )),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateStoryEntityRelationInput {
+    pub project_id: String,
+    pub source_entity_id: String,
+    pub target_entity_id: String,
+    pub relation_type: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default = "default_author_confirmed")]
+    pub author_confirmed: bool,
+}
+
+fn default_author_confirmed() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryEntityRelation {
+    pub id: String,
+    pub project_id: String,
+    pub source_entity_id: String,
+    pub target_entity_id: String,
+    pub relation_type: String,
+    pub label: String,
+    pub author_confirmed: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateLoreEntryInput {
+    pub project_id: String,
+    pub name: String,
+    pub entity_type: String,
+    pub description: String,
+    pub status: String,
+    pub category: String,
+    pub scope: String,
+    pub reveal_state: String,
+    pub importance: String,
+    pub truth_statement: String,
+    pub rules_text: String,
+    pub exceptions_text: String,
+    pub author_knowledge: String,
+    pub reader_knowledge: String,
+    pub reveal_plan: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoreEntry {
+    pub entity: StoryEntity,
+    pub metadata: LoreMetadata,
 }
 
 pub fn validate_scene_status(value: &str) -> Result<(), String> {

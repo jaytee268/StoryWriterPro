@@ -105,6 +105,61 @@ fn ensure_story_bible_review_schema(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn ensure_lore_completion_schema(connection: &Connection) -> Result<()> {
+    ensure_column(
+        connection,
+        "lore_metadata",
+        "category",
+        "TEXT NOT NULL DEFAULT 'objective_truth'",
+    )?;
+    ensure_column(
+        connection,
+        "lore_metadata",
+        "scope",
+        "TEXT NOT NULL DEFAULT 'book'",
+    )?;
+    ensure_column(
+        connection,
+        "lore_metadata",
+        "reveal_state",
+        "TEXT NOT NULL DEFAULT 'author_only'",
+    )?;
+    ensure_column(
+        connection,
+        "lore_metadata",
+        "importance",
+        "TEXT NOT NULL DEFAULT 'supporting'",
+    )?;
+    ensure_column(
+        connection,
+        "style_references",
+        "chapter_id",
+        "TEXT REFERENCES chapters(id) ON DELETE CASCADE",
+    )?;
+    ensure_column(connection, "style_references", "start_offset", "INTEGER")?;
+    ensure_column(connection, "style_references", "end_offset", "INTEGER")?;
+    ensure_column(
+        connection,
+        "style_references",
+        "category",
+        "TEXT NOT NULL DEFAULT 'general'",
+    )?;
+    ensure_column(
+        connection,
+        "style_references",
+        "weight",
+        "REAL NOT NULL DEFAULT 1.0",
+    )?;
+    connection.execute_batch(include_str!(
+        "../../../migrations/009_complete_lore_links_and_style_references.sql"
+    ))?;
+    connection.execute_batch(
+        "UPDATE lore_metadata SET category=CASE truth_scope WHEN 'planned_reveal' THEN 'mystery' ELSE 'objective_truth' END, reveal_state=CASE truth_scope WHEN 'reader_revealed' THEN 'reader_revealed' WHEN 'planned_reveal' THEN 'foreshadowed' ELSE 'author_only' END WHERE category IS NULL OR category='objective_truth' AND truth_scope <> 'world_truth';
+         UPDATE style_references SET chapter_id=(SELECT chapter_id FROM scenes WHERE scenes.id=style_references.scene_id) WHERE chapter_id IS NULL;",
+    )?;
+    Ok(())
+}
+
 impl DbState {
     pub fn open(app: &AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
         let data_dir = app.path().app_data_dir()?;
@@ -212,6 +267,18 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
             "../../../migrations/008_lore_character_style_foundations.sql"
         ))?;
         connection.execute("INSERT INTO schema_migrations (version) VALUES (8)", [])?;
+    }
+    let has_lore_completion: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 9",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_lore_completion == 0 {
+        ensure_lore_completion_schema(connection)?;
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (9)", [])?;
+    } else {
+        // A partially applied migration can be resumed safely.
+        ensure_lore_completion_schema(connection)?;
     }
     Ok(())
 }
@@ -368,7 +435,7 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            8
+            9
         );
         assert_eq!(
             connection
@@ -529,7 +596,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                8
+                9
             );
             // Running startup migrations again must not change the assignment
             // or fail on the ALTER TABLE statement.

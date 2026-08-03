@@ -64,7 +64,12 @@ pub fn run() {
             commands::save_project_style,
             commands::list_style_references,
             commands::create_style_reference,
-            commands::delete_style_reference
+            commands::update_style_reference,
+            commands::delete_style_reference,
+            commands::create_lore_entry,
+            commands::list_story_entity_relations,
+            commands::create_story_entity_relation,
+            commands::delete_story_entity_relation
         ])
         .run(tauri::generate_context!())
         .expect("error while running StoryMemory");
