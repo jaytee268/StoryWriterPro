@@ -41,6 +41,7 @@ export interface CorrectionResult { id: string; sourceText: string; corrections:
 export interface WorkspaceSnapshot { project: Project; books: Book[]; chapters: Chapter[]; entities: StoryEntity[]; }
 export interface CreateProjectInput { title: string; author: string; description?: string; volumeTitle?: string; volume?: number; }
 export interface CreateChapterInput { bookId: string; title: string; }
+export interface UpdateChapterInput { id: string; title: string; }
 export interface CreateSceneInput { chapterId: string; title: string; }
 export type UpdateSceneInput = Scene;
 export interface CreateSceneVersionInput { sceneId: string; reason?: SceneVersionReason; }

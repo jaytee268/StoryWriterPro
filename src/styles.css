@@ -505,6 +505,11 @@ body { background: var(--bg); color: var(--text); }
 .writing-header-divider { align-self: stretch; width: 1px; background: #e1e6ed; }
 .writing-title-block { min-width: 0; }
 .writing-title-block > div { display: flex; align-items: center; gap: 8px; }
+.writing-title-editing { display: flex; align-items: center; gap: 6px; width: min(100%, 620px); }
+.writing-title-editing input { min-width: 0; flex: 1; padding: 6px 8px; border: 1px solid #9db3df; border-radius: 6px; outline: 0; color: #1e2b3d; background: #f8faff; font-size: 24px; font-weight: 650; }
+.writing-title-editing button { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border: 1px solid #d5dfed; border-radius: 6px; color: #526bc0; background: #ffffff; }
+.writing-title-editing button:last-child { color: #7a8797; }
+.writing-title-editing button:hover { background: #f1f5fc; }
 .writing-title-block h1 { margin: 0; overflow: hidden; color: #1e2b3d; font-size: 29px; font-weight: 650; letter-spacing: -.035em; text-overflow: ellipsis; white-space: nowrap; }
 .writing-title-block > span { display: block; margin-top: 8px; color: #7a8ba1; font-size: 13px; }
 .writing-title-block b { padding: 0 5px; color: #b1bdca; font-weight: 400; }
@@ -534,6 +539,7 @@ body { background: var(--bg); color: var(--text); }
 .writing-scene-copy { display: grid; gap: 5px; min-width: 0; }
 .writing-scene-copy strong { overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .writing-scene-copy small { color: #7890bd; font-size: 11px; }
+.writing-scene-title-input { min-width: 0; width: 100%; padding: 6px 7px; border: 1px solid #8fa9df; border-radius: 5px; outline: 0; color: #31518e; background: #ffffff; font-size: 13px; font-weight: 600; }
 .writing-active-dot { width: 8px; height: 8px; margin-left: auto; border-radius: 50%; background: #3176d1; box-shadow: 0 0 0 3px #3176d120; }
 .writing-add-scene { display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; margin: 17px 14px 0; padding: 8px 0; border: 0; color: #5371bd; background: transparent; font-size: 12px; }
 .writing-sidebar-spacer { flex: 1; min-height: 32px; }
@@ -544,6 +550,7 @@ body { background: var(--bg); color: var(--text); }
 .writing-format-toolbar select { width: 155px; padding: 9px 8px; border: 0; outline: 0; color: #66788e; background: #ffffff; font-size: 13px; }
 .writing-format-toolbar button { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border: 0; border-radius: 5px; color: #67788d; background: transparent; }
 .writing-format-toolbar button:hover { color: #304b8c; background: #f1f5fc; }
+.writing-format-toolbar button.active { color: #304b8c; background: #dfe9ff; box-shadow: inset 0 0 0 1px #aec1ea; }
 .writing-toolbar-divider { width: 1px; height: 23px; margin: 0 7px; background: #e1e6ed; }
 .writing-toolbar-spacer { flex: 1; }
 .writing-editor-tools { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 45px; padding: 0 43px; color: #a0adbc; font-size: 12px; }

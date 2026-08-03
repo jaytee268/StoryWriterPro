@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { demoChapters, demoEntities, demoProject } from './mockData';
 import { desktopInvoke, isTauriRuntime } from './desktop';
-import type { BibleProposal, BibleProposalDraft, BibleUpdateRun, Book, Chapter, CreateBibleUpdateRunInput, CreateChapterInput, CreateProjectInput, CreateSceneInput, CreateSceneVersionInput, CreateSourceReferenceInput, CreateStoryEntityInput, EditorPreferences, Project, ReviewBibleProposalInput, SaveStoryEntityInput, Scene, SceneVersion, StoryEntity, StorySourceReference, UpdateSceneInput, UpdateStoryEntityInput, WorkspaceSnapshot } from '../types/domain';
+import type { BibleProposal, BibleProposalDraft, BibleUpdateRun, Book, Chapter, CreateBibleUpdateRunInput, CreateChapterInput, CreateProjectInput, CreateSceneInput, CreateSceneVersionInput, CreateSourceReferenceInput, CreateStoryEntityInput, EditorPreferences, Project, ReviewBibleProposalInput, SaveStoryEntityInput, Scene, SceneVersion, StoryEntity, StorySourceReference, UpdateChapterInput, UpdateSceneInput, UpdateStoryEntityInput, WorkspaceSnapshot } from '../types/domain';
 
 export type RuntimeMode = 'desktop' | 'browser-demo';
 export type SaveableScene = Scene;
@@ -13,6 +13,7 @@ export interface StoryRepository {
   loadWorkspace(): Promise<WorkspaceSnapshot>;
   createProject(input: CreateProjectInput): Promise<Project>;
   createChapter(input: CreateChapterInput): Promise<Chapter>;
+  updateChapter(input: UpdateChapterInput): Promise<Chapter>;
   createScene(input: CreateSceneInput): Promise<Scene>;
   updateScene(input: UpdateSceneInput): Promise<Scene>;
   createSceneVersion(input: CreateSceneVersionInput): Promise<SceneVersion>;
@@ -67,6 +68,7 @@ export class TauriStoryRepository implements StoryRepository {
   async loadWorkspace(): Promise<WorkspaceSnapshot> { return parse(workspaceSchema, await desktopInvoke('load_workspace'), 'Workspace'); }
   async createProject(input: CreateProjectInput): Promise<Project> { return parse(projectSchema, await desktopInvoke('create_project', { input }), 'Projekt'); }
   async createChapter(input: CreateChapterInput): Promise<Chapter> { return parse(chapterSchema, await desktopInvoke('create_chapter', { input }), 'Kapitel'); }
+  async updateChapter(input: UpdateChapterInput): Promise<Chapter> { return parse(chapterSchema, await desktopInvoke('update_chapter', { input }), 'Kapitel'); }
   async createScene(input: CreateSceneInput): Promise<Scene> { return parse(sceneSchema, await desktopInvoke('create_scene', { input }), 'Szene'); }
   async updateScene(input: UpdateSceneInput): Promise<Scene> { return parse(sceneSchema, await desktopInvoke('update_scene', { input }), 'Szene'); }
   async createSceneVersion(input: CreateSceneVersionInput): Promise<SceneVersion> { return parse(sceneVersionSchema, await desktopInvoke('create_scene_version', { input }), 'Szenenversion'); }
@@ -132,6 +134,14 @@ export class BrowserDemoRepository implements StoryRepository {
     const timestamp = now();
     const chapter: Chapter = { id: crypto.randomUUID(), bookId: input.bookId, title: input.title, orderIndex: state.chapters.filter((item) => item.bookId === input.bookId).length + 1, scenes: [], createdAt: timestamp, updatedAt: timestamp };
     state.chapters.push(chapter); this.write(state); return clone(chapter);
+  }
+  async updateChapter(input: UpdateChapterInput): Promise<Chapter> {
+    const state = this.read();
+    const chapter = state.chapters.find((item) => item.id === input.id);
+    if (!chapter) throw new Error('Das Kapitel wurde nicht gefunden.');
+    if (!input.title.trim()) throw new Error('Der Kapitelname darf nicht leer sein.');
+    chapter.title = input.title.trim(); chapter.updatedAt = now(); state.project.updatedAt = chapter.updatedAt; this.write(state);
+    return clone(chapter);
   }
   async createScene(input: CreateSceneInput): Promise<Scene> {
     const state = this.read();

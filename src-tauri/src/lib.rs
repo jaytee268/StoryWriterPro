@@ -21,6 +21,7 @@ pub fn run() {
             commands::load_workspace,
             commands::create_project,
             commands::create_chapter,
+            commands::update_chapter,
             commands::create_scene,
             commands::update_scene,
             commands::create_scene_version,

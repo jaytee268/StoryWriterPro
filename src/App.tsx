@@ -4,7 +4,7 @@ import { BookOpen, BrainCircuit, FileText, Gauge, MessageCircle, PanelLeftClose,
 import { useAppStore } from './stores/useAppStore';
 import { demoEvents, mindEdges, mindNodes } from './services/mockData';
 import { createStoryRepository, type RuntimeMode, type StoryRepository } from './services/storyRepository';
-import type { AppView, BibleProposal, BibleUpdateRun, ChatMessage, Chapter, ReviewBibleProposalInput, Scene, StoryEntity, StorySourceReference, WorkspaceSnapshot } from './types/domain';
+import type { AppView, BibleProposal, BibleUpdateRun, ChatMessage, Chapter, ReviewBibleProposalInput, Scene, StoryEntity, StorySourceReference, UpdateChapterInput, WorkspaceSnapshot } from './types/domain';
 import { DeterministicProjectContextBuilder } from './services/contextBuilder';
 import { LocalPrototypeBibleExtractor, changedRange, contentHash } from './services/bibleExtractor';
 import { Dashboard } from './features/projects/Dashboard';
@@ -157,6 +157,11 @@ export function App() {
     setLoadState((current) => current.status !== 'ready' ? current : { status: 'ready', workspace: { ...current.workspace, chapters: [...current.workspace.chapters, chapter] } });
     return chapter;
   }, [workspace]);
+  const updateChapter = useCallback(async (input: UpdateChapterInput): Promise<Chapter> => {
+    const saved = await repository.updateChapter(input);
+    setLoadState((current) => current.status !== 'ready' ? current : { status: 'ready', workspace: { ...current.workspace, chapters: current.workspace.chapters.map((item) => item.id === saved.id ? saved : item) } });
+    return saved;
+  }, []);
   const createScene = useCallback(async (chapterId: string, title: string): Promise<Scene> => {
     const scene = await repository.createScene({ chapterId, title });
     setLoadState((current) => current.status !== 'ready' ? current : { status: 'ready', workspace: { ...current.workspace, chapters: current.workspace.chapters.map((chapter) => chapter.id === chapterId ? { ...chapter, scenes: [...chapter.scenes, scene] } : chapter) } });
@@ -186,7 +191,7 @@ export function App() {
   const renderView = () => {
     if (!workspace) return null;
     if (view === 'dashboard') return <Dashboard project={workspace.project} onOpen={() => void requestViewChange('editor')} onImport={() => setActiveModal('import')} />;
-    if (view === 'editor') return <EditorView chapters={workspace.chapters} scene={currentScene} chapter={currentChapter} onBack={() => void requestViewChange('dashboard')} onSelectScene={setSelectedSceneId} onSave={saveScene} onCreateChapter={createChapter} onCreateScene={createScene} onListVersions={listSceneVersions} onCreateVersion={createSceneVersion} onRestoreVersion={restoreSceneVersion} onGetEditorPreferences={getEditorPreferences} onSaveEditorPreferences={saveEditorPreferences} onBibleUpdate={runBibleUpdate} onOpenAssistant={() => setAssistantOpen(true)} onSaveStateChange={setSaveStatus} onRegisterSaveController={registerSaveController} />;
+    if (view === 'editor') return <EditorView chapters={workspace.chapters} scene={currentScene} chapter={currentChapter} onBack={() => void requestViewChange('dashboard')} onSelectScene={setSelectedSceneId} onSave={saveScene} onCreateChapter={createChapter} onUpdateChapter={updateChapter} onCreateScene={createScene} onListVersions={listSceneVersions} onCreateVersion={createSceneVersion} onRestoreVersion={restoreSceneVersion} onGetEditorPreferences={getEditorPreferences} onSaveEditorPreferences={saveEditorPreferences} onBibleUpdate={runBibleUpdate} onOpenAssistant={() => setAssistantOpen(true)} onSaveStateChange={setSaveStatus} onRegisterSaveController={registerSaveController} />;
     if (view === 'bible' || view === 'characters' || view === 'threads') return <StoryBibleView entities={workspace.entities} projectId={workspace.project.id} chapters={workspace.chapters} repository={repository} activeRun={activeReviewRun} proposals={reviewProposals} onEntityChanged={replaceEntity} onOpenSourceReference={openSourceReference} onReview={reviewProposal} onCompleteReview={completeBibleReview} onCloseReview={() => { setActiveReviewRun(undefined); setReviewProposals([]); }} initialFilter={view === 'characters' ? 'character' : view === 'threads' ? 'plot_thread' : undefined} />;
     if (view === 'timeline') return <TimelineView events={demoEvents} />;
     if (view === 'mindmap') return <MindmapView nodes={mindNodes} edges={mindEdges} />;

@@ -8,7 +8,7 @@ use crate::{
         CreateSceneVersionInput, CreateSourceReferenceInput, CreateStoryEntityInput, DatabaseInfo,
         EditorPreferences, Project, ProviderStatus, RestoreSceneVersionInput,
         ReviewBibleProposalInput, Scene, SceneInput, SceneVersion, StoryEntity, StoryEntityInput,
-        StorySourceReference, UpdateStoryEntityInput, WorkspaceSnapshot,
+        StorySourceReference, UpdateChapterInput, UpdateStoryEntityInput, WorkspaceSnapshot,
     },
 };
 use chrono::Utc;
@@ -448,6 +448,33 @@ pub fn create_chapter(
 ) -> Result<Chapter, String> {
     let db = lock_db(&state)?;
     create_chapter_in_db(&db, input)
+}
+
+pub(crate) fn update_chapter_in_db(
+    db: &Connection,
+    input: UpdateChapterInput,
+) -> Result<Chapter, String> {
+    required(&input.title, "Der Kapitelname")?;
+    let timestamp = now();
+    let changed = db
+        .execute(
+            "UPDATE chapters SET title=?2, updated_at=?3 WHERE id=?1",
+            params![input.id, input.title.trim(), timestamp],
+        )
+        .map_err(|error| sql_error("Kapitel konnte nicht aktualisiert werden", error))?;
+    if changed == 0 {
+        return Err("Das Kapitel wurde nicht gefunden.".into());
+    }
+    load_chapter(db, &input.id)
+}
+
+#[tauri::command]
+pub fn update_chapter(
+    state: State<'_, DbState>,
+    input: UpdateChapterInput,
+) -> Result<Chapter, String> {
+    let db = lock_db(&state)?;
+    update_chapter_in_db(&db, input)
 }
 
 pub(crate) fn create_scene_in_db(

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
-import { AlignCenter, AlignLeft, AlignRight, ArrowLeft, Bold, ChevronDown, Flag, History, Image, IndentDecrease, IndentIncrease, Italic, Link, List, ListOrdered, LoaderCircle, MessageCircle, MoreHorizontal, Plus, Quote, Search, Scissors, Sparkles, StickyNote, Strikethrough, Table2, Type, Underline } from 'lucide-react';
-import type { Chapter, EditorPreferences, Scene, SceneVersion } from '../../types/domain';
+import { AlignCenter, AlignLeft, AlignRight, ArrowLeft, Bold, Check, ChevronDown, History, Image, IndentDecrease, IndentIncrease, Italic, Link, List, ListOrdered, LoaderCircle, MessageCircle, MoreHorizontal, Plus, Quote, Sparkles, StickyNote, Strikethrough, Table2, Type, Underline, X } from 'lucide-react';
+import type { Chapter, EditorPreferences, Scene, SceneVersion, UpdateChapterInput } from '../../types/domain';
 import { SceneSaveQueue, type SceneSaveStatus } from '../../services/sceneSaveQueue';
 import { editorContentToHtml, editorContentToPlainText } from '../../utils/editorContent';
 import { VersionHistory } from './VersionHistory';
@@ -13,6 +13,7 @@ interface EditorProps {
   onSelectScene: (id: string) => void;
   onSave: (scene: Scene) => Promise<Scene>;
   onCreateChapter: (title: string) => Promise<Chapter>;
+  onUpdateChapter: (input: UpdateChapterInput) => Promise<Chapter>;
   onCreateScene: (chapterId: string, title: string) => Promise<Scene>;
   onListVersions: (sceneId: string) => Promise<SceneVersion[]>;
   onCreateVersion: (sceneId: string) => Promise<SceneVersion>;
@@ -41,7 +42,7 @@ const manuscriptFonts: Record<EditorPreferences['fontFamily'], string> = {
   typewriter: "'DM Mono', 'Courier New', monospace",
 };
 
-export function EditorView({ chapters, scene, chapter, onBack, onSelectScene, onSave, onCreateChapter, onCreateScene, onListVersions, onCreateVersion, onRestoreVersion, onGetEditorPreferences, onSaveEditorPreferences, onBibleUpdate, onOpenAssistant, onSaveStateChange, onRegisterSaveController }: EditorProps) {
+export function EditorView({ chapters, scene, chapter, onBack, onSelectScene, onSave, onCreateChapter, onUpdateChapter, onCreateScene, onListVersions, onCreateVersion, onRestoreVersion, onGetEditorPreferences, onSaveEditorPreferences, onBibleUpdate, onOpenAssistant, onSaveStateChange, onRegisterSaveController }: EditorProps) {
   const [draftScene, setDraftScene] = useState<Scene | undefined>(scene);
   const latestDraft = useRef<Scene | undefined>(scene);
   const queue = useRef<SceneSaveQueue | undefined>(undefined);
@@ -56,12 +57,38 @@ export function EditorView({ chapters, scene, chapter, onBack, onSelectScene, on
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const editorRef = useRef<HTMLDivElement>(null);
   const [blockFormat, setBlockFormat] = useState<'paragraph' | 'heading'>('paragraph');
+  const [toolbarState, setToolbarState] = useState({ bold: false, italic: false, underline: false, strikeThrough: false, unorderedList: false, orderedList: false, justifyLeft: false, justifyCenter: false, justifyRight: false });
+  const [chapterTitleEditing, setChapterTitleEditing] = useState(false);
+  const [chapterTitleDraft, setChapterTitleDraft] = useState(chapter?.title ?? '');
+  const [sceneTitleEditing, setSceneTitleEditing] = useState<string | null>(null);
+  const [sceneTitleDraft, setSceneTitleDraft] = useState('');
+
+  const refreshToolbarState = () => {
+    const selection = document.getSelection();
+    if (!editorRef.current || !selection || !selection.anchorNode || !editorRef.current.contains(selection.anchorNode)) {
+      setToolbarState({ bold: false, italic: false, underline: false, strikeThrough: false, unorderedList: false, orderedList: false, justifyLeft: false, justifyCenter: false, justifyRight: false });
+      return;
+    }
+    setToolbarState({ bold: document.queryCommandState('bold'), italic: document.queryCommandState('italic'), underline: document.queryCommandState('underline'), strikeThrough: document.queryCommandState('strikeThrough'), unorderedList: document.queryCommandState('insertUnorderedList'), orderedList: document.queryCommandState('insertOrderedList'), justifyLeft: document.queryCommandState('justifyLeft'), justifyCenter: document.queryCommandState('justifyCenter'), justifyRight: document.queryCommandState('justifyRight') });
+    const format = document.queryCommandValue('formatBlock').toLocaleLowerCase();
+    setBlockFormat(format.includes('h1') || format.includes('h2') || format.includes('h3') ? 'heading' : 'paragraph');
+  };
+
+  useEffect(() => {
+    document.addEventListener('selectionchange', refreshToolbarState);
+    return () => document.removeEventListener('selectionchange', refreshToolbarState);
+  }, []);
 
   useEffect(() => {
     let active = true;
     void onGetEditorPreferences().then((loaded) => { if (active) setPreferences(loaded); }).catch(() => undefined).finally(() => { if (active) setPreferencesLoaded(true); });
     return () => { active = false; };
   }, [onGetEditorPreferences]);
+
+  useEffect(() => {
+    setChapterTitleDraft(chapter?.title ?? '');
+    setChapterTitleEditing(false);
+  }, [chapter?.id, chapter?.title]);
 
   useEffect(() => {
     if (!preferencesLoaded) return undefined;
@@ -107,13 +134,40 @@ export function EditorView({ chapters, scene, chapter, onBack, onSelectScene, on
   const selectChapter = async (selectedChapter: Chapter) => { const firstScene = selectedChapter.scenes[0]; if (firstScene) await selectScene(firstScene.id); };
   const addScene = async (chapterId: string) => { setBusyAction(chapterId); setSaveError(''); try { if (!await flushBeforeLeaving()) return; const created = await onCreateScene(chapterId, 'Neue Szene'); onSelectScene(created.id); } catch (error) { setSaveError(error instanceof Error ? error.message : 'Die Szene konnte nicht angelegt werden.'); } finally { setBusyAction(null); } };
   const addChapter = async () => { setBusyAction('chapter'); setSaveError(''); try { if (!await flushBeforeLeaving()) return; const createdChapter = await onCreateChapter(`Kapitel ${chapters.length + 1}`); const createdScene = await onCreateScene(createdChapter.id, 'Neue Szene'); onSelectScene(createdScene.id); } catch (error) { setSaveError(error instanceof Error ? error.message : 'Das Kapitel konnte nicht angelegt werden.'); } finally { setBusyAction(null); } };
+  const beginChapterTitleEdit = () => { if (!chapter) return; setChapterTitleDraft(chapter.title); setChapterTitleEditing(true); };
+  const saveChapterTitle = async () => {
+    if (!chapter || busyAction === 'chapter-title') return;
+    const title = chapterTitleDraft.trim();
+    if (!title) { setSaveError('Der Kapitelname darf nicht leer sein.'); return; }
+    if (title === chapter.title) { setChapterTitleEditing(false); return; }
+    setBusyAction('chapter-title'); setSaveError('');
+    try { if (!await flushBeforeLeaving()) return; await onUpdateChapter({ id: chapter.id, title }); setChapterTitleEditing(false); }
+    catch (error) { setSaveError(error instanceof Error ? error.message : 'Der Kapitelname konnte nicht gespeichert werden.'); }
+    finally { setBusyAction(null); }
+  };
+  const beginSceneTitleEdit = (itemScene: Scene) => { setSceneTitleEditing(itemScene.id); setSceneTitleDraft(itemScene.title); };
+  const saveSceneTitle = async (itemScene: Scene) => {
+    const action = `scene-title:${itemScene.id}`;
+    if (busyAction === action) return;
+    const title = sceneTitleDraft.trim();
+    if (!title) { setSaveError('Der Szenenname darf nicht leer sein.'); return; }
+    if (title === itemScene.title) { setSceneTitleEditing(null); return; }
+    setBusyAction(action); setSaveError('');
+    try {
+      if (itemScene.id === draftScene?.id && !await flushBeforeLeaving()) return;
+      const saved = await onSave({ ...(itemScene.id === draftScene?.id ? (latestDraft.current ?? itemScene) : itemScene), title });
+      if (saved.id === draftScene?.id) { latestDraft.current = saved; setDraftScene(saved); setSaveStatus('saved'); onSaveStateChange('saved'); }
+      setSceneTitleEditing(null);
+    } catch (error) { setSaveError(error instanceof Error ? error.message : 'Der Szenenname konnte nicht gespeichert werden.'); }
+    finally { setBusyAction(null); }
+  };
   const openHistory = async () => { if (await flushBeforeLeaving()) setHistoryOpen(true); };
   const updateBible = async () => { setSaveError(''); try { if (await flushBeforeLeaving()) await onBibleUpdate(); } catch (error) { setSaveError(error instanceof Error ? error.message : 'Das Bible Update konnte nicht gestartet werden.'); } };
   const restoreVersion = async (sceneId: string, versionId: string) => { const restored = await onRestoreVersion(sceneId, versionId); latestDraft.current = restored; setDraftScene(restored); if (editorRef.current) editorRef.current.innerHTML = editorContentToHtml(restored.content); setSaveStatus('saved'); onSaveStateChange('saved'); return restored; };
   const wordCount = useMemo(() => { const text = editorContentToPlainText(draftScene?.content ?? '').trim(); return text ? text.split(/\s+/).length : 0; }, [draftScene?.content]);
   const paperStyle = { '--manuscript-font': manuscriptFonts[preferences.fontFamily], '--manuscript-size': `${preferences.fontSize}px`, '--manuscript-leading': preferences.lineHeight } as CSSProperties;
   const syncEditorDraft = () => { if (editorRef.current) updateDraft({ content: editorRef.current.innerHTML }); };
-  const runEditorCommand = (command: string, value?: string) => { editorRef.current?.focus(); document.execCommand(command, false, value); syncEditorDraft(); };
+  const runEditorCommand = (command: string, value?: string) => { editorRef.current?.focus(); document.execCommand(command, false, value); syncEditorDraft(); refreshToolbarState(); };
   const keepEditorSelection = (event: MouseEvent<HTMLButtonElement>) => event.preventDefault();
   const applyBlockFormat = (value: 'paragraph' | 'heading') => { setBlockFormat(value); runEditorCommand('formatBlock', value === 'heading' ? 'h2' : 'p'); };
   const addLink = () => { const url = window.prompt('Link-Adresse eingeben'); if (url?.trim()) runEditorCommand('createLink', url.trim()); };
@@ -125,19 +179,19 @@ export function EditorView({ chapters, scene, chapter, onBack, onSelectScene, on
   return <section className="editor-view writing-workspace">
     <header className="writing-workspace-header">
       <div className="writing-header-navigation"><button className="writing-back-button" onClick={() => void requestBack()} aria-label="Zurück zur Übersicht" title="Zurück"><ArrowLeft size={18} /></button><div className="writing-chapter-picker"><span>KAPITEL</span><select value={chapter?.id ?? ''} onChange={(event) => { const selected = chapters.find((item) => item.id === event.target.value); if (selected) void selectChapter(selected); }} aria-label="Kapitel auswählen">{chapters.map((item) => <option key={item.id} value={item.id}>{item.orderIndex}</option>)}</select><ChevronDown size={17} /></div></div>
-      <div className="writing-title-block"><div><h1>{chapter?.title ?? 'Kapitel auswählen'}</h1><button className="writing-edit-title" aria-label="Kapitelname bearbeiten" title="Kapitelname bearbeiten"><PencilIcon /></button></div><span>{wordCount.toLocaleString('de-DE')} Wörter <b>·</b> Autosave aktiv</span></div>
-      <div className="writing-header-actions"><span className={`save-state save-state-${saveStatus}`}><span className={`status-dot status-dot-${saveStatus}`} /> {saveLabels[saveStatus]}</span><button className="writing-header-button" title="Szenenziel setzen"><Flag size={17} /> Ziel setzen</button><button className="writing-header-button" title="Szene teilen"><Scissors size={17} /> Szene teilen</button><button className="writing-header-button" title="Recherche öffnen"><Search size={17} /> Recherche</button><div className="writing-menu-wrap"><button className="writing-icon-button" onClick={() => setHeaderMenuOpen((open) => !open)} aria-label="Weitere Aktionen" title="Weitere Aktionen"><MoreHorizontal size={21} /></button>{headerMenuOpen && <div className="writing-menu"><button onClick={() => { setHeaderMenuOpen(false); onOpenAssistant(); }}><MessageCircle size={16} /> Assistent öffnen</button><button onClick={() => { setHeaderMenuOpen(false); void openHistory(); }}><History size={16} /> Verlauf öffnen</button><button onClick={() => { setHeaderMenuOpen(false); void addChapter(); }}><Plus size={16} /> Neues Kapitel</button></div>}</div></div>
+      <div className="writing-title-block">{chapterTitleEditing ? <div className="writing-title-editing"><input value={chapterTitleDraft} onChange={(event) => setChapterTitleDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void saveChapterTitle(); } if (event.key === 'Escape') { setChapterTitleEditing(false); setChapterTitleDraft(chapter?.title ?? ''); } }} onBlur={() => void saveChapterTitle()} autoFocus aria-label="Kapitelname bearbeiten" /><button onMouseDown={keepEditorSelection} onClick={() => void saveChapterTitle()} aria-label="Kapitelname speichern" title="Speichern"><Check size={17} /></button><button onMouseDown={(event) => event.preventDefault()} onClick={() => { setChapterTitleEditing(false); setChapterTitleDraft(chapter?.title ?? ''); }} aria-label="Bearbeitung abbrechen" title="Abbrechen"><X size={17} /></button></div> : <div><h1>{chapter?.title ?? 'Kapitel auswählen'}</h1><button className="writing-edit-title" onClick={beginChapterTitleEdit} aria-label="Kapitelname bearbeiten" title="Kapitelname bearbeiten"><PencilIcon /></button></div>}<span>{wordCount.toLocaleString('de-DE')} Wörter <b>·</b> Autosave aktiv</span></div>
+      <div className="writing-header-actions"><span className={`save-state save-state-${saveStatus}`}><span className={`status-dot status-dot-${saveStatus}`} /> {saveLabels[saveStatus]}</span><div className="writing-menu-wrap"><button className="writing-icon-button" onClick={() => setHeaderMenuOpen((open) => !open)} aria-label="Weitere Aktionen" title="Weitere Aktionen"><MoreHorizontal size={21} /></button>{headerMenuOpen && <div className="writing-menu"><button onClick={() => { setHeaderMenuOpen(false); onOpenAssistant(); }}><MessageCircle size={16} /> Assistent öffnen</button><button onClick={() => { setHeaderMenuOpen(false); void openHistory(); }}><History size={16} /> Verlauf öffnen</button><button onClick={() => { setHeaderMenuOpen(false); void addChapter(); }}><Plus size={16} /> Neues Kapitel</button></div>}</div></div>
     </header>
     <div className="writing-workspace-body">
       <aside className="writing-scene-sidebar" aria-label="Szenen">
         <div className="writing-scenes-head"><span>SZENEN</span><button className="writing-add-button" onClick={() => chapter && void addScene(chapter.id)} disabled={!chapter || busyAction !== null} aria-label="Neue Szene hinzufügen" title="Neue Szene hinzufügen">{busyAction === chapter?.id ? <LoaderCircle className="spin" size={18} /> : <Plus size={20} />}</button></div>
-        <div className="writing-scene-list">{visibleScenes.map((itemScene, index) => <button key={itemScene.id} className={`writing-scene-row ${itemScene.id === draftScene?.id ? 'active' : ''}`} onClick={() => void selectScene(itemScene.id)} disabled={busyAction !== null}><span className="writing-scene-number">{String(index + 1).padStart(2, '0')}</span><span className="writing-scene-copy"><strong>{itemScene.title}</strong>{itemScene.id === draftScene?.id && <small>Aktiv</small>}</span>{itemScene.id === draftScene?.id && <span className="writing-active-dot" />}</button>)}</div>
+        <div className="writing-scene-list">{visibleScenes.map((itemScene, index) => <div key={itemScene.id} className={`writing-scene-row ${itemScene.id === draftScene?.id ? 'active' : ''}`} role="button" tabIndex={0} onClick={() => { if (!sceneTitleEditing) void selectScene(itemScene.id); }} onDoubleClick={() => beginSceneTitleEdit(itemScene)} onKeyDown={(event) => { if (event.key === 'Enter') void selectScene(itemScene.id); if (event.key === 'F2') beginSceneTitleEdit(itemScene); }}><span className="writing-scene-number">{String(index + 1).padStart(2, '0')}</span>{sceneTitleEditing === itemScene.id ? <input className="writing-scene-title-input" value={sceneTitleDraft} onChange={(event) => setSceneTitleDraft(event.target.value)} onClick={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void saveSceneTitle(itemScene); } if (event.key === 'Escape') { setSceneTitleEditing(null); setSceneTitleDraft(''); } }} onBlur={() => void saveSceneTitle(itemScene)} autoFocus aria-label="Szenenname bearbeiten" /> : <span className="writing-scene-copy"><strong>{itemScene.title}</strong>{itemScene.id === draftScene?.id && <small>Aktiv</small>}</span>}{itemScene.id === draftScene?.id && <span className="writing-active-dot" />}</div>)}</div>
         <button className="writing-add-scene" onClick={() => chapter && void addScene(chapter.id)} disabled={!chapter || busyAction !== null}>{busyAction === chapter?.id ? <LoaderCircle className="spin" size={17} /> : <Plus size={18} />} Szene hinzufügen</button>
         <div className="writing-sidebar-spacer" />
         <button className="writing-notes-link" onClick={() => setDetailsOpen((open) => !open)} disabled={!draftScene}><StickyNote size={16} /> Szeneninfos &amp; Notizen</button>
       </aside>
       <main className="writing-editor-area">
-        <div className="writing-format-toolbar" aria-label="Textwerkzeuge"><select aria-label="Absatzformat" value={blockFormat} onChange={(event) => applyBlockFormat(event.target.value as 'paragraph' | 'heading')}><option value="paragraph">Absatz</option><option value="heading">Überschrift</option></select><span className="writing-toolbar-divider" /><button title="Fett" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('bold')}><Bold size={19} /></button><button title="Kursiv" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('italic')}><Italic size={19} /></button><button title="Unterstrichen" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('underline')}><Underline size={19} /></button><button title="Durchgestrichen" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('strikeThrough')}><Strikethrough size={18} /></button><span className="writing-toolbar-divider" /><button title="Aufzählung" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('insertUnorderedList')}><List size={19} /></button><button title="Nummerierte Liste" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('insertOrderedList')}><ListOrdered size={19} /></button><button title="Einzug verringern" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('outdent')}><IndentDecrease size={18} /></button><button title="Einzug vergrößern" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('indent')}><IndentIncrease size={18} /></button><span className="writing-toolbar-divider" /><button title="Link" onMouseDown={keepEditorSelection} onClick={addLink}><Link size={18} /></button><button title="Bild" onMouseDown={keepEditorSelection} onClick={addImage}><Image size={18} /></button><button title="Kommentar einfügen" onMouseDown={keepEditorSelection} onClick={addComment}><MessageCircle size={18} /></button><span className="writing-toolbar-divider" /><button title="Tabelle einfügen" onMouseDown={keepEditorSelection} onClick={addTable}><Table2 size={18} /></button><button title="Zitat" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('formatBlock', 'blockquote')}><Quote size={19} /></button><span className="writing-toolbar-divider" /><button title="Linksbündig" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('justifyLeft')}><AlignLeft size={18} /></button><button title="Zentriert" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('justifyCenter')}><AlignCenter size={18} /></button><button title="Rechtsbündig" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('justifyRight')}><AlignRight size={18} /></button><span className="writing-toolbar-spacer" /><button title="Schrift und Layout" onClick={() => setDisplayOpen((open) => !open)}><Type size={18} /></button></div>
+        <div className="writing-format-toolbar" aria-label="Textwerkzeuge"><select aria-label="Absatzformat" value={blockFormat} onChange={(event) => applyBlockFormat(event.target.value as 'paragraph' | 'heading')}><option value="paragraph">Absatz</option><option value="heading">Überschrift</option></select><span className="writing-toolbar-divider" /><button className={toolbarState.bold ? 'active' : ''} aria-pressed={toolbarState.bold} title="Fett" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('bold')}><Bold size={19} /></button><button className={toolbarState.italic ? 'active' : ''} aria-pressed={toolbarState.italic} title="Kursiv" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('italic')}><Italic size={19} /></button><button className={toolbarState.underline ? 'active' : ''} aria-pressed={toolbarState.underline} title="Unterstrichen" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('underline')}><Underline size={19} /></button><button className={toolbarState.strikeThrough ? 'active' : ''} aria-pressed={toolbarState.strikeThrough} title="Durchgestrichen" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('strikeThrough')}><Strikethrough size={18} /></button><span className="writing-toolbar-divider" /><button className={toolbarState.unorderedList ? 'active' : ''} aria-pressed={toolbarState.unorderedList} title="Aufzählung" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('insertUnorderedList')}><List size={19} /></button><button className={toolbarState.orderedList ? 'active' : ''} aria-pressed={toolbarState.orderedList} title="Nummerierte Liste" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('insertOrderedList')}><ListOrdered size={19} /></button><button title="Einzug verringern" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('outdent')}><IndentDecrease size={18} /></button><button title="Einzug vergrößern" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('indent')}><IndentIncrease size={18} /></button><span className="writing-toolbar-divider" /><button title="Link" onMouseDown={keepEditorSelection} onClick={addLink}><Link size={18} /></button><button title="Bild" onMouseDown={keepEditorSelection} onClick={addImage}><Image size={18} /></button><button title="Kommentar einfügen" onMouseDown={keepEditorSelection} onClick={addComment}><MessageCircle size={18} /></button><span className="writing-toolbar-divider" /><button title="Tabelle einfügen" onMouseDown={keepEditorSelection} onClick={addTable}><Table2 size={18} /></button><button title="Zitat" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('formatBlock', 'blockquote')}><Quote size={19} /></button><span className="writing-toolbar-divider" /><button className={toolbarState.justifyLeft ? 'active' : ''} aria-pressed={toolbarState.justifyLeft} title="Linksbündig" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('justifyLeft')}><AlignLeft size={18} /></button><button className={toolbarState.justifyCenter ? 'active' : ''} aria-pressed={toolbarState.justifyCenter} title="Zentriert" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('justifyCenter')}><AlignCenter size={18} /></button><button className={toolbarState.justifyRight ? 'active' : ''} aria-pressed={toolbarState.justifyRight} title="Rechtsbündig" onMouseDown={keepEditorSelection} onClick={() => runEditorCommand('justifyRight')}><AlignRight size={18} /></button><span className="writing-toolbar-spacer" /><button title="Schrift und Layout" onClick={() => setDisplayOpen((open) => !open)}><Type size={18} /></button></div>
         {displayOpen && <div className="writing-preferences writing-preferences-inline"><label>Schrift<select value={preferences.fontFamily} onChange={(event) => setPreferences((current) => ({ ...current, fontFamily: event.target.value as EditorPreferences['fontFamily'] }))}><option value="serif">Roman · Serif</option><option value="sans">Klar · Sans</option><option value="typewriter">Schreibmaschine · Mono</option></select></label><label>Größe<strong>{preferences.fontSize}px</strong><input type="range" min="14" max="28" step="1" value={preferences.fontSize} onChange={(event) => setPreferences((current) => ({ ...current, fontSize: Number(event.target.value) }))} /></label><label>Zeilenabstand<strong>{preferences.lineHeight.toFixed(2)}</strong><input type="range" min="1.3" max="2.5" step="0.05" value={preferences.lineHeight} onChange={(event) => setPreferences((current) => ({ ...current, lineHeight: Number(event.target.value) }))} /></label></div>}
         <div className="writing-editor-tools"><span>{draftScene?.title ?? 'Neue Szene'}</span><div><span>{wordCount.toLocaleString('de-DE')} Wörter</span><button className="writing-tool-link" onClick={() => void openHistory()} disabled={!draftScene}><History size={15} /> Verlauf</button><button className="writing-tool-link writing-tool-primary" onClick={() => void updateBible()} disabled={!draftScene}><Sparkles size={15} /> Story Bible aktualisieren</button></div></div>
         <article className="writing-page" style={paperStyle}>{draftScene ? <div ref={editorRef} className="writing-textarea" contentEditable role="textbox" aria-label="Szenentext" lang="de" spellCheck onInput={syncEditorDraft} data-placeholder="Beginne mit dem Schreiben deiner Szene …" /> : <div className="empty-state">Lege ein Kapitel und eine Szene an, um zu schreiben.</div>}</article>
