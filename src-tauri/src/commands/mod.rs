@@ -24,18 +24,19 @@ use crate::{
         CreateProjectStyleAnalysisRunInput, CreateSceneInput, CreateSceneVersionInput,
         CreateSourceReferenceInput, CreateStoryEntityInput, CreateStoryEntityRelationInput,
         CreateStyleReferenceInput, DatabaseInfo, DialogueMemoryParticipant, EditorPreferences,
-        LoreEntry, LoreMetadata, NarrativeSummary, Project, ProjectStyle, ProjectStyleAnalysisRun,
-        ProjectStyleObservation, ProviderStatus, RelationshipMemory, RestoreSceneVersionInput,
-        ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput,
-        SaveChapterGenerationPlanInput, SaveChapterGenerationReviewInput,
-        SaveChapterGenerationSectionInput, SaveCharacterDialogueMemoryInput,
-        SaveCharacterExperienceInput, SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput,
-        SaveCharacterSceneStateInput, SaveCharacterVoicePatternInput, SaveLoreMetadataInput,
-        SaveNarrativeSummaryInput, SaveProjectStyleInput, SaveProjectStyleObservationInput,
-        SaveRelationshipMemoryInput, SaveStoryDirectionInput, SaveWritingPreferencesInput, Scene,
-        SceneInput, SceneVersion, StoryDirection, StoryEntity, StoryEntityInput,
-        StoryEntityRelation, StorySourceReference, StyleReference, UpdateChapterInput,
-        UpdateStoryEntityInput, UpdateStyleReferenceInput, WorkspaceSnapshot, WritingPreferences,
+        LoreEntry, LoreMetadata, ManuscriptImportInput, ManuscriptImportResult, NarrativeSummary,
+        Project, ProjectStyle, ProjectStyleAnalysisRun, ProjectStyleObservation, ProviderStatus,
+        RelationshipMemory, RestoreSceneVersionInput, ReviewBibleProposalInput,
+        ReviewCharacterMemoryProposalInput, SaveChapterGenerationPlanInput,
+        SaveChapterGenerationReviewInput, SaveChapterGenerationSectionInput,
+        SaveCharacterDialogueMemoryInput, SaveCharacterExperienceInput,
+        SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput, SaveCharacterSceneStateInput,
+        SaveCharacterVoicePatternInput, SaveLoreMetadataInput, SaveNarrativeSummaryInput,
+        SaveProjectStyleInput, SaveProjectStyleObservationInput, SaveRelationshipMemoryInput,
+        SaveStoryDirectionInput, SaveWritingPreferencesInput, Scene, SceneInput, SceneVersion,
+        StoryDirection, StoryEntity, StoryEntityInput, StoryEntityRelation, StorySourceReference,
+        StyleReference, UpdateChapterInput, UpdateStoryEntityInput, UpdateStyleReferenceInput,
+        WorkspaceSnapshot, WritingPreferences,
     },
 };
 use chrono::Utc;
@@ -490,6 +491,136 @@ pub fn create_project(
 ) -> Result<Project, String> {
     let db = lock_db(&state)?;
     create_project_in_db(&db, input)
+}
+
+pub(crate) fn import_manuscript_in_db(
+    db: &Connection,
+    input: ManuscriptImportInput,
+) -> Result<ManuscriptImportResult, String> {
+    if input.chapters.is_empty() {
+        return Err("Der Import enthält keine Kapitel.".into());
+    }
+    if input.chapters.len() > 1000 {
+        return Err("Der Import enthält mehr als 1.000 Kapitel.".into());
+    }
+    for chapter in &input.chapters {
+        required(&chapter.title, "Der Kapitelname")?;
+        if chapter.title.chars().count() > 500 {
+            return Err("Ein Kapitelname darf höchstens 500 Zeichen enthalten.".into());
+        }
+        if chapter.content.chars().count() > 20_000_000 {
+            return Err("Der Text eines Kapitels ist zu groß für den sicheren Import.".into());
+        }
+    }
+    let book_project: Option<String> = db
+        .query_row(
+            "SELECT project_id FROM books WHERE id=?1",
+            params![input.book_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| sql_error("Der Zielband konnte nicht geprüft werden", error))?;
+    if book_project.as_deref() != Some(input.project_id.as_str()) {
+        return Err("Der Zielband gehört nicht zum ausgewählten Projekt.".into());
+    }
+
+    let transaction = db
+        .unchecked_transaction()
+        .map_err(|error| sql_error("Importtransaktion konnte nicht gestartet werden", error))?;
+    let timestamp = now();
+    let start_order: i64 = transaction
+        .query_row(
+            "SELECT COALESCE(MAX(order_index), 0) FROM chapters WHERE book_id=?1",
+            params![input.book_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| sql_error("Kapitelreihenfolge konnte nicht ermittelt werden", error))?;
+    let mut chapters = Vec::with_capacity(input.chapters.len());
+    let mut scenes = Vec::with_capacity(input.chapters.len());
+    let mut version_ids = Vec::with_capacity(input.chapters.len());
+
+    for (index, imported) in input.chapters.iter().enumerate() {
+        let chapter_id = new_id();
+        let scene_id = new_id();
+        let chapter = Chapter {
+            id: chapter_id.clone(),
+            book_id: input.book_id.clone(),
+            title: imported.title.trim().to_string(),
+            order_index: start_order + index as i64 + 1,
+            scenes: Vec::new(),
+            created_at: timestamp.clone(),
+            updated_at: timestamp.clone(),
+        };
+        let scene = Scene {
+            id: scene_id,
+            chapter_id: chapter_id.clone(),
+            title: "Kapiteltext".into(),
+            order_index: 1,
+            content: imported.content.clone(),
+            pov: String::new(),
+            location: String::new(),
+            story_time: String::new(),
+            status: "draft".into(),
+            goal: String::new(),
+            notes: String::new(),
+            created_at: timestamp.clone(),
+            updated_at: timestamp.clone(),
+        };
+        transaction
+            .execute(
+                "INSERT INTO chapters (id, book_id, title, order_index, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+                params![chapter.id, chapter.book_id, chapter.title, chapter.order_index, timestamp],
+            )
+            .map_err(|error| sql_error("Kapitel konnte nicht importiert werden", error))?;
+        transaction
+            .execute(
+                "INSERT INTO scenes (id, chapter_id, title, order_index, content, pov, location, story_time, status, goal, notes, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
+                params![scene.id, scene.chapter_id, scene.title, scene.order_index, scene.content, scene.pov, scene.location, scene.story_time, scene.status, scene.goal, scene.notes, timestamp],
+            )
+            .map_err(|error| sql_error("Kapiteltext konnte nicht importiert werden", error))?;
+        let (version_id, _) =
+            insert_scene_version_in_transaction(&transaction, &scene, &timestamp, "before_import")?;
+        version_ids.push((scene.id.clone(), version_id));
+        scenes.push(scene.clone());
+        chapters.push(Chapter {
+            scenes: vec![scene],
+            ..chapter
+        });
+    }
+    transaction
+        .execute(
+            "UPDATE projects SET updated_at=?1 WHERE id=?2",
+            params![timestamp, input.project_id],
+        )
+        .map_err(|error| sql_error("Projektzeitpunkt konnte nicht aktualisiert werden", error))?;
+    transaction
+        .commit()
+        .map_err(|error| sql_error("Import konnte nicht abgeschlossen werden", error))?;
+
+    let mut versions = Vec::with_capacity(version_ids.len());
+    for (scene_id, version_id) in version_ids {
+        let version = load_scene_versions(db, &scene_id)?
+            .into_iter()
+            .find(|item| item.id == version_id)
+            .ok_or_else(|| {
+                "Eine importierte Szenenversion konnte nicht geladen werden.".to_string()
+            })?;
+        versions.push(version);
+    }
+    Ok(ManuscriptImportResult {
+        chapters,
+        scenes,
+        versions,
+    })
+}
+
+#[tauri::command]
+pub fn import_manuscript(
+    state: State<'_, DbState>,
+    input: ManuscriptImportInput,
+) -> Result<ManuscriptImportResult, String> {
+    let db = lock_db(&state)?;
+    import_manuscript_in_db(&db, input)
 }
 
 pub(crate) fn create_chapter_in_db(
@@ -4177,6 +4308,7 @@ mod tests {
     use crate::database::{
         database_path_for_test, has_column, initialize_connection, seed_if_empty,
     };
+    use crate::models::ManuscriptImportChapterInput;
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},
@@ -4269,6 +4401,92 @@ mod tests {
         assert!(!scene.id.is_empty());
         assert_eq!(chapter.book_id, "book-1");
         assert_eq!(scene.chapter_id, chapter.id);
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn manuscript_import_creates_one_text_scene_and_initial_version_per_chapter() {
+        let (path, db) = connection("manuscript-import");
+        let result = import_manuscript_in_db(
+            &db,
+            ManuscriptImportInput {
+                project_id: "project-zugestellt".into(),
+                book_id: "book-1".into(),
+                chapters: vec![
+                    ManuscriptImportChapterInput {
+                        title: "Kapitel 1".into(),
+                        content: "Der Anfang.".into(),
+                    },
+                    ManuscriptImportChapterInput {
+                        title: "Kapitel 2".into(),
+                        content: "Die Fortsetzung.".into(),
+                    },
+                ],
+            },
+        )
+        .unwrap();
+        assert_eq!(result.chapters.len(), 2);
+        assert!(result
+            .chapters
+            .iter()
+            .all(|chapter| chapter.scenes.len() == 1));
+        assert_eq!(result.scenes.len(), 2);
+        assert_eq!(result.versions.len(), 2);
+        assert!(result
+            .versions
+            .iter()
+            .all(|version| version.reason == "before_import"));
+        assert_eq!(
+            db.query_row(
+                "SELECT COUNT(*) FROM scenes WHERE chapter_id IN (?1, ?2)",
+                params![result.chapters[0].id, result.chapters[1].id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            2
+        );
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn manuscript_import_rolls_back_when_one_chapter_is_invalid() {
+        let (path, db) = connection("manuscript-import-rollback");
+        let before: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM chapters WHERE book_id='book-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let error = import_manuscript_in_db(
+            &db,
+            ManuscriptImportInput {
+                project_id: "project-zugestellt".into(),
+                book_id: "book-1".into(),
+                chapters: vec![
+                    ManuscriptImportChapterInput {
+                        title: "Gültig".into(),
+                        content: "Text".into(),
+                    },
+                    ManuscriptImportChapterInput {
+                        title: "   ".into(),
+                        content: "Ungültig".into(),
+                    },
+                ],
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("Kapitelname"));
+        let after: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM chapters WHERE book_id='book-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(before, after);
         drop(db);
         let _ = fs::remove_file(path);
     }

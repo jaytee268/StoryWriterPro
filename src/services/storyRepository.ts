@@ -4,7 +4,7 @@ import { desktopInvoke, isTauriRuntime } from './desktop';
 import { editorContentToPlainText } from '../utils/editorContent';
 import { contentHash } from '../utils/aiText';
 import { characterMemoryPayloadSchema, validateCharacterMemoryPayload } from './characterMemorySchemas';
-import type { BibleProposal, BibleProposalDraft, BibleUpdateRun, Book, Chapter, CharacterProfile, CharacterSceneState, CharacterDialogueMemory, CharacterExperience, CharacterKnowledgeState, CharacterMemoryEvidence, CharacterMemoryProposal, CharacterMemoryProposalDraft, CharacterMemoryUpdateRun, CharacterVoicePattern, CreateBibleUpdateRunInput, CreateChapterInput, CreateLoreEntryInput, CreateProjectInput, CreateSceneInput, CreateSceneVersionInput, CreateSourceReferenceInput, CreateStoryEntityInput, CreateStoryEntityRelationInput, CreateStyleReferenceInput, CreateCharacterMemoryUpdateRunInput, CreateProjectStyleAnalysisRunInput, DialogueMemoryParticipant, EditorPreferences, LoreEntry, LoreMetadata, NarrativeSummary, Project, ProjectStyle, ProjectStyleAnalysisRun, ProjectStyleObservation, RelationshipMemory, ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput, SaveCharacterProfileInput, SaveCharacterSceneStateInput, SaveCharacterVoicePatternInput, SaveCharacterExperienceInput, SaveCharacterDialogueMemoryInput, SaveCharacterKnowledgeStateInput, SaveLoreMetadataInput, SaveNarrativeSummaryInput, SaveProjectStyleInput, SaveProjectStyleObservationInput, SaveRelationshipMemoryInput, AddCharacterMemoryEvidenceInput, SaveStoryEntityInput, Scene, SceneVersion, StoryEntity, StoryEntityRelation, StorySourceReference, StyleReference, UpdateChapterInput, UpdateSceneInput, UpdateStoryEntityInput, UpdateStyleReferenceInput, WorkspaceSnapshot } from '../types/domain';
+import type { BibleProposal, BibleProposalDraft, BibleUpdateRun, Book, Chapter, CharacterProfile, CharacterSceneState, CharacterDialogueMemory, CharacterExperience, CharacterKnowledgeState, CharacterMemoryEvidence, CharacterMemoryProposal, CharacterMemoryProposalDraft, CharacterMemoryUpdateRun, CharacterVoicePattern, CreateBibleUpdateRunInput, CreateChapterInput, CreateLoreEntryInput, CreateProjectInput, CreateSceneInput, CreateSceneVersionInput, CreateSourceReferenceInput, CreateStoryEntityInput, CreateStoryEntityRelationInput, CreateStyleReferenceInput, CreateCharacterMemoryUpdateRunInput, CreateProjectStyleAnalysisRunInput, DialogueMemoryParticipant, EditorPreferences, LoreEntry, LoreMetadata, ManuscriptImportInput, ManuscriptImportResult, NarrativeSummary, Project, ProjectStyle, ProjectStyleAnalysisRun, ProjectStyleObservation, RelationshipMemory, ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput, SaveCharacterProfileInput, SaveCharacterSceneStateInput, SaveCharacterVoicePatternInput, SaveCharacterExperienceInput, SaveCharacterDialogueMemoryInput, SaveCharacterKnowledgeStateInput, SaveLoreMetadataInput, SaveNarrativeSummaryInput, SaveProjectStyleInput, SaveProjectStyleObservationInput, SaveRelationshipMemoryInput, AddCharacterMemoryEvidenceInput, SaveStoryEntityInput, Scene, SceneVersion, StoryEntity, StoryEntityRelation, StorySourceReference, StyleReference, UpdateChapterInput, UpdateSceneInput, UpdateStoryEntityInput, UpdateStyleReferenceInput, WorkspaceSnapshot } from '../types/domain';
 
 export type RuntimeMode = 'desktop' | 'browser-demo';
 export type SaveableScene = Scene;
@@ -15,6 +15,7 @@ export interface StoryRepository {
   readonly mode: RuntimeMode;
   loadWorkspace(): Promise<WorkspaceSnapshot>;
   createProject(input: CreateProjectInput): Promise<Project>;
+  importManuscript(input: ManuscriptImportInput): Promise<ManuscriptImportResult>;
   createChapter(input: CreateChapterInput): Promise<Chapter>;
   updateChapter(input: UpdateChapterInput): Promise<Chapter>;
   createScene(input: CreateSceneInput): Promise<Scene>;
@@ -102,6 +103,7 @@ const sceneSchema = z.object({ id: z.string(), chapterId: z.string(), title: z.s
 const sceneVersionSchema = z.object({ id: z.string(), sceneId: z.string(), versionNumber: z.number(), content: z.string(), reason: z.enum(['manual', 'before_correction', 'before_ai_change', 'before_import', 'automatic_checkpoint']), createdAt: z.string(), scene: sceneSchema });
 const editorPreferencesSchema = z.object({ fontFamily: z.enum(['serif', 'sans', 'typewriter']), fontSize: z.number(), lineHeight: z.number() });
 const chapterSchema = z.object({ id: z.string(), bookId: z.string(), title: z.string(), orderIndex: z.number(), scenes: z.array(sceneSchema), createdAt: z.string().optional(), updatedAt: z.string().optional() });
+const manuscriptImportSchema = z.object({ chapters: z.array(chapterSchema), scenes: z.array(sceneSchema), versions: z.array(sceneVersionSchema) });
 const entitySchema = z.object({ id: z.string(), projectId: z.string(), name: z.string(), type: entityTypeSchema, description: z.string(), status: entityStatusSchema, confidence: z.number(), source: z.string(), chapter: z.string(), scene: z.string(), authorConfirmed: z.boolean(), updatedAt: z.string(), createdAt: z.string().optional(), tags: z.array(z.string()), origin: z.enum(['manual', 'bible_update', 'edited']) });
 const sourceSchema = z.object({ id: z.string(), projectId: z.string(), entityId: z.string().nullable().optional(), proposalId: z.string().nullable().optional(), chapterId: z.string(), sceneId: z.string(), excerpt: z.string(), startOffset: z.number().nullable().optional(), endOffset: z.number().nullable().optional(), createdAt: z.string() }).transform((source) => ({ ...source, entityId: source.entityId ?? undefined, proposalId: source.proposalId ?? undefined, startOffset: source.startOffset ?? undefined, endOffset: source.endOffset ?? undefined }));
 const runSchema = z.object({ id: z.string(), projectId: z.string(), sceneId: z.string(), sceneUpdatedAt: z.string(), contentHash: z.string(), extractorId: z.string(), analyzedContent: z.string().nullable().optional(), status: z.enum(['pending', 'running', 'completed', 'failed', 'reviewed']), createdAt: z.string(), completedAt: z.string().nullable().optional(), errorMessage: z.string().nullable().optional() }).transform((run) => ({ ...run, analyzedContent: run.analyzedContent ?? '', completedAt: run.completedAt ?? undefined, errorMessage: run.errorMessage ?? undefined }));
@@ -256,6 +258,7 @@ export class TauriStoryRepository implements StoryRepository {
 
   async loadWorkspace(): Promise<WorkspaceSnapshot> { return parse(workspaceSchema, await desktopInvoke('load_workspace'), 'Workspace'); }
   async createProject(input: CreateProjectInput): Promise<Project> { return parse(projectSchema, await desktopInvoke('create_project', { input }), 'Projekt'); }
+  async importManuscript(input: ManuscriptImportInput): Promise<ManuscriptImportResult> { return parse(manuscriptImportSchema, await desktopInvoke('import_manuscript', { input }), 'Manuskriptimport'); }
   async createChapter(input: CreateChapterInput): Promise<Chapter> { return parse(chapterSchema, await desktopInvoke('create_chapter', { input }), 'Kapitel'); }
   async updateChapter(input: UpdateChapterInput): Promise<Chapter> { return parse(chapterSchema, await desktopInvoke('update_chapter', { input }), 'Kapitel'); }
   async createScene(input: CreateSceneInput): Promise<Scene> { return parse(sceneSchema, await desktopInvoke('create_scene', { input }), 'Szene'); }
@@ -374,6 +377,31 @@ export class BrowserDemoRepository implements StoryRepository {
     state.versions = []; state.sources = []; state.runs = []; state.proposals = []; state.lore = []; state.characterProfiles = []; state.characterStates = []; state.projectStyle = undefined; state.styleReferences = []; state.relations = []; state.voicePatterns = []; state.experiences = []; state.dialogueMemories = []; state.relationshipMemories = []; state.knowledgeStates = []; state.knowledgeHistory = []; state.memoryEvidence = []; state.memoryRuns = []; state.memoryProposals = [];
     this.write(state);
     return clone(project);
+  }
+  async importManuscript(input: ManuscriptImportInput): Promise<ManuscriptImportResult> {
+    const state = this.read();
+    if (!state.project || state.project.id !== input.projectId) throw new Error('Das ausgewählte Projekt wurde nicht gefunden.');
+    if (!state.books.some((book) => book.id === input.bookId && book.projectId === input.projectId)) throw new Error('Der Zielband wurde nicht gefunden.');
+    if (!input.chapters.length) throw new Error('Der Import enthält keine Kapitel.');
+    if (input.chapters.some((chapter) => !chapter.title.trim())) throw new Error('Alle importierten Kapitel benötigen einen Titel.');
+    const timestamp = now();
+    const nextState = clone(state);
+    const startOrder = nextState.chapters.filter((chapter) => chapter.bookId === input.bookId).reduce((max, chapter) => Math.max(max, chapter.orderIndex), 0);
+    const chapters: Chapter[] = [];
+    const scenes: Scene[] = [];
+    const versions: SceneVersion[] = [];
+    input.chapters.forEach((inputChapter, index) => {
+      const chapter: Chapter = { id: crypto.randomUUID(), bookId: input.bookId, title: inputChapter.title.trim(), orderIndex: startOrder + index + 1, scenes: [], createdAt: timestamp, updatedAt: timestamp };
+      const scene: Scene = { id: crypto.randomUUID(), chapterId: chapter.id, title: 'Kapiteltext', orderIndex: 1, content: inputChapter.content, pov: '', location: '', storyTime: '', status: 'draft', goal: '', notes: '', createdAt: timestamp, updatedAt: timestamp };
+      chapter.scenes = [scene];
+      const version: SceneVersion = { id: crypto.randomUUID(), sceneId: scene.id, versionNumber: 1, content: scene.content, reason: 'before_import', createdAt: timestamp, scene: clone(scene) };
+      chapters.push(chapter); scenes.push(scene); versions.push(version);
+    });
+    nextState.chapters = [...nextState.chapters, ...chapters];
+    nextState.versions = [...versions, ...nextState.versions];
+    nextState.project.updatedAt = timestamp;
+    this.write(nextState);
+    return clone({ chapters, scenes, versions });
   }
   async createChapter(input: CreateChapterInput): Promise<Chapter> {
     const state = this.read();

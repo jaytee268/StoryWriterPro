@@ -674,3 +674,15 @@ body { background: var(--bg); color: var(--text); }
 .draft-notice { display: flex; gap: 9px; align-items: flex-start; background: #fff7e7; border: 1px solid #f2dfb3; color: #815f20; padding: 13px 15px; border-radius: 12px; margin: 18px 0; font-size: 14px; line-height: 1.45; }
 .draft-section { border-top: 1px solid #e5eaf1; padding: 18px 0; }.draft-section textarea { width: 100%; min-height: 150px; resize: vertical; margin-top: 10px; }.section-heading span { color: #8090a8; font-size: 13px; }
 @media (max-width: 820px) { .longform-overlay { padding: 16px; }.longform-head { grid-template-columns: 1fr 42px; }.longform-head > .ghost-button { grid-column: 1 / -1; }.longform-grid { grid-template-columns: 1fr; }.direction-card, .longform-actions { grid-column: auto; }.longform-steps { overflow-x: auto; }.longform-steps span { white-space: nowrap; } }
+
+.manuscript-import-modal { width: min(780px, calc(100vw - 32px)); }
+.manuscript-import-modal .simple-drop { cursor: pointer; width: 100%; }
+.import-preview-head, .import-edit-actions, .modal-actions { display: flex; align-items: center; gap: 10px; }
+.import-preview-head { justify-content: space-between; margin: 16px 0 9px; color: #71829d; font-size: 12px; }
+.import-preview-head strong { color: #203047; }.import-chapter-list { display: grid; gap: 6px; max-height: 190px; overflow: auto; }
+.import-chapter-row { display: grid; grid-template-columns: 35px 1fr auto; gap: 10px; align-items: center; text-align: left; padding: 10px 12px; border: 1px solid #dbe3ee; border-radius: 9px; background: #fff; color: #203047; }
+.import-chapter-row.active { border-color: #526fc4; background: #edf2ff; }.import-chapter-row span { color: #526fc4; font-weight: 800; }.import-chapter-row small { color: #8090a8; }
+.import-editor { display: grid; gap: 12px; margin-top: 14px; }.import-editor textarea { min-height: 150px; resize: vertical; }
+.import-edit-actions { flex-wrap: wrap; }.import-edit-actions .compact { width: 180px; }.import-edit-actions button { white-space: nowrap; }
+.import-issues { display: grid; gap: 6px; margin: 10px 0; }.import-issues > * { padding: 9px 11px; border-radius: 8px; font-size: 12px; }
+.modal-actions { justify-content: flex-end; margin-top: 16px; }.modal-actions .primary-button { display: inline-flex; align-items: center; gap: 6px; }

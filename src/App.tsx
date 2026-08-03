@@ -18,6 +18,7 @@ import { canonicalizeSceneForAi } from './utils/aiText';
 import { defaultAiProviderSettings, providerRouter, type StoryAiProvider } from './services/aiProviderService';
 import { createLongformRepository } from './services/longformRepository';
 import { LongformDraftView } from './features/longform/LongformDraftView';
+import { ManuscriptImportModal } from './features/import/ManuscriptImportModal';
 
 const repository: StoryRepository = createStoryRepository();
 const longformRepository = createLongformRepository();
@@ -120,6 +121,21 @@ export function App() {
     setSelectedSceneId(targetSceneId);
     return true;
   }, [selectedSceneId, view]);
+
+  const openImport = useCallback(async () => {
+    const controller = editorSaveController.current;
+    if (view === 'editor' && controller) {
+      await controller.flush();
+      if (controller.getStatus() === 'error') {
+        const reason = controller.getError();
+        setSaveStatus('error');
+        setViewError(reason instanceof Error ? reason.message : 'Die Szene konnte vor dem Import nicht gespeichert werden.');
+        return;
+      }
+    }
+    setViewError('');
+    setActiveModal('import');
+  }, [view]);
 
   useEffect(() => {
     if (repository.mode !== 'desktop') {
@@ -319,13 +335,13 @@ export function App() {
 
   const renderView = () => {
     if (!workspace) return null;
-    if (view === 'dashboard') return <Dashboard project={workspace.project} onOpen={() => void requestViewChange('editor')} onImport={() => setActiveModal('import')} />;
+    if (view === 'dashboard') return <Dashboard project={workspace.project} onOpen={() => void requestViewChange('editor')} onImport={() => void openImport()} />;
     if (view === 'editor') return <EditorView projectId={workspace.project.id} chapters={workspace.chapters} scene={currentScene} chapter={currentChapter} pendingSourceNavigation={pendingSourceNavigation} onSourceNavigationConsumed={() => setPendingSourceNavigation(undefined)} onBack={() => void requestViewChange('dashboard')} onSelectScene={(id) => void requestSceneChange(id)} onSave={saveScene} onCreateChapter={createChapter} onUpdateChapter={updateChapter} onCreateScene={createScene} onListVersions={listSceneVersions} onCreateVersion={createSceneVersion} onRestoreVersion={restoreSceneVersion} onGetEditorPreferences={getEditorPreferences} onSaveEditorPreferences={saveEditorPreferences} onBibleUpdate={runBibleUpdate} bibleUpdateBusy={Boolean(bibleUpdateProvider)} onCancelBibleUpdate={cancelBibleUpdate} onOpenAssistant={() => setAssistantOpen(true)} onSaveStateChange={setSaveStatus} onRegisterSaveController={registerSaveController} onCreateStyleReference={createStyleReference} />;
     if (view === 'bible' || view === 'characters' || view === 'threads') return <StoryBibleView entities={workspace.entities} projectId={workspace.project.id} chapters={workspace.chapters} repository={repository} activeRun={activeReviewRun} proposals={reviewProposals} activeMemoryRun={activeMemoryRun} memoryProposals={memoryProposals} onEntityChanged={replaceEntity} onOpenSourceReference={openSourceReference} onOpenStyleReference={openStyleReference} onReview={reviewProposal} onCompleteReview={completeBibleReview} onMemoryReview={reviewCharacterMemory} onCompleteMemoryReview={completeCharacterMemoryReview} onCloseReview={() => { setActiveReviewRun(undefined); setReviewProposals([]); setActiveMemoryRun(undefined); setMemoryProposals([]); }} initialFilter={view === 'characters' ? 'character' : view === 'threads' ? 'plot_thread' : undefined} />;
     if (view === 'timeline') return <TimelineView events={demoEvents} />;
     if (view === 'mindmap') return <MindmapView nodes={mindNodes} edges={mindEdges} />;
     if (view === 'settings') return <SettingsView mode={repository.mode} project={workspace.project} settings={providerSettings} onSettingsChange={setProviderSettings} onReload={loadWorkspace} />;
-    return <Dashboard project={workspace.project} onOpen={() => void requestViewChange('editor')} onImport={() => setActiveModal('import')} />;
+    return <Dashboard project={workspace.project} onOpen={() => void requestViewChange('editor')} onImport={() => void openImport()} />;
   };
 
   const project = workspace?.project;
@@ -337,7 +353,7 @@ export function App() {
       <button className="simple-brand" onClick={() => void requestViewChange('dashboard')} aria-label="Zum Start"><span className="brand-mark">SM</span><span><strong>StoryMemory</strong><small>Dein Buch vergisst nichts.</small></span></button>
       <div className="simple-project"><span className="eyebrow">DEIN PROJEKT</span><strong>{project?.title ?? 'Workspace'}</strong><span>{project ? 'Band 1 · Entwurf' : 'Wird geladen …'}</span></div>
       <nav className="simple-nav" aria-label="Hauptnavigation">{navItems.map(({ view: target, label, description, icon: Icon }) => <button key={target} title={sidebarOpen ? undefined : label} className={`simple-nav-button ${view === target ? 'active' : ''}`} onClick={() => void requestViewChange(target)}><Icon size={21} /><span><strong>{label}</strong><small>{description}</small></span></button>)}</nav>
-      <div className="simple-sidebar-bottom"><button className="simple-nav-button" title={sidebarOpen ? undefined : 'Importieren'} onClick={() => setActiveModal('import')}><Upload size={21} /><span><strong>Importieren</strong><small>TXT oder Markdown</small></span></button><button className="simple-nav-button" title={sidebarOpen ? undefined : 'Einstellungen'} onClick={() => void requestViewChange('settings')}><Settings2 size={21} /><span><strong>Einstellungen</strong><small>App anpassen</small></span></button><div className="provider-status"><span className="status-dot green" /><span className="provider-label">{repository.mode === 'desktop' ? 'Lokaler Desktop-Modus' : 'Browser-Demo-Modus'}</span></div></div>
+      <div className="simple-sidebar-bottom"><button className="simple-nav-button" title={sidebarOpen ? undefined : 'Importieren'} onClick={() => void openImport()}><Upload size={21} /><span><strong>Importieren</strong><small>TXT, Markdown oder DOCX</small></span></button><button className="simple-nav-button" title={sidebarOpen ? undefined : 'Einstellungen'} onClick={() => void requestViewChange('settings')}><Settings2 size={21} /><span><strong>Einstellungen</strong><small>App anpassen</small></span></button><div className="provider-status"><span className="status-dot green" /><span className="provider-label">{repository.mode === 'desktop' ? 'Lokaler Desktop-Modus' : 'Browser-Demo-Modus'}</span></div></div>
     </aside>
     <main className="main-area">
       <header className="topbar simple-topbar"><div className="topbar-title"><button className="sidebar-toggle" onClick={() => setSidebarOpen((open) => !open)} aria-label={sidebarOpen ? 'Sidebar einklappen' : 'Sidebar öffnen'} title={sidebarOpen ? 'Sidebar einklappen' : 'Sidebar öffnen'}>{sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}</button><div className="topbar-copy"><span className="eyebrow">{view === 'dashboard' ? 'START' : project?.title ?? 'STORYMEMORY'}</span><strong>{topLabel}</strong></div></div><div className="topbar-actions"><span className={`save-state save-state-${saveStatus}`}><span className={`status-dot status-dot-${saveStatus}`} /> {saveLabel[saveStatus]}</span><button className="assistant-button" onClick={() => setAssistantOpen(true)}><MessageCircle size={18} /> Assistent öffnen</button></div></header>
@@ -346,7 +362,8 @@ export function App() {
     {assistantOpen && <div className="assistant-drawer"><button className="drawer-close" onClick={() => setAssistantOpen(false)} aria-label="Assistent schließen"><X size={20} /></button>{workspace && <ChatPanel messages={messages} onMessagesChange={setMessages} contextBuilder={contextBuilder} contextRequest={{ projectId: workspace.project.id, currentChapterId: currentChapter?.id, currentSceneId: currentScene?.id }} onOpenSourceReference={(reference) => void openSourceReference(reference)} providerRouter={providerRouter} onLongformRequest={(instruction) => { setLongformInstruction(instruction); setAssistantOpen(false); }} />}</div>}
     {resumeMemoryReview && !activeMemoryRun && <div className="provider-notice" role="status"><span>Ein offener Character-Memory-Review wartet auf deine Entscheidung.</span><button className="primary-button" onClick={() => { setActiveMemoryRun(resumeMemoryReview.run); setMemoryProposals(resumeMemoryReview.proposals); setResumeMemoryReview(undefined); void requestViewChange('bible'); }}>Review fortsetzen</button><button className="text-button" onClick={() => setResumeMemoryReview(undefined)}>Später</button></div>}
     {longformInstruction && workspace && <div className="longform-overlay"><LongformDraftView project={workspace.project} chapters={workspace.chapters} entities={workspace.entities} repository={longformRepository} instruction={longformInstruction} activeProvider={providerSettings.activeProvider} onClose={() => setLongformInstruction(undefined)} onAccepted={async () => { setLongformInstruction(undefined); await loadWorkspace(); await requestViewChange('editor'); }} /></div>}
-    {activeModal && <Modal type={activeModal} onClose={() => setActiveModal(null)} />}
+    {activeModal && activeModal !== 'import' && <Modal type={activeModal} onClose={() => setActiveModal(null)} />}
+    {activeModal === 'import' && workspace?.books[0] && <ManuscriptImportModal projectId={workspace.project.id} bookId={workspace.books[0].id} repository={repository} onClose={() => setActiveModal(null)} onImported={async (result) => { setSelectedSceneId(result.scenes[0]?.id ?? ''); setActiveModal(null); await loadWorkspace(); await requestViewChange('editor'); }} />}
     {closePrompt && <ClosePrompt message={closePrompt} onRetry={() => void finishClose(false)} onForceClose={() => void finishClose(true)} onCancel={() => setClosePrompt('')} />}
   </div>;
 }
@@ -358,4 +375,4 @@ function ClosePrompt({ message, onRetry, onForceClose, onCancel }: { message: st
   return <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="close-save-title"><div className="modal simple-modal close-save-modal"><div className="modal-head"><div><span className="eyebrow">LETZTE ÄNDERUNG</span><h2 id="close-save-title">Noch nicht gespeichert</h2></div></div><p className="modal-intro">{message} Was möchtest du tun?</p><div className="close-save-actions"><button className="primary-button large" onClick={onRetry}>Erneut versuchen</button><button className="ghost-button large" onClick={onForceClose}>Trotzdem schließen</button><button className="text-button" onClick={onCancel}>Abbrechen</button></div></div></div>;
 }
 
-function Modal({ type, onClose }: { type: 'bible' | 'research' | 'import'; onClose: () => void }) { const title = type === 'bible' ? 'Story Bible aktualisieren' : type === 'research' ? 'Projekt prüfen' : 'Manuskript importieren'; return <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal simple-modal"><div className="modal-head"><div><span className="eyebrow">{type === 'bible' ? 'VORSCHLÄGE PRÜFEN' : 'EINFACHER WORKFLOW'}</span><h2>{title}</h2></div><button className="icon-button" onClick={onClose} aria-label="Dialog schließen"><X size={20} /></button></div>{type === 'bible' && <><p className="modal-intro">Ich habe neue mögliche Fakten gefunden. Du entscheidest, was in deine Story Bible kommt.</p><div className="proposal-summary simple-summary"><div><strong>7</strong><span>neue Fakten</span></div><div><strong>2</strong><span>Figurenänderungen</span></div><div><strong>1</strong><span>möglicher Widerspruch</span></div></div><button className="primary-button large full" onClick={onClose}>Vorschläge ansehen</button></>}{type === 'research' && <><p className="modal-intro">Prüfe deine aktuelle Szene gegen die bisherige Geschichte.</p><div className="simple-choice"><strong>Was soll geprüft werden?</strong><button className="choice-button active">Aktuelle Szene</button><button className="choice-button">Aktuelles Kapitel</button><button className="choice-button">Gesamtes Buch</button></div><button className="primary-button large full" onClick={onClose}>Prüfung starten</button></>}{type === 'import' && <><p className="modal-intro">Wähle eine TXT- oder Markdown-Datei. Alles bleibt auf deinem Computer.</p><div className="drop-zone simple-drop"><Upload size={28} /><strong>Datei auswählen</strong><span>oder hier hineinziehen</span></div><button className="primary-button large full" onClick={onClose}>Import vorbereiten</button></>}</div></div>; }
+function Modal({ type, onClose }: { type: 'bible' | 'research'; onClose: () => void }) { const title = type === 'bible' ? 'Story Bible aktualisieren' : 'Projekt prüfen'; return <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal simple-modal"><div className="modal-head"><div><span className="eyebrow">{type === 'bible' ? 'VORSCHLÄGE PRÜFEN' : 'EINFACHER WORKFLOW'}</span><h2>{title}</h2></div><button className="icon-button" onClick={onClose} aria-label="Dialog schließen"><X size={20} /></button></div>{type === 'bible' && <><p className="modal-intro">Ich habe neue mögliche Fakten gefunden. Du entscheidest, was in deine Story Bible kommt.</p><div className="proposal-summary simple-summary"><div><strong>7</strong><span>neue Fakten</span></div><div><strong>2</strong><span>Figurenänderungen</span></div><div><strong>1</strong><span>möglicher Widerspruch</span></div></div><button className="primary-button large full" onClick={onClose}>Vorschläge ansehen</button></>}{type === 'research' && <><p className="modal-intro">Prüfe deine aktuelle Szene gegen die bisherige Geschichte.</p><div className="simple-choice"><strong>Was soll geprüft werden?</strong><button className="choice-button active">Aktuelle Szene</button><button className="choice-button">Aktuelles Kapitel</button><button className="choice-button">Gesamtes Buch</button></div><button className="primary-button large full" onClick={onClose}>Prüfung starten</button></>}</div></div>; }

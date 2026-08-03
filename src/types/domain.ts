@@ -126,6 +126,10 @@ export interface UpdateChapterInput { id: string; title: string; }
 export interface CreateSceneInput { chapterId: string; title: string; }
 export type UpdateSceneInput = Scene;
 export interface CreateSceneVersionInput { sceneId: string; reason?: SceneVersionReason; }
+export interface ManuscriptImportChapterInput { title: string; content: string; }
+export type ManuscriptFormat = 'txt' | 'markdown' | 'docx';
+export interface ManuscriptImportInput { projectId: string; bookId: string; chapters: ManuscriptImportChapterInput[]; }
+export interface ManuscriptImportResult { chapters: Chapter[]; scenes: Scene[]; versions: SceneVersion[]; }
 export interface SaveStoryEntityInput extends StoryEntity { projectId: string; }
 export interface CreateStoryEntityInput { projectId: string; name: string; type: EntityType; description: string; status: EntityStatus; confidence: number; chapterId?: string; sceneId?: string; excerpt: string; authorConfirmed: boolean; tags: string[]; }
 export interface UpdateStoryEntityInput extends CreateStoryEntityInput { id: string; }

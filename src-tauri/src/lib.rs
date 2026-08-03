@@ -23,6 +23,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::load_workspace,
             commands::create_project,
+            commands::import_manuscript,
             commands::create_chapter,
             commands::update_chapter,
             commands::create_scene,

@@ -26,6 +26,29 @@ pub struct CreateChapterInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ManuscriptImportChapterInput {
+    pub title: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManuscriptImportInput {
+    pub project_id: String,
+    pub book_id: String,
+    pub chapters: Vec<ManuscriptImportChapterInput>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManuscriptImportResult {
+    pub chapters: Vec<Chapter>,
+    pub scenes: Vec<Scene>,
+    pub versions: Vec<SceneVersion>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateChapterInput {
     pub id: String,
     pub title: String,
