@@ -762,7 +762,19 @@ pub(crate) fn create_story_entity_in_db(
         &timestamp,
     )?;
     if !chapter_id.is_empty() {
-        transaction.execute("INSERT INTO story_source_references (id, project_id, entity_id, chapter_id, scene_id, excerpt, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)", params![new_id(), input.project_id, id, chapter_id, input.scene_id, input.excerpt, timestamp]).map_err(|error| sql_error("Quelle konnte nicht gespeichert werden", error))?;
+        insert_source_reference_if_missing_tx(
+            &transaction,
+            &CreateSourceReferenceInput {
+                project_id: input.project_id.clone(),
+                entity_id: Some(id.clone()),
+                proposal_id: None,
+                chapter_id,
+                scene_id: input.scene_id.clone().unwrap_or_default(),
+                excerpt: input.excerpt.clone(),
+                start_offset: None,
+                end_offset: None,
+            },
+        )?;
     }
     transaction.commit().map_err(|error| {
         sql_error(
@@ -799,7 +811,19 @@ pub(crate) fn update_story_entity_in_db(
     if let (Some(chapter_id), Some(scene_id)) =
         (input.chapter_id.as_deref(), input.scene_id.as_deref())
     {
-        transaction.execute("INSERT INTO story_source_references (id, project_id, entity_id, chapter_id, scene_id, excerpt, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)", params![new_id(), input.project_id, input.id, chapter_id, scene_id, input.excerpt, timestamp]).map_err(|error| sql_error("Quelle konnte nicht gespeichert werden", error))?;
+        insert_source_reference_if_missing_tx(
+            &transaction,
+            &CreateSourceReferenceInput {
+                project_id: input.project_id.clone(),
+                entity_id: Some(input.id.clone()),
+                proposal_id: None,
+                chapter_id: chapter_id.to_string(),
+                scene_id: scene_id.to_string(),
+                excerpt: input.excerpt.clone(),
+                start_offset: None,
+                end_offset: None,
+            },
+        )?;
     }
     transaction.commit().map_err(|error| {
         sql_error(
@@ -866,16 +890,79 @@ fn source_from_row(row: &rusqlite::Row<'_>) -> SqlResult<StorySourceReference> {
     })
 }
 
+fn insert_source_reference_if_missing_tx(
+    transaction: &rusqlite::Transaction<'_>,
+    input: &CreateSourceReferenceInput,
+) -> Result<String, String> {
+    let existing = transaction
+        .query_row(
+            "SELECT id FROM story_source_references
+             WHERE project_id=?1 AND entity_id IS ?2 AND chapter_id=?3 AND scene_id=?4
+               AND excerpt=?5 AND start_offset IS ?6 AND end_offset IS ?7
+             LIMIT 1",
+            params![
+                input.project_id,
+                input.entity_id,
+                input.chapter_id,
+                input.scene_id,
+                input.excerpt,
+                input.start_offset,
+                input.end_offset
+            ],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| sql_error("Vorhandene Quellen konnten nicht geprüft werden", error))?;
+    if let Some(id) = existing {
+        return Ok(id);
+    }
+    let id = new_id();
+    transaction
+        .execute(
+            "INSERT INTO story_source_references
+             (id, project_id, entity_id, proposal_id, chapter_id, scene_id, excerpt, start_offset, end_offset, created_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            params![
+                id,
+                input.project_id,
+                input.entity_id,
+                input.proposal_id,
+                input.chapter_id,
+                input.scene_id,
+                input.excerpt,
+                input.start_offset,
+                input.end_offset,
+                now()
+            ],
+        )
+        .map_err(|error| sql_error("Quellenreferenz konnte nicht gespeichert werden", error))?;
+    Ok(id)
+}
+
+fn load_source_reference(db: &Connection, id: &str) -> Result<StorySourceReference, String> {
+    db.query_row(
+        "SELECT id, project_id, entity_id, proposal_id, chapter_id, scene_id, excerpt, start_offset, end_offset, created_at
+         FROM story_source_references WHERE id=?1",
+        params![id],
+        source_from_row,
+    )
+    .map_err(|error| sql_error("Gespeicherte Quellenreferenz konnte nicht geladen werden", error))
+}
+
 #[tauri::command]
 pub fn create_source_reference(
     state: State<'_, DbState>,
     input: CreateSourceReferenceInput,
 ) -> Result<StorySourceReference, String> {
     let db = lock_db(&state)?;
-    let timestamp = now();
-    let id = new_id();
-    db.execute("INSERT INTO story_source_references (id, project_id, entity_id, proposal_id, chapter_id, scene_id, excerpt, start_offset, end_offset, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)", params![id, input.project_id, input.entity_id, input.proposal_id, input.chapter_id, input.scene_id, input.excerpt, input.start_offset, input.end_offset, timestamp]).map_err(|error| sql_error("Quellenreferenz konnte nicht gespeichert werden", error))?;
-    db.query_row("SELECT id, project_id, entity_id, proposal_id, chapter_id, scene_id, excerpt, start_offset, end_offset, created_at FROM story_source_references WHERE id=?1", params![id], source_from_row).map_err(|error| sql_error("Gespeicherte Quellenreferenz konnte nicht geladen werden", error))
+    let transaction = db
+        .unchecked_transaction()
+        .map_err(|error| sql_error("Quellenreferenz konnte nicht gespeichert werden", error))?;
+    let id = insert_source_reference_if_missing_tx(&transaction, &input)?;
+    transaction
+        .commit()
+        .map_err(|error| sql_error("Quellenreferenz konnte nicht abgeschlossen werden", error))?;
+    load_source_reference(&db, &id)
 }
 
 #[tauri::command]
@@ -902,10 +989,11 @@ fn run_from_row(row: &rusqlite::Row<'_>) -> SqlResult<BibleUpdateRun> {
         scene_updated_at: row.get(3)?,
         content_hash: row.get(4)?,
         extractor_id: row.get(5)?,
-        status: row.get(6)?,
-        created_at: row.get(7)?,
-        completed_at: row.get(8)?,
-        error_message: row.get(9)?,
+        analyzed_content: row.get(6)?,
+        status: row.get(7)?,
+        created_at: row.get(8)?,
+        completed_at: row.get(9)?,
+        error_message: row.get(10)?,
     })
 }
 
@@ -934,7 +1022,7 @@ fn proposal_from_row(row: &rusqlite::Row<'_>) -> SqlResult<BibleProposal> {
 }
 
 fn load_run(db: &Connection, id: &str) -> Result<BibleUpdateRun, String> {
-    db.query_row("SELECT id, project_id, scene_id, scene_updated_at, content_hash, extractor_id, status, created_at, completed_at, error_message FROM bible_update_runs WHERE id=?1", params![id], run_from_row).map_err(|error| sql_error("Bible-Update-Lauf konnte nicht geladen werden", error))
+    db.query_row("SELECT id, project_id, scene_id, scene_updated_at, content_hash, extractor_id, analyzed_content, status, created_at, completed_at, error_message FROM bible_update_runs WHERE id=?1", params![id], run_from_row).map_err(|error| sql_error("Bible-Update-Lauf konnte nicht geladen werden", error))
 }
 
 fn load_proposal(db: &Connection, id: &str) -> Result<BibleProposal, String> {
@@ -958,7 +1046,7 @@ pub fn create_bible_update_run(
     }
     let id = new_id();
     let timestamp = now();
-    db.execute("INSERT INTO bible_update_runs (id, project_id, scene_id, scene_updated_at, content_hash, extractor_id, status, created_at) VALUES (?1,?2,?3,?4,?5,?6,'pending',?7)", params![id, input.project_id, input.scene_id, input.scene_updated_at, input.content_hash, input.extractor_id, timestamp]).map_err(|error| sql_error("Bible-Update-Lauf konnte nicht angelegt werden", error))?;
+    db.execute("INSERT INTO bible_update_runs (id, project_id, scene_id, scene_updated_at, content_hash, extractor_id, analyzed_content, status, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,'pending',?8)", params![id, input.project_id, input.scene_id, input.scene_updated_at, input.content_hash, input.extractor_id, input.analyzed_content, timestamp]).map_err(|error| sql_error("Bible-Update-Lauf konnte nicht angelegt werden", error))?;
     load_run(&db, &id)
 }
 
@@ -969,7 +1057,7 @@ pub fn list_bible_update_runs(
     scene_id: Option<String>,
 ) -> Result<Vec<BibleUpdateRun>, String> {
     let db = lock_db(&state)?;
-    let mut statement = db.prepare("SELECT id, project_id, scene_id, scene_updated_at, content_hash, extractor_id, status, created_at, completed_at, error_message FROM bible_update_runs WHERE project_id=?1 AND (?2 IS NULL OR scene_id=?2) ORDER BY created_at DESC").map_err(|error| sql_error("Bible-Update-Läufe konnten nicht geladen werden", error))?;
+    let mut statement = db.prepare("SELECT id, project_id, scene_id, scene_updated_at, content_hash, extractor_id, analyzed_content, status, created_at, completed_at, error_message FROM bible_update_runs WHERE project_id=?1 AND (?2 IS NULL OR scene_id=?2) ORDER BY created_at DESC").map_err(|error| sql_error("Bible-Update-Läufe konnten nicht geladen werden", error))?;
     let result = statement
         .query_map(params![project_id, scene_id], run_from_row)
         .map_err(|error| sql_error("Bible-Update-Läufe konnten nicht geladen werden", error))?
@@ -1038,6 +1126,28 @@ pub(crate) fn review_bible_proposal_in_db(
 ) -> Result<BibleProposal, String> {
     validate_review_status(&input.review_status)?;
     let proposal = load_proposal(db, &input.proposal_id)?;
+    if proposal.review_status != "pending" {
+        return Err(
+            "Dieser Vorschlag wurde bereits geprüft und kann nicht erneut geändert werden.".into(),
+        );
+    }
+    let decision = input
+        .decision
+        .clone()
+        .unwrap_or_else(|| match input.review_status.as_str() {
+            "accepted" => "accept".into(),
+            "edited" => "edit_accept".into(),
+            "rejected" => "reject".into(),
+            _ => "defer".into(),
+        });
+    if decision == "defer" {
+        if input.review_status != "pending" {
+            return Err(
+                "Eine zurückgestellte Entscheidung muss den Review-Status pending behalten.".into(),
+            );
+        }
+        return Ok(proposal);
+    }
     let name = input
         .candidate_name
         .unwrap_or(proposal.candidate_name.clone());
@@ -1050,52 +1160,101 @@ pub(crate) fn review_bible_proposal_in_db(
     let classification = input
         .classification
         .unwrap_or(proposal.classification.clone());
+    validate_entity_type(&proposal.entity_type)?;
     validate_entity_status(&status)?;
     validate_proposal_classification(&classification)?;
+    let is_rejected = decision == "reject" || input.review_status == "rejected";
+    if is_rejected && input.review_status != "rejected" {
+        return Err("Ein verworfener Vorschlag benötigt den Review-Status rejected.".into());
+    }
     let transaction = db
         .unchecked_transaction()
         .map_err(|error| sql_error("Review konnte nicht gestartet werden", error))?;
     let mut entity_id = proposal.target_entity_id.clone();
-    if input.review_status != "rejected" {
-        let action = proposal.proposal_action.as_str();
-        if matches!(
-            action,
-            "create_entity" | "create_open_question" | "create_author_note"
-        ) || (action == "add_source" && entity_id.is_none())
-        {
-            let effective_status =
-                if classification == "interpretation" || classification == "open_question" {
-                    "uncertain"
-                } else {
-                    status.as_str()
-                };
-            entity_id = Some(insert_entity_tx(
-                &transaction,
-                &proposal.project_id,
-                &name,
-                &proposal.entity_type,
-                &description,
-                effective_status,
-                proposal.confidence,
-                "",
-                "",
-                &proposal.evidence_excerpt,
-                false,
-                &[],
-                "bible_update",
-                &now(),
-            )?);
-        } else if action == "update_entity" {
+    let contradiction = proposal.classification == "possible_contradiction"
+        || proposal.proposal_action == "mark_contradiction";
+    let effective_decision = if contradiction && decision == "accept" {
+        "mark_contradiction"
+    } else {
+        decision.as_str()
+    };
+    let effective_type = if effective_decision == "save_author_note" {
+        "author_note"
+    } else if effective_decision == "accept_retcon" {
+        "retcon"
+    } else {
+        proposal.entity_type.as_str()
+    };
+    let (effective_status, author_confirmed, origin) = match effective_decision {
+        "save_uncertain" => ("uncertain", false, "bible_update"),
+        "save_author_note" => ("confirmed", true, "bible_update"),
+        "accept_retcon" => ("retconned", true, "edited"),
+        "mark_contradiction" => ("contradicted", false, "bible_update"),
+        "keep_existing" => (status.as_str(), false, "bible_update"),
+        "edit_accept" | "accept_new_value" => ("confirmed", true, "edited"),
+        "accept" => ("confirmed", true, "bible_update"),
+        "reject" => (status.as_str(), false, "bible_update"),
+        _ => return Err(format!("Unbekannte Review-Aktion: {effective_decision}")),
+    };
+
+    if !is_rejected {
+        let target_required = matches!(
+            effective_decision,
+            "keep_existing" | "mark_contradiction" | "accept_new_value"
+        ) || proposal.proposal_action == "update_entity";
+        if target_required && entity_id.is_none() {
+            return Err("Der Vorschlag hat keinen Ziel-Eintrag.".into());
+        }
+        if effective_decision == "keep_existing" {
+            // Keep the canonical value untouched, but retain this evidence as a
+            // second source so the later decision remains auditable.
+        } else if effective_decision == "mark_contradiction" {
             let target = entity_id
-                .clone()
-                .ok_or_else(|| "Der Vorschlag hat keinen Ziel-Eintrag.".to_string())?;
-            let changed = transaction.execute("UPDATE story_entities SET name=?2, description=?3, status=?4, confidence=?5, updated_at=?6, origin='bible_update' WHERE id=?1 AND project_id=?7", params![target, name, description, status, proposal.confidence, now(), proposal.project_id]).map_err(|error| sql_error("Story-Bible-Eintrag konnte nicht geändert werden", error))?;
+                .as_deref()
+                .ok_or_else(|| "Der Widerspruch hat keinen Ziel-Eintrag.".to_string())?;
+            let changed = transaction
+                .execute("UPDATE story_entities SET status='contradicted', updated_at=?2 WHERE id=?1 AND project_id=?3", params![target, now(), proposal.project_id])
+                .map_err(|error| sql_error("Widerspruch konnte nicht markiert werden", error))?;
             if changed == 0 {
-                return Err("Der Ziel-Eintrag des Vorschlags wurde nicht gefunden.".into());
+                return Err("Der Ziel-Eintrag des Widerspruchs wurde nicht gefunden.".into());
             }
-        } else if action == "mark_contradiction" {
-            if let Some(target) = entity_id.as_deref() {
-                transaction.execute("UPDATE story_entities SET status='contradicted', updated_at=?2 WHERE id=?1", params![target, now()]).map_err(|error| sql_error("Widerspruch konnte nicht markiert werden", error))?;
+        } else {
+            let target = if let Some(target) = entity_id.clone() {
+                target
+            } else {
+                let (chapter, scene) = transaction
+                    .query_row("SELECT chapters.title, scenes.title FROM scenes JOIN chapters ON chapters.id=scenes.chapter_id WHERE scenes.id=?1", params![proposal.scene_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+                    .map_err(|error| sql_error("Quellenszene konnte nicht geladen werden", error))?;
+                let inserted = insert_entity_tx(
+                    &transaction,
+                    &proposal.project_id,
+                    &name,
+                    effective_type,
+                    &description,
+                    effective_status,
+                    proposal.confidence,
+                    &chapter,
+                    &scene,
+                    &proposal.evidence_excerpt,
+                    author_confirmed,
+                    &[],
+                    origin,
+                    &now(),
+                )?;
+                entity_id = Some(inserted.clone());
+                inserted
+            };
+            // Existing targets are changed only by an explicit review action;
+            // contradictions never overwrite the candidate value.
+            if proposal.target_entity_id.is_some() {
+                let changed = if proposal.proposal_action == "add_source" && effective_decision == "accept" {
+                    transaction.execute("UPDATE story_entities SET status=?2, author_confirmed=?3, updated_at=?4, origin=?5 WHERE id=?1 AND project_id=?6", params![target, effective_status, author_confirmed, now(), origin, proposal.project_id])
+                } else {
+                    transaction.execute("UPDATE story_entities SET name=?2, entity_type=?3, description=?4, status=?5, confidence=?6, author_confirmed=?7, updated_at=?8, origin=?9 WHERE id=?1 AND project_id=?10", params![target, name, effective_type, description, effective_status, proposal.confidence, author_confirmed, now(), origin, proposal.project_id])
+                }.map_err(|error| sql_error("Story-Bible-Eintrag konnte nicht geändert werden", error))?;
+                if changed == 0 {
+                    return Err("Der Ziel-Eintrag des Vorschlags wurde nicht gefunden.".into());
+                }
             }
         }
         let chapter_id: String = transaction
@@ -1105,9 +1264,21 @@ pub(crate) fn review_bible_proposal_in_db(
                 |row| row.get(0),
             )
             .map_err(|error| sql_error("Quellenszene konnte nicht geladen werden", error))?;
-        transaction.execute("INSERT INTO story_source_references (id, project_id, entity_id, proposal_id, chapter_id, scene_id, excerpt, start_offset, end_offset, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)", params![new_id(), proposal.project_id, entity_id, proposal.id, chapter_id, proposal.scene_id, proposal.evidence_excerpt, proposal.start_offset, proposal.end_offset, now()]).map_err(|error| sql_error("Quellenreferenz konnte nicht gespeichert werden", error))?;
+        insert_source_reference_if_missing_tx(
+            &transaction,
+            &CreateSourceReferenceInput {
+                project_id: proposal.project_id.clone(),
+                entity_id: entity_id.clone(),
+                proposal_id: Some(proposal.id.clone()),
+                chapter_id,
+                scene_id: proposal.scene_id.clone(),
+                excerpt: proposal.evidence_excerpt.clone(),
+                start_offset: proposal.start_offset,
+                end_offset: proposal.end_offset,
+            },
+        )?;
     }
-    transaction.execute("UPDATE bible_proposals SET candidate_name=?2, candidate_description=?3, candidate_status=?4, classification=?5, review_status=?6, reviewed_at=?7 WHERE id=?1", params![proposal.id, name, description, status, classification, input.review_status, now()]).map_err(|error| sql_error("Review-Status konnte nicht gespeichert werden", error))?;
+    transaction.execute("UPDATE bible_proposals SET target_entity_id=?2, candidate_name=?3, candidate_description=?4, candidate_status=?5, classification=?6, review_status=?7, reviewed_at=?8 WHERE id=?1", params![proposal.id, entity_id, name, description, effective_status, classification, input.review_status, now()]).map_err(|error| sql_error("Review-Status konnte nicht gespeichert werden", error))?;
     transaction
         .commit()
         .map_err(|error| sql_error("Review konnte nicht abgeschlossen werden", error))?;
@@ -1229,7 +1400,9 @@ pub fn provider_status() -> Vec<ProviderStatus> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::{database_path_for_test, seed_if_empty};
+    use crate::database::{
+        database_path_for_test, has_column, initialize_connection, seed_if_empty,
+    };
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},
@@ -1515,6 +1688,253 @@ mod tests {
         )
         .unwrap();
         assert_eq!(load_entity(&db, &updated.id).unwrap().status, "archived");
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    fn insert_review_fixture(
+        db: &Connection,
+        id: &str,
+        classification: &str,
+        action: &str,
+        target_entity_id: Option<&str>,
+    ) {
+        db.execute("INSERT INTO bible_update_runs (id, project_id, scene_id, scene_updated_at, content_hash, extractor_id, analyzed_content, status) VALUES (?1, 'project-zugestellt', 'scene-3', 'now', ?2, 'test', 'Mareks Augen waren grün.', 'completed')", params![format!("run-{id}"), format!("hash-{id}")]).unwrap();
+        db.execute("INSERT INTO bible_proposals (id, run_id, project_id, scene_id, target_entity_id, proposal_action, entity_type, candidate_name, candidate_description, candidate_status, confidence, classification, evidence_excerpt, start_offset, end_offset, reason, review_status) VALUES (?1, ?2, 'project-zugestellt', 'scene-3', ?3, ?4, 'fact', 'Augenfarbe', 'Mareks Augen waren grün.', 'proposed', 0.95, ?5, 'Mareks Augen waren grün.', 0, 25, 'Testvorschlag', 'pending')", params![id, format!("run-{id}"), target_entity_id, action, classification]).unwrap();
+    }
+
+    #[test]
+    fn accepted_fact_is_confirmed_and_idempotent() {
+        let (path, db) = connection("review-idempotent");
+        insert_review_fixture(
+            &db,
+            "proposal-fact",
+            "observable_fact",
+            "create_entity",
+            None,
+        );
+        let accepted = review_bible_proposal_in_db(
+            &db,
+            ReviewBibleProposalInput {
+                proposal_id: "proposal-fact".into(),
+                review_status: "accepted".into(),
+                decision: Some("accept".into()),
+                candidate_name: None,
+                candidate_description: None,
+                candidate_status: None,
+                classification: None,
+            },
+        )
+        .unwrap();
+        let entity_id = accepted.target_entity_id.clone().unwrap();
+        let entity = load_entity(&db, &entity_id).unwrap();
+        assert_eq!(entity.status, "confirmed");
+        assert!(entity.author_confirmed);
+        assert_eq!(entity.origin, "bible_update");
+        let second = review_bible_proposal_in_db(
+            &db,
+            ReviewBibleProposalInput {
+                proposal_id: "proposal-fact".into(),
+                review_status: "accepted".into(),
+                decision: Some("accept".into()),
+                candidate_name: None,
+                candidate_description: None,
+                candidate_status: None,
+                classification: None,
+            },
+        );
+        assert!(second.is_err());
+        assert_eq!(
+            db.query_row(
+                "SELECT COUNT(*) FROM story_entities WHERE id=?1",
+                params![entity_id],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT COUNT(*) FROM story_source_references WHERE proposal_id='proposal-fact'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn review_decisions_keep_fact_guess_note_and_rejection_distinct() {
+        let (path, db) = connection("review-decisions");
+        insert_review_fixture(
+            &db,
+            "proposal-guess",
+            "interpretation",
+            "create_entity",
+            None,
+        );
+        insert_review_fixture(
+            &db,
+            "proposal-note",
+            "author_note",
+            "create_author_note",
+            None,
+        );
+        insert_review_fixture(
+            &db,
+            "proposal-reject",
+            "observable_fact",
+            "create_entity",
+            None,
+        );
+        let guess = review_bible_proposal_in_db(
+            &db,
+            ReviewBibleProposalInput {
+                proposal_id: "proposal-guess".into(),
+                review_status: "accepted".into(),
+                decision: Some("save_uncertain".into()),
+                candidate_name: None,
+                candidate_description: None,
+                candidate_status: None,
+                classification: None,
+            },
+        )
+        .unwrap();
+        let note = review_bible_proposal_in_db(
+            &db,
+            ReviewBibleProposalInput {
+                proposal_id: "proposal-note".into(),
+                review_status: "accepted".into(),
+                decision: Some("save_author_note".into()),
+                candidate_name: None,
+                candidate_description: None,
+                candidate_status: None,
+                classification: None,
+            },
+        )
+        .unwrap();
+        review_bible_proposal_in_db(
+            &db,
+            ReviewBibleProposalInput {
+                proposal_id: "proposal-reject".into(),
+                review_status: "rejected".into(),
+                decision: Some("reject".into()),
+                candidate_name: None,
+                candidate_description: None,
+                candidate_status: None,
+                classification: None,
+            },
+        )
+        .unwrap();
+        let guess_entity = load_entity(&db, &guess.target_entity_id.unwrap()).unwrap();
+        let note_entity = load_entity(&db, &note.target_entity_id.unwrap()).unwrap();
+        assert_eq!(
+            (guess_entity.status.as_str(), guess_entity.author_confirmed),
+            ("uncertain", false)
+        );
+        assert_eq!(
+            (
+                note_entity.entity_type.as_str(),
+                note_entity.status.as_str(),
+                note_entity.author_confirmed
+            ),
+            ("author_note", "confirmed", true)
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT COUNT(*) FROM story_entities WHERE name='Augenfarbe'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT COUNT(*) FROM story_source_references WHERE proposal_id='proposal-reject'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn source_references_are_deduplicated_by_structured_location_and_excerpt() {
+        let (path, db) = connection("source-dedupe");
+        let input = CreateSourceReferenceInput {
+            project_id: "project-zugestellt".into(),
+            entity_id: Some("entity-marek".into()),
+            proposal_id: None,
+            chapter_id: "chapter-3".into(),
+            scene_id: "scene-3".into(),
+            excerpt: "Marek".into(),
+            start_offset: Some(0),
+            end_offset: Some(5),
+        };
+        for _ in 0..2 {
+            let tx = db.unchecked_transaction().unwrap();
+            insert_source_reference_if_missing_tx(&tx, &input).unwrap();
+            tx.commit().unwrap();
+        }
+        let second = CreateSourceReferenceInput {
+            excerpt: "Marek sah".into(),
+            ..input
+        };
+        let tx = db.unchecked_transaction().unwrap();
+        insert_source_reference_if_missing_tx(&tx, &second).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT COUNT(*) FROM story_source_references WHERE entity_id='entity-marek'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            2
+        );
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn analysis_snapshot_is_stored_and_reused_for_same_hash() {
+        let (path, db) = connection("analysis-snapshot");
+        db.execute("INSERT INTO bible_update_runs (id, project_id, scene_id, scene_updated_at, content_hash, extractor_id, analyzed_content, status) VALUES ('run-snapshot', 'project-zugestellt', 'scene-3', 'now', 'same', 'test', 'Alter Text', 'completed')", []).unwrap();
+        let run = load_run(&db, "run-snapshot").unwrap();
+        assert_eq!(run.analyzed_content, "Alter Text");
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM bible_update_runs WHERE scene_id='scene-3' AND content_hash='same'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn partially_prepared_story_bible_migration_is_resumed() {
+        let path = std::env::temp_dir().join(format!(
+            "storymemory-partial-{}.sqlite3",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch(include_str!("../../../migrations/001_initial.sql"))
+            .unwrap();
+        db.execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP); INSERT INTO schema_migrations (version) VALUES (1),(2),(3),(4),(5); ALTER TABLE story_entities ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE CASCADE; ALTER TABLE scene_versions ADD COLUMN version_number INTEGER NOT NULL DEFAULT 0; ALTER TABLE scene_versions ADD COLUMN snapshot_json TEXT NOT NULL DEFAULT ''; ALTER TABLE scene_versions ADD COLUMN reason TEXT NOT NULL DEFAULT 'manual'; ALTER TABLE story_entities ADD COLUMN origin TEXT NOT NULL DEFAULT 'manual'; ALTER TABLE story_entities ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]';").unwrap();
+        initialize_connection(&db).unwrap();
+        assert_eq!(
+            db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            7
+        );
+        assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);
         let _ = fs::remove_file(path);
     }

@@ -11,6 +11,100 @@ pub struct DbState {
     pub path: PathBuf,
 }
 
+pub(crate) fn has_column(connection: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>>>()?;
+    Ok(columns.iter().any(|name| name == column))
+}
+
+fn ensure_column(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<()> {
+    if !has_column(connection, table, column)? {
+        connection.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn ensure_story_bible_review_schema(connection: &Connection) -> Result<()> {
+    // Migration 006 used ALTER TABLE directly. Checking the schema first makes
+    // a partially applied upgrade safe to resume on the next app start.
+    ensure_column(
+        connection,
+        "story_entities",
+        "origin",
+        "TEXT NOT NULL DEFAULT 'manual'",
+    )?;
+    ensure_column(
+        connection,
+        "story_entities",
+        "tags_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS bible_update_runs (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            scene_id TEXT NOT NULL REFERENCES scenes(id) ON DELETE CASCADE,
+            scene_updated_at TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            extractor_id TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('pending', 'running', 'completed', 'failed', 'reviewed')),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at TEXT,
+            error_message TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_bible_update_runs_scene_hash
+          ON bible_update_runs(scene_id, content_hash, status);
+        CREATE TABLE IF NOT EXISTS bible_proposals (
+            id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL REFERENCES bible_update_runs(id) ON DELETE CASCADE,
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            scene_id TEXT NOT NULL REFERENCES scenes(id) ON DELETE CASCADE,
+            target_entity_id TEXT REFERENCES story_entities(id) ON DELETE SET NULL,
+            proposal_action TEXT NOT NULL CHECK(proposal_action IN ('create_entity', 'update_entity', 'add_source', 'mark_contradiction', 'create_open_question', 'create_author_note')),
+            entity_type TEXT NOT NULL,
+            candidate_name TEXT NOT NULL,
+            candidate_description TEXT NOT NULL,
+            candidate_status TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            classification TEXT NOT NULL CHECK(classification IN ('observable_fact', 'interpretation', 'open_question', 'possible_contradiction', 'author_note')),
+            evidence_excerpt TEXT NOT NULL,
+            start_offset INTEGER,
+            end_offset INTEGER,
+            reason TEXT NOT NULL,
+            review_status TEXT NOT NULL CHECK(review_status IN ('pending', 'accepted', 'edited', 'rejected')),
+            reviewed_at TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_bible_proposals_run_status
+          ON bible_proposals(run_id, review_status);
+        CREATE TABLE IF NOT EXISTS story_source_references (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            entity_id TEXT REFERENCES story_entities(id) ON DELETE SET NULL,
+            proposal_id TEXT REFERENCES bible_proposals(id) ON DELETE SET NULL,
+            chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+            scene_id TEXT NOT NULL REFERENCES scenes(id) ON DELETE CASCADE,
+            excerpt TEXT NOT NULL DEFAULT '',
+            start_offset INTEGER,
+            end_offset INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_story_sources_entity ON story_source_references(entity_id);
+        CREATE INDEX IF NOT EXISTS idx_story_sources_scene ON story_source_references(scene_id);",
+    )?;
+    Ok(())
+}
+
 impl DbState {
     pub fn open(app: &AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
         let data_dir = app.path().app_data_dir()?;
@@ -86,11 +180,27 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
         [],
         |row| row.get(0),
     )?;
+    ensure_story_bible_review_schema(connection)?;
     if has_story_bible_review == 0 {
-        connection.execute_batch(include_str!(
-            "../../../migrations/006_story_bible_review.sql"
-        ))?;
         connection.execute("INSERT INTO schema_migrations (version) VALUES (6)", [])?;
+    }
+    let has_analysis_snapshots: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 7",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_analysis_snapshots == 0 {
+        ensure_column(
+            connection,
+            "bible_update_runs",
+            "analyzed_content",
+            "TEXT NOT NULL DEFAULT ''",
+        )?;
+        connection.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_bible_update_runs_scene_extractor_created
+             ON bible_update_runs(scene_id, extractor_id, created_at DESC);",
+        )?;
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (7)", [])?;
     }
     Ok(())
 }
@@ -247,7 +357,7 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            6
+            7
         );
         assert_eq!(
             connection
@@ -408,7 +518,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                6
+                7
             );
             // Running startup migrations again must not change the assignment
             // or fail on the ALTER TABLE statement.

@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DesktopCommandError, isTauriRuntime, desktopInvoke } from './desktop';
 import { BrowserDemoRepository } from './storyRepository';
 import { SceneSaveQueue } from './sceneSaveQueue';
-import type { Scene } from '../types/domain';
-import { LocalPrototypeBibleExtractor, contentHash } from './bibleExtractor';
+import type { ProjectContext, Scene } from '../types/domain';
+import { LocalPrototypeBibleExtractor, changedRange, contentHash, excerptFor } from './bibleExtractor';
 import { DeterministicProjectContextBuilder } from './contextBuilder';
 import { answerFromProjectContext } from './providerBridge';
 
@@ -35,6 +35,35 @@ describe('Desktop-Fehler und Autosave', () => {
 });
 
 describe('Story-Bible-Review und grounded context', () => {
+  it('übernimmt einen Fakt als bestätigten Kanon und verhindert eine zweite Review-Aktion', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const scene = workspace.chapters[0]!.scenes[0]!;
+    const run = await repository.createBibleUpdateRun({ projectId: workspace.project.id, sceneId: scene.id, sceneUpdatedAt: scene.updatedAt ?? '', contentHash: contentHash(scene.content), extractorId: 'local-prototype-extractor', analyzedContent: scene.content });
+    const [proposal] = await repository.saveBibleProposals(run.id, [{ proposalAction: 'create_entity', entityType: 'fact', candidateName: 'Augenfarbe', candidateDescription: 'Mareks Augen waren grün.', candidateStatus: 'proposed', confidence: 0.95, classification: 'observable_fact', evidenceExcerpt: 'Mareks Augen waren grün.', reason: 'Test' }], workspace.project.id, scene.id);
+    const reviewed = await repository.reviewBibleProposal({ proposalId: proposal!.id, reviewStatus: 'accepted', decision: 'accept' });
+    const saved = (await repository.loadWorkspace()).entities.find((entity) => entity.id === reviewed.targetEntityId);
+    expect(saved).toMatchObject({ status: 'confirmed', authorConfirmed: true, origin: 'bible_update' });
+    await expect(repository.reviewBibleProposal({ proposalId: proposal!.id, reviewStatus: 'accepted', decision: 'accept' })).rejects.toThrow('bereits geprüft');
+    expect(await repository.listSourceReferences(workspace.project.id, saved!.id)).toHaveLength(1);
+  });
+
+  it('speichert Vermutung unbestätigt und dedupliziert Quellen', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const scene = workspace.chapters[0]!.scenes[0]!;
+    const created = await repository.createStoryEntity({ projectId: workspace.project.id, name: 'Testquelle', type: 'fact', description: 'Test', status: 'proposed', confidence: 0.8, chapterId: scene.chapterId, sceneId: scene.id, excerpt: 'Marek', authorConfirmed: false, tags: [] });
+    await repository.updateStoryEntity({ ...created, chapterId: scene.chapterId, sceneId: scene.id, excerpt: 'Marek' });
+    await repository.updateStoryEntity({ ...created, chapterId: scene.chapterId, sceneId: scene.id, excerpt: 'Marek sah' });
+    expect(await repository.listSourceReferences(workspace.project.id, created.id)).toHaveLength(2);
+  });
+
+  it('berechnet den geänderten Bereich und lässt fehlende Excerpts ohne Offsets', () => {
+    expect(changedRange('Mareks Augen waren grün.', 'Mareks Augen waren blau.')).toEqual({ start: 19, end: 23 });
+    expect(excerptFor('Der Text enthält das Wort nicht.', 'fehlt')).toEqual({ excerpt: 'fehlt' });
+    expect(excerptFor('Marek sah Lena.', 'Lena')).toEqual({ excerpt: 'Lena', startOffset: 10, endOffset: 14 });
+  });
+
   it('legt, bearbeitet und archiviert einen Story-Bible-Eintrag', async () => {
     const repository = new BrowserDemoRepository();
     const workspace = await repository.loadWorkspace();
@@ -51,6 +80,18 @@ describe('Story-Bible-Review und grounded context', () => {
     const result = await new LocalPrototypeBibleExtractor().extract({ project: workspace.project, chapter: workspace.chapters[2]!, scene, existingEntities: workspace.entities });
     expect(result.proposals.some((proposal) => proposal.classification === 'observable_fact')).toBe(true);
     expect(result.proposals.every((proposal) => proposal.candidateDescription !== 'Marek hasst Lena.')).toBe(true);
+  });
+  it('erkennt beobachtbare Augenfarbe und schlägt bei geändertem Wert einen Widerspruch vor', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const chapter = workspace.chapters[0]!;
+    const baseScene = chapter.scenes[0]!;
+    const extractor = new LocalPrototypeBibleExtractor();
+    const first = await extractor.extract({ project: workspace.project, chapter, scene: { ...baseScene, content: 'Mareks Augen waren grün.' }, existingEntities: [] });
+    expect(first.proposals).toContainEqual(expect.objectContaining({ candidateName: 'Mareks Augenfarbe', classification: 'observable_fact', proposalAction: 'create_entity', startOffset: 0, endOffset: 23 }));
+    const entity = await repository.createStoryEntity({ projectId: workspace.project.id, name: 'Mareks Augenfarbe', type: 'fact', description: 'Mareks Augen waren grün.', status: 'confirmed', confidence: 1, chapterId: chapter.id, sceneId: baseScene.id, excerpt: 'Mareks Augen waren grün.', authorConfirmed: true, tags: [] });
+    const second = await extractor.extract({ project: workspace.project, chapter, scene: { ...baseScene, content: 'Mareks Augen waren plötzlich blau.' }, existingEntities: [entity] });
+    expect(second.proposals).toContainEqual(expect.objectContaining({ targetEntityId: entity.id, classification: 'possible_contradiction', proposalAction: 'mark_contradiction' }));
   });
   it('verwendet bei identischem Content Hash denselben abgeschlossenen Run', async () => {
     const repository = new BrowserDemoRepository();
@@ -70,5 +111,24 @@ describe('Story-Bible-Review und grounded context', () => {
     const answer = answerFromProjectContext('Welche Figuren kommen vor?', context);
     expect(answer.text).toContain('Marek');
     expect(answer.sources.every((source) => source.id)).toBe(true);
+  });
+
+  it('begrenzt Chat-Quellen auf die tatsächlich verwendeten Einträge', () => {
+    const context: ProjectContext = {
+      currentScene: undefined,
+      currentChapter: undefined,
+      relevantEntities: [
+        { id: 'marek', projectId: 'p', name: 'Marek', type: 'character', description: 'Eine Figur.', status: 'confirmed', confidence: 1, source: '', chapter: '', scene: '', authorConfirmed: true, updatedAt: '', tags: [], origin: 'manual' as const },
+        { id: 'package', projectId: 'p', name: 'Paketnummer', type: 'clue' as const, description: 'Die Paketnummer ist verändert.', status: 'confirmed' as const, confidence: 1, source: '', chapter: '', scene: '', authorConfirmed: true, updatedAt: '', tags: ['Paket'], origin: 'bible_update' as const },
+      ],
+      relevantSources: [
+        { id: 'source-marek', projectId: 'p', entityId: 'marek', chapterId: 'c', sceneId: 's', excerpt: 'Marek', createdAt: '' },
+        { id: 'source-package', projectId: 'p', entityId: 'package', chapterId: 'c', sceneId: 's', excerpt: 'veränderte Paketnummer', createdAt: '' },
+      ],
+      openPlotThreads: [],
+      possibleContradictions: [],
+    };
+    const answer = answerFromProjectContext('Welche bestätigten Fakten gibt es zur Paketnummer?', context);
+    expect(answer.sources.map((source) => source.id)).toEqual(['source-package']);
   });
 });

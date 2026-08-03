@@ -25,24 +25,28 @@ export class MockProvider implements AiProvider {
 
 export function answerFromProjectContext(question: string, context: ProjectContext): { text: string; sources: ChatSource[] } {
   const lower = question.toLocaleLowerCase();
-  const sources: ChatSource[] = context.relevantSources.map((source) => ({ id: source.id, label: source.excerpt ? source.excerpt.slice(0, 42) : 'Quellenstelle', chapterId: source.chapterId, sceneId: source.sceneId, entityId: source.entityId, excerpt: source.excerpt }));
   const entities = context.relevantEntities;
+  const sourcesFor = (usedEntities: typeof entities, includeCurrentScene = false): ChatSource[] => {
+    const ids = new Set(usedEntities.map((entity) => entity.id));
+    const selected = context.relevantSources.filter((source) => (source.entityId ? ids.has(source.entityId) : includeCurrentScene && source.sceneId === context.currentScene?.id));
+    return [...new Map(selected.map((source) => [source.id, { id: source.id, label: source.excerpt ? source.excerpt.slice(0, 42) : 'Quellenstelle', chapterId: source.chapterId, sceneId: source.sceneId, entityId: source.entityId, excerpt: source.excerpt, startOffset: source.startOffset, endOffset: source.endOffset }])).values()].slice(0, 8);
+  };
   if (lower.includes('figur') || lower.includes('charakter')) {
     const characters = entities.filter((entity) => entity.type === 'character');
-    return { text: characters.length ? `In der aktuellen Projektumgebung sind ${characters.map((entity) => entity.name).join(', ')} als Figuren relevant. ${characters.map((entity) => `${entity.name}: ${entity.status === 'confirmed' ? 'bestätigt' : 'noch nicht bestätigt'}`).join(' · ')}` : 'Im aktuellen Projektkontext ist keine Figur sicher belegt.', sources };
+    return { text: characters.length ? `In der aktuellen Projektumgebung sind ${characters.map((entity) => entity.name).join(', ')} als Figuren relevant. ${characters.map((entity) => `${entity.name}: ${entity.status === 'confirmed' ? 'bestätigt' : 'noch nicht bestätigt'}`).join(' · ')}` : 'Im aktuellen Projektkontext ist keine Figur sicher belegt.', sources: sourcesFor(characters) };
   }
   if (lower.includes('handlungsstrang') || lower.includes('offen')) {
-    return { text: context.openPlotThreads.length ? `Offene Handlungsstränge: ${context.openPlotThreads.map((entity) => `${entity.name} (${entity.status})`).join(', ')}.` : 'Für diese Szene ist kein offener Handlungsstrang im geladenen Kontext vermerkt.', sources };
+    return { text: context.openPlotThreads.length ? `Offene Handlungsstränge: ${context.openPlotThreads.map((entity) => `${entity.name} (${entity.status})`).join(', ')}.` : 'Für diese Szene ist kein offener Handlungsstrang im geladenen Kontext vermerkt.', sources: sourcesFor(context.openPlotThreads) };
   }
   if (lower.includes('vermut') || lower.includes('unbestätigt')) {
     const uncertain = entities.filter((entity) => !entity.authorConfirmed || entity.status === 'uncertain' || entity.status === 'proposed');
-    return { text: uncertain.length ? `Noch unbestätigt sind: ${uncertain.map((entity) => `${entity.name} (${entity.status})`).join(', ')}.` : 'Im relevanten Kontext sind keine unbestätigten Einträge vorhanden.', sources };
+    return { text: uncertain.length ? `Noch unbestätigt sind: ${uncertain.map((entity) => `${entity.name} (${entity.status})`).join(', ')}.` : 'Im relevanten Kontext sind keine unbestätigten Einträge vorhanden.', sources: sourcesFor(uncertain) };
   }
   if (lower.includes('weiß') || lower.includes('wissen') || lower.includes('paketnummer')) {
-    const matches = entities.filter((entity) => `${entity.name} ${entity.description} ${entity.tags.join(' ')}`.toLocaleLowerCase().includes('paket') || entity.type === 'character');
-    return { text: matches.length ? `Im bestätigten beziehungsweise relevanten Kanon steht: ${matches.map((entity) => `${entity.name}: ${entity.description}`).join(' ')}` : 'Dazu ist im aktuellen bestätigten Kontext keine Information gespeichert.', sources };
+    const matches = entities.filter((entity) => { const searchable = `${entity.name} ${entity.description} ${entity.tags.join(' ')}`.toLocaleLowerCase(); return lower.includes('paketnummer') ? searchable.includes('paket') || searchable.includes('nummer') : searchable.split(/\s+/).some((word) => word.length > 3 && lower.includes(word)); });
+    return { text: matches.length ? `Im bestätigten beziehungsweise relevanten Kanon steht: ${matches.map((entity) => `${entity.name}: ${entity.description}`).join(' ')}` : 'Dazu ist im aktuellen bestätigten Kontext keine Information gespeichert.', sources: sourcesFor(matches) };
   }
-  return { text: context.currentScene ? `Ich habe die aktuelle Szene „${context.currentScene.title}“ und ${entities.length} relevante Story-Bible-Einträge geprüft. Für diese konkrete Frage finde ich im gespeicherten Kontext noch keine sichere Antwort.` : 'Ich finde keine aktuell ausgewählte Szene und kann deshalb keine quellengebundene Antwort geben.', sources };
+  return { text: context.currentScene ? `Ich habe die aktuelle Szene „${context.currentScene.title}“ und ${entities.length} relevante Story-Bible-Einträge geprüft. Für diese konkrete Frage finde ich im gespeicherten Kontext noch keine sichere Antwort.` : 'Ich finde keine aktuell ausgewählte Szene und kann deshalb keine quellengebundene Antwort geben.', sources: [] };
 }
 
 export class CliProviderPlaceholder implements AiProvider {

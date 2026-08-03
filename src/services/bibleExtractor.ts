@@ -11,8 +11,9 @@ export function contentHash(content: string): string {
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
-function excerptFor(text: string, needle: string): { excerpt: string; startOffset: number; endOffset: number } {
-  const startOffset = Math.max(0, text.indexOf(needle));
+export function excerptFor(text: string, needle: string): { excerpt: string; startOffset?: number; endOffset?: number } {
+  const startOffset = text.indexOf(needle);
+  if (startOffset < 0) return { excerpt: needle };
   return { excerpt: needle, startOffset, endOffset: startOffset + needle.length };
 }
 
@@ -23,6 +24,34 @@ function knownEntityProposals(input: BibleExtractionInput): BibleProposalDraft[]
       const evidence = excerptFor(input.scene.content, entity.name);
       return { targetEntityId: entity.id, proposalAction: 'add_source', entityType: entity.type, candidateName: entity.name, candidateDescription: `„${entity.name}“ kommt in der aktuellen Szene vor.`, candidateStatus: entity.status, confidence: 0.9, classification: 'observable_fact', evidenceExcerpt: evidence.excerpt, startOffset: evidence.startOffset, endOffset: evidence.endOffset, reason: 'Bekannter Story-Bible-Eintrag wird in der aktuellen Szene erwähnt.' };
     });
+}
+
+function observableEyeColourProposals(input: BibleExtractionInput): BibleProposalDraft[] {
+  const text = editorContentToPlainText(input.scene.content);
+  const proposals: BibleProposalDraft[] = [];
+  const pattern = /\b([A-ZÄÖÜ][\p{L}'-]+)\s+Augen\s+(?:waren|sind|blieben|wurden)\s+(?:plötzlich\s+)?([a-zäöüß-]+)\b/gu;
+  for (const match of text.matchAll(pattern)) {
+    const evidenceExcerpt = match[0];
+    const subject = match[1];
+    const candidateName = `${subject} Augenfarbe`;
+    const existing = input.existingEntities.find((entity) => entity.name.toLocaleLowerCase() === candidateName.toLocaleLowerCase());
+    const evidence = excerptFor(text, evidenceExcerpt);
+    proposals.push({
+      targetEntityId: existing?.id,
+      proposalAction: existing ? 'mark_contradiction' : 'create_entity',
+      entityType: 'fact',
+      candidateName,
+      candidateDescription: evidenceExcerpt,
+      candidateStatus: existing ? 'contradicted' : 'proposed',
+      confidence: 0.98,
+      classification: existing ? 'possible_contradiction' : 'observable_fact',
+      evidenceExcerpt,
+      startOffset: evidence.startOffset,
+      endOffset: evidence.endOffset,
+      reason: existing ? 'Die aktuelle Szene enthält einen anderen beobachtbaren Wert als der bestätigte Eintrag.' : 'Eindeutig beobachtbare Aussage aus dem Manuskript.'
+    });
+  }
+  return proposals;
 }
 
 export class LocalPrototypeBibleExtractor implements BibleExtractor {
@@ -42,9 +71,11 @@ export class LocalPrototypeBibleExtractor implements BibleExtractor {
     }
     if (input.scene.goal.trim()) proposals.push({ proposalAction: 'create_author_note', entityType: 'author_note', candidateName: `Ziel: ${input.scene.title}`, candidateDescription: input.scene.goal, candidateStatus: 'proposed', confidence: 0.85, classification: 'author_note', evidenceExcerpt: input.scene.goal, reason: 'Szenenziel als Autorennotiz vorbereiten.' });
     proposals.push(...knownEntityProposals({ ...input, scene: { ...input.scene, content: sceneText } }));
+    proposals.push(...observableEyeColourProposals({ ...input, scene: { ...input.scene, content: sceneText } }));
 
     const properNames = sceneText.match(/\b[A-ZÄÖÜ][a-zäöüß]{2,}\b/g) ?? [];
-    for (const name of [...new Set(properNames)].slice(0, 5)) {
+    const observedTokens = new Set(proposals.flatMap((proposal) => proposal.evidenceExcerpt.split(/\s+/)));
+    for (const name of [...new Set(properNames)].filter((candidate) => !observedTokens.has(candidate) && candidate !== 'Augen').slice(0, 5)) {
       if (input.existingEntities.some((entity) => entity.name.toLocaleLowerCase() === name.toLocaleLowerCase())) continue;
       const evidence = excerptFor(sceneText, name);
       proposals.push({ proposalAction: 'create_entity', entityType: 'character', candidateName: name, candidateDescription: `Der Name „${name}“ erscheint in der aktuellen Szene.`, candidateStatus: 'proposed', confidence: 0.52, classification: 'open_question', evidenceExcerpt: evidence.excerpt, startOffset: evidence.startOffset, endOffset: evidence.endOffset, reason: 'Möglicherweise neuer Eigenname; bitte manuell prüfen.' });

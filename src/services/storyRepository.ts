@@ -48,12 +48,12 @@ const sceneVersionSchema = z.object({ id: z.string(), sceneId: z.string(), versi
 const editorPreferencesSchema = z.object({ fontFamily: z.enum(['serif', 'sans', 'typewriter']), fontSize: z.number(), lineHeight: z.number() });
 const chapterSchema = z.object({ id: z.string(), bookId: z.string(), title: z.string(), orderIndex: z.number(), scenes: z.array(sceneSchema), createdAt: z.string().optional(), updatedAt: z.string().optional() });
 const entitySchema = z.object({ id: z.string(), projectId: z.string(), name: z.string(), type: entityTypeSchema, description: z.string(), status: entityStatusSchema, confidence: z.number(), source: z.string(), chapter: z.string(), scene: z.string(), authorConfirmed: z.boolean(), updatedAt: z.string(), createdAt: z.string().optional(), tags: z.array(z.string()), origin: z.enum(['manual', 'bible_update', 'edited']) });
-const sourceSchema = z.object({ id: z.string(), projectId: z.string(), entityId: z.string().optional(), proposalId: z.string().optional(), chapterId: z.string(), sceneId: z.string(), excerpt: z.string(), startOffset: z.number().optional(), endOffset: z.number().optional(), createdAt: z.string() });
-const runSchema = z.object({ id: z.string(), projectId: z.string(), sceneId: z.string(), sceneUpdatedAt: z.string(), contentHash: z.string(), extractorId: z.string(), status: z.enum(['pending', 'running', 'completed', 'failed', 'reviewed']), createdAt: z.string(), completedAt: z.string().optional(), errorMessage: z.string().optional() });
-const proposalSchema = z.object({ id: z.string(), runId: z.string(), projectId: z.string(), sceneId: z.string(), targetEntityId: z.string().optional(), proposalAction: z.enum(['create_entity', 'update_entity', 'add_source', 'mark_contradiction', 'create_open_question', 'create_author_note']), entityType: entityTypeSchema, candidateName: z.string(), candidateDescription: z.string(), candidateStatus: entityStatusSchema, confidence: z.number(), classification: z.enum(['observable_fact', 'interpretation', 'open_question', 'possible_contradiction', 'author_note']), evidenceExcerpt: z.string(), startOffset: z.number().optional(), endOffset: z.number().optional(), reason: z.string(), reviewStatus: z.enum(['pending', 'accepted', 'edited', 'rejected']), reviewedAt: z.string().optional(), createdAt: z.string() });
+const sourceSchema = z.object({ id: z.string(), projectId: z.string(), entityId: z.string().nullable().optional(), proposalId: z.string().nullable().optional(), chapterId: z.string(), sceneId: z.string(), excerpt: z.string(), startOffset: z.number().nullable().optional(), endOffset: z.number().nullable().optional(), createdAt: z.string() }).transform((source) => ({ ...source, entityId: source.entityId ?? undefined, proposalId: source.proposalId ?? undefined, startOffset: source.startOffset ?? undefined, endOffset: source.endOffset ?? undefined }));
+const runSchema = z.object({ id: z.string(), projectId: z.string(), sceneId: z.string(), sceneUpdatedAt: z.string(), contentHash: z.string(), extractorId: z.string(), analyzedContent: z.string().nullable().optional(), status: z.enum(['pending', 'running', 'completed', 'failed', 'reviewed']), createdAt: z.string(), completedAt: z.string().nullable().optional(), errorMessage: z.string().nullable().optional() }).transform((run) => ({ ...run, analyzedContent: run.analyzedContent ?? '', completedAt: run.completedAt ?? undefined, errorMessage: run.errorMessage ?? undefined }));
+const proposalSchema = z.object({ id: z.string(), runId: z.string(), projectId: z.string(), sceneId: z.string(), targetEntityId: z.string().nullable().optional(), proposalAction: z.enum(['create_entity', 'update_entity', 'add_source', 'mark_contradiction', 'create_open_question', 'create_author_note']), entityType: entityTypeSchema, candidateName: z.string(), candidateDescription: z.string(), candidateStatus: entityStatusSchema, confidence: z.number(), classification: z.enum(['observable_fact', 'interpretation', 'open_question', 'possible_contradiction', 'author_note']), evidenceExcerpt: z.string(), startOffset: z.number().nullable().optional(), endOffset: z.number().nullable().optional(), reason: z.string(), reviewStatus: z.enum(['pending', 'accepted', 'edited', 'rejected']), reviewedAt: z.string().nullable().optional(), createdAt: z.string() }).transform((proposal) => ({ ...proposal, targetEntityId: proposal.targetEntityId ?? undefined, startOffset: proposal.startOffset ?? undefined, endOffset: proposal.endOffset ?? undefined, reviewedAt: proposal.reviewedAt ?? undefined }));
 const workspaceSchema = z.object({ project: projectSchema, books: z.array(bookSchema), chapters: z.array(chapterSchema), entities: z.array(entitySchema) });
 
-function parse<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
+function parse<TSchema extends z.ZodTypeAny>(schema: TSchema, value: unknown, label: string): z.infer<TSchema> {
   const result = schema.safeParse(value);
   if (!result.success) throw new Error(`${label} ist ungültig: ${result.error.issues.map((issue) => issue.message).join(', ')}`);
   return result.data;
@@ -61,6 +61,66 @@ function parse<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
 
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
 function now(): string { return new Date().toISOString(); }
+
+function sameSource(source: StorySourceReference, input: CreateSourceReferenceInput): boolean {
+  return source.projectId === input.projectId && source.entityId === input.entityId && source.chapterId === input.chapterId && source.sceneId === input.sceneId && source.excerpt === input.excerpt && source.startOffset === input.startOffset && source.endOffset === input.endOffset;
+}
+
+function addBrowserSource(state: BrowserState, input: CreateSourceReferenceInput): StorySourceReference {
+  const existing = state.sources.find((source) => sameSource(source, input));
+  if (existing) return existing;
+  const source: StorySourceReference = { id: crypto.randomUUID(), ...input, createdAt: now() };
+  state.sources.push(source);
+  return source;
+}
+
+function applyBrowserProposalReview(state: BrowserState, input: ReviewBibleProposalInput): BibleProposal {
+  const proposal = state.proposals.find((item) => item.id === input.proposalId);
+  if (!proposal) throw new Error('Der Vorschlag wurde nicht gefunden.');
+  if (proposal.reviewStatus !== 'pending') throw new Error('Dieser Vorschlag wurde bereits geprüft und kann nicht erneut geändert werden.');
+  const decision = input.decision ?? (input.reviewStatus === 'edited' ? 'edit_accept' : input.reviewStatus === 'rejected' ? 'reject' : 'accept');
+  if (decision === 'defer') return clone(proposal);
+  const name = input.candidateName ?? proposal.candidateName;
+  const description = input.candidateDescription ?? proposal.candidateDescription;
+  const rejected = decision === 'reject' || input.reviewStatus === 'rejected';
+  const contradiction = decision === 'mark_contradiction' || proposal.classification === 'possible_contradiction';
+  const effectiveDecision = contradiction && decision === 'accept' ? 'mark_contradiction' : decision;
+  let entity = proposal.targetEntityId ? state.entities.find((item) => item.id === proposal.targetEntityId) : undefined;
+  if (!rejected) {
+    if (effectiveDecision === 'keep_existing') {
+      if (!entity) throw new Error('Der Vorschlag hat keinen Ziel-Eintrag.');
+    } else {
+      const uncertain = effectiveDecision === 'save_uncertain';
+      const authorNote = effectiveDecision === 'save_author_note';
+      const type: StoryEntity['type'] = authorNote ? 'author_note' : effectiveDecision === 'accept_retcon' ? 'retcon' : proposal.entityType;
+      const status: StoryEntity['status'] = uncertain ? 'uncertain' : effectiveDecision === 'mark_contradiction' ? 'contradicted' : effectiveDecision === 'accept_retcon' ? 'retconned' : 'confirmed';
+      const authorConfirmed = !uncertain && effectiveDecision !== 'mark_contradiction';
+      const origin: StoryEntity['origin'] = ['edit_accept', 'accept_new_value', 'accept_retcon'].includes(effectiveDecision) ? 'edited' : 'bible_update';
+      const chapter = state.chapters.find((item) => item.scenes.some((scene) => scene.id === proposal.sceneId));
+      const scene = chapter?.scenes.find((item) => item.id === proposal.sceneId);
+      if (effectiveDecision === 'mark_contradiction') {
+        if (!entity) throw new Error('Der Widerspruch hat keinen Ziel-Eintrag.');
+        entity = { ...entity, status: 'contradicted', updatedAt: now() };
+        state.entities = state.entities.map((item) => item.id === entity!.id ? entity! : item);
+      } else if (entity) {
+        entity = proposal.proposalAction === 'add_source' && effectiveDecision === 'accept'
+          ? { ...entity, status, authorConfirmed, origin, updatedAt: now() }
+          : { ...entity, name, description, type, status, authorConfirmed, origin, updatedAt: now() };
+        state.entities = state.entities.map((item) => item.id === entity!.id ? entity! : item);
+      } else {
+        entity = { id: crypto.randomUUID(), projectId: proposal.projectId, name, type, description, status, confidence: proposal.confidence, source: proposal.evidenceExcerpt, chapter: chapter?.title ?? '', scene: scene?.title ?? '', authorConfirmed, updatedAt: now(), createdAt: now(), tags: [], origin };
+        state.entities = [entity, ...state.entities];
+      }
+    }
+    const chapter = state.chapters.find((item) => item.scenes.some((scene) => scene.id === proposal.sceneId));
+    const scene = chapter?.scenes.find((item) => item.id === proposal.sceneId);
+    if (!entity || !chapter || !scene) throw new Error('Die Quelle des Vorschlags konnte nicht verknüpft werden.');
+    addBrowserSource(state, { projectId: proposal.projectId, entityId: entity.id, proposalId: proposal.id, chapterId: chapter.id, sceneId: scene.id, excerpt: proposal.evidenceExcerpt, startOffset: proposal.startOffset, endOffset: proposal.endOffset });
+  }
+  const reviewed: BibleProposal = { ...proposal, targetEntityId: entity?.id ?? proposal.targetEntityId, candidateName: name, candidateDescription: description, candidateStatus: rejected ? proposal.candidateStatus : effectiveDecision === 'save_uncertain' ? 'uncertain' : effectiveDecision === 'save_author_note' || effectiveDecision === 'accept' || effectiveDecision === 'edit_accept' ? 'confirmed' : proposal.candidateStatus, reviewStatus: input.reviewStatus, reviewedAt: now() };
+  state.proposals = state.proposals.map((item) => item.id === proposal.id ? reviewed : item);
+  return reviewed;
+}
 
 export class TauriStoryRepository implements StoryRepository {
   readonly mode = 'desktop' as const;
@@ -106,7 +166,7 @@ export class BrowserDemoRepository implements StoryRepository {
       const value = localStorage.getItem(browserKey);
       if (value) {
         const state = JSON.parse(value) as Partial<BrowserState>;
-        return { ...state, versions: state.versions ?? [], editorPreferences: state.editorPreferences ?? defaultEditorPreferences, sources: state.sources ?? [], runs: state.runs ?? [], proposals: state.proposals ?? [] } as BrowserState;
+        return { ...state, versions: state.versions ?? [], editorPreferences: state.editorPreferences ?? defaultEditorPreferences, sources: state.sources ?? [], runs: (state.runs ?? []).map((run) => ({ ...run, analyzedContent: run.analyzedContent ?? '' })), proposals: state.proposals ?? [] } as BrowserState;
       }
     } catch { /* A broken demo cache is replaced with the safe example workspace. */ }
     return { project: clone(demoProject), books: [{ id: 'book-1', projectId: demoProject.id, title: demoProject.title, volume: 1 }], chapters: clone(demoChapters), entities: clone(demoEntities), versions: [], editorPreferences: defaultEditorPreferences, sources: [], runs: [], proposals: [] };
@@ -174,17 +234,17 @@ export class BrowserDemoRepository implements StoryRepository {
   async saveEditorPreferences(input: EditorPreferences): Promise<EditorPreferences> { const saved = editorPreferencesSchema.parse({ ...input, fontSize: Math.max(14, Math.min(28, input.fontSize)), lineHeight: Math.max(1.3, Math.min(2.5, input.lineHeight)) }); localStorage.setItem(browserPreferencesKey, JSON.stringify(saved)); return saved; }
   async saveStoryEntity(input: SaveStoryEntityInput): Promise<StoryEntity> { const state = this.read(); const saved = { ...input, updatedAt: now(), origin: input.origin ?? 'manual' }; state.entities = [saved, ...state.entities.filter((item) => item.id !== saved.id)]; this.write(state); return clone(saved); }
   async listStoryEntities(projectId: string): Promise<StoryEntity[]> { return this.read().entities.filter((entity) => !entity.projectId || entity.projectId === projectId).map(clone); }
-  async createStoryEntity(input: CreateStoryEntityInput): Promise<StoryEntity> { const state = this.read(); const stamp = now(); const chapter = state.chapters.find((item) => item.id === input.chapterId); const scene = chapter?.scenes.find((item) => item.id === input.sceneId); const saved: StoryEntity = { id: crypto.randomUUID(), projectId: input.projectId, name: input.name, type: input.type, description: input.description, status: input.status, confidence: input.confidence, source: input.excerpt, chapter: chapter?.title ?? '', scene: scene?.title ?? '', authorConfirmed: input.authorConfirmed, tags: input.tags, updatedAt: stamp, createdAt: stamp, origin: 'manual' }; state.entities = [saved, ...state.entities]; if (chapter && scene && input.sceneId) state.sources.push({ id: crypto.randomUUID(), projectId: input.projectId, entityId: saved.id, chapterId: chapter.id, sceneId: input.sceneId, excerpt: input.excerpt, createdAt: stamp }); this.write(state); return clone(saved); }
-  async updateStoryEntity(input: UpdateStoryEntityInput): Promise<StoryEntity> { const state = this.read(); const current = state.entities.find((item) => item.id === input.id); if (!current) throw new Error('Der Story-Bible-Eintrag wurde nicht gefunden.'); const stamp = now(); const chapter = state.chapters.find((item) => item.id === input.chapterId); const scene = chapter?.scenes.find((item) => item.id === input.sceneId); const saved: StoryEntity = { ...current, ...input, chapter: chapter?.title ?? '', scene: scene?.title ?? '', source: input.excerpt, updatedAt: stamp, origin: current.origin === 'manual' ? 'edited' : current.origin }; state.entities = state.entities.map((item) => item.id === saved.id ? saved : item); this.write(state); return clone(saved); }
+  async createStoryEntity(input: CreateStoryEntityInput): Promise<StoryEntity> { const state = this.read(); const stamp = now(); const chapter = state.chapters.find((item) => item.id === input.chapterId); const scene = chapter?.scenes.find((item) => item.id === input.sceneId); const saved: StoryEntity = { id: crypto.randomUUID(), projectId: input.projectId, name: input.name, type: input.type, description: input.description, status: input.status, confidence: input.confidence, source: input.excerpt, chapter: chapter?.title ?? '', scene: scene?.title ?? '', authorConfirmed: input.authorConfirmed, tags: input.tags, updatedAt: stamp, createdAt: stamp, origin: 'manual' }; state.entities = [saved, ...state.entities]; if (chapter && scene && input.sceneId) addBrowserSource(state, { projectId: input.projectId, entityId: saved.id, chapterId: chapter.id, sceneId: input.sceneId, excerpt: input.excerpt }); this.write(state); return clone(saved); }
+  async updateStoryEntity(input: UpdateStoryEntityInput): Promise<StoryEntity> { const state = this.read(); const current = state.entities.find((item) => item.id === input.id); if (!current) throw new Error('Der Story-Bible-Eintrag wurde nicht gefunden.'); const stamp = now(); const chapter = state.chapters.find((item) => item.id === input.chapterId); const scene = chapter?.scenes.find((item) => item.id === input.sceneId); const saved: StoryEntity = { ...current, ...input, chapter: chapter?.title ?? '', scene: scene?.title ?? '', source: input.excerpt, updatedAt: stamp, origin: current.origin === 'manual' ? 'edited' : current.origin }; state.entities = state.entities.map((item) => item.id === saved.id ? saved : item); if (chapter && scene) addBrowserSource(state, { projectId: input.projectId, entityId: input.id, chapterId: chapter.id, sceneId: scene.id, excerpt: input.excerpt }); this.write(state); return clone(saved); }
   async archiveStoryEntity(id: string): Promise<StoryEntity> { const state = this.read(); const current = state.entities.find((item) => item.id === id); if (!current) throw new Error('Der Story-Bible-Eintrag wurde nicht gefunden.'); const saved = { ...current, status: 'archived' as const, updatedAt: now() }; state.entities = state.entities.map((item) => item.id === id ? saved : item); this.write(state); return clone(saved); }
   async getStoryEntity(id: string): Promise<StoryEntity> { const item = this.read().entities.find((entity) => entity.id === id); if (!item) throw new Error('Der Story-Bible-Eintrag wurde nicht gefunden.'); return clone(item); }
-  async createSourceReference(input: CreateSourceReferenceInput): Promise<StorySourceReference> { const state = this.read(); const saved: StorySourceReference = { id: crypto.randomUUID(), ...input, createdAt: now() }; state.sources.push(saved); this.write(state); return clone(saved); }
+  async createSourceReference(input: CreateSourceReferenceInput): Promise<StorySourceReference> { const state = this.read(); const saved = addBrowserSource(state, input); this.write(state); return clone(saved); }
   async listSourceReferences(projectId: string, entityId?: string): Promise<StorySourceReference[]> { return this.read().sources.filter((source) => source.projectId === projectId && (!entityId || source.entityId === entityId)).map(clone); }
-  async createBibleUpdateRun(input: CreateBibleUpdateRunInput): Promise<BibleUpdateRun> { const state = this.read(); const existing = !input.force ? state.runs.find((run) => run.sceneId === input.sceneId && run.contentHash === input.contentHash && ['completed', 'reviewed'].includes(run.status)) : undefined; if (existing) return clone(existing); const saved: BibleUpdateRun = { id: crypto.randomUUID(), ...input, extractorId: input.extractorId, status: 'pending', createdAt: now() }; state.runs.unshift(saved); this.write(state); return clone(saved); }
+  async createBibleUpdateRun(input: CreateBibleUpdateRunInput): Promise<BibleUpdateRun> { const state = this.read(); const existing = !input.force ? state.runs.find((run) => run.sceneId === input.sceneId && run.contentHash === input.contentHash && run.extractorId === input.extractorId && ['completed', 'reviewed'].includes(run.status)) : undefined; if (existing) return clone(existing); const saved: BibleUpdateRun = { id: crypto.randomUUID(), projectId: input.projectId, sceneId: input.sceneId, sceneUpdatedAt: input.sceneUpdatedAt, contentHash: input.contentHash, extractorId: input.extractorId, analyzedContent: input.analyzedContent ?? '', status: 'pending', createdAt: now() }; state.runs.unshift(saved); this.write(state); return clone(saved); }
   async listBibleUpdateRuns(projectId: string, sceneId?: string): Promise<BibleUpdateRun[]> { return this.read().runs.filter((run) => run.projectId === projectId && (!sceneId || run.sceneId === sceneId)).map(clone); }
   async listBibleProposals(runId: string): Promise<BibleProposal[]> { return this.read().proposals.filter((proposal) => proposal.runId === runId).map(clone); }
   async saveBibleProposals(runId: string, proposals: BibleProposalDraft[], projectId: string, sceneId: string): Promise<BibleProposal[]> { const state = this.read(); const saved = proposals.map((proposal) => ({ ...proposal, id: crypto.randomUUID(), runId, projectId, sceneId, reviewStatus: 'pending' as const, createdAt: now() })); state.proposals = [...saved, ...state.proposals.filter((item) => item.runId !== runId)]; state.runs = state.runs.map((run) => run.id === runId ? { ...run, status: 'completed' as const, completedAt: now() } : run); this.write(state); return clone(saved); }
-  async reviewBibleProposal(input: ReviewBibleProposalInput): Promise<BibleProposal> { const state = this.read(); const proposal = state.proposals.find((item) => item.id === input.proposalId); if (!proposal) throw new Error('Der Vorschlag wurde nicht gefunden.'); const saved = { ...proposal, ...input, reviewStatus: input.reviewStatus, candidateName: input.candidateName ?? proposal.candidateName, candidateDescription: input.candidateDescription ?? proposal.candidateDescription, candidateStatus: input.candidateStatus ?? proposal.candidateStatus, classification: input.classification ?? proposal.classification, reviewedAt: now() }; let reviewed = saved; if (input.reviewStatus !== 'rejected' && !proposal.targetEntityId) { const chapter = state.chapters.find((item) => item.scenes.some((scene) => scene.id === saved.sceneId)); const scene = chapter?.scenes.find((item) => item.id === saved.sceneId); const stamp = now(); const entity: StoryEntity = { id: crypto.randomUUID(), projectId: proposal.projectId, name: saved.candidateName, type: saved.entityType, description: saved.candidateDescription, status: saved.candidateStatus, confidence: saved.confidence, source: saved.evidenceExcerpt, chapter: chapter?.title ?? '', scene: scene?.title ?? '', authorConfirmed: false, updatedAt: stamp, createdAt: stamp, tags: [], origin: 'bible_update' }; state.entities = [entity, ...state.entities]; if (chapter && scene) state.sources.push({ id: crypto.randomUUID(), projectId: proposal.projectId, entityId: entity.id, proposalId: proposal.id, chapterId: chapter.id, sceneId: scene.id, excerpt: saved.evidenceExcerpt, createdAt: stamp }); reviewed = { ...saved, targetEntityId: entity.id }; } state.proposals = state.proposals.map((item) => item.id === proposal.id ? reviewed : item); this.write(state); return clone(reviewed); }
+  async reviewBibleProposal(input: ReviewBibleProposalInput): Promise<BibleProposal> { const state = this.read(); const reviewed = applyBrowserProposalReview(state, input); this.write(state); return clone(reviewed); }
   async completeBibleReview(runId: string): Promise<BibleUpdateRun> { const state = this.read(); if (state.proposals.some((proposal) => proposal.runId === runId && proposal.reviewStatus === 'pending')) throw new Error('Bitte prüfe zuerst alle offenen Vorschläge.'); state.runs = state.runs.map((run) => run.id === runId ? { ...run, status: 'reviewed' as const } : run); this.write(state); return clone(state.runs.find((run) => run.id === runId)!); }
   async getDatabaseInfo(): Promise<DatabaseInfo> { return { path: 'Browser-Demo: localStorage', connected: true, engine: 'localStorage', detail: 'Nur Vorschau-Daten im Browser. Die Desktop-App verwendet SQLite.' }; }
 }

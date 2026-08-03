@@ -233,6 +233,12 @@ body { background: var(--bg); color: var(--text); }
 .review-card p { margin: 0 0 7px; color: #52647a; font-size: 12px; line-height: 1.45; }
 .review-card small { color: #7a899a; font-size: 10px; line-height: 1.4; }
 .review-actions { align-items: flex-start; flex-wrap: wrap; justify-content: flex-end; }
+.structured-source-card { display: grid; gap: 10px; }
+.structured-source-row { display: grid; gap: 4px; padding: 10px 0; border-top: 1px solid var(--line); }
+.structured-source-row strong { font-size: 12px; }
+.structured-source-row span { color: #75869a; font-size: 10px; line-height: 1.5; }
+.structured-source-row small { color: #7992b3; font-size: 9px; }
+.source-navigation-notice { display: flex; align-items: center; gap: 10px; margin: 8px 18px; padding: 9px 12px; border: 1px solid #e3bb72; border-radius: 6px; color: #775b24; background: #fff8e8; font-size: 12px; }
 .reviewed-label { align-self: center; color: #287c5a; font-size: 11px; white-space: nowrap; }
 .source-chip-button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border: 1px solid #cbd7e7; border-radius: 999px; color: #526bc0; background: #eef3fb; font-size: 10px; }
 .source-chip-button:hover { border-color: #526bc0; background: #e4ebfb; }

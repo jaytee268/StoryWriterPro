@@ -1,5 +1,5 @@
-ALTER TABLE story_entities ADD COLUMN origin TEXT NOT NULL DEFAULT 'manual';
-ALTER TABLE story_entities ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]';
+-- The Rust migration runner adds these columns after checking PRAGMA
+-- table_info(story_entities), so a partially applied upgrade is resumable.
 
 CREATE TABLE IF NOT EXISTS bible_update_runs (
   id TEXT PRIMARY KEY,

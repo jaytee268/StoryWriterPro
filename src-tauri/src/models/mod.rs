@@ -197,6 +197,7 @@ pub struct BibleUpdateRun {
     pub scene_updated_at: String,
     pub content_hash: String,
     pub extractor_id: String,
+    pub analyzed_content: String,
     pub status: String,
     pub created_at: String,
     pub completed_at: Option<String>,
@@ -211,6 +212,8 @@ pub struct CreateBibleUpdateRunInput {
     pub scene_updated_at: String,
     pub content_hash: String,
     pub extractor_id: String,
+    #[serde(default)]
+    pub analyzed_content: String,
     #[serde(default)]
     pub force: bool,
 }
@@ -266,6 +269,8 @@ pub struct BibleProposal {
 pub struct ReviewBibleProposalInput {
     pub proposal_id: String,
     pub review_status: String,
+    #[serde(default)]
+    pub decision: Option<String>,
     pub candidate_name: Option<String>,
     pub candidate_description: Option<String>,
     pub candidate_status: Option<String>,
