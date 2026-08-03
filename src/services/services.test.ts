@@ -6,6 +6,7 @@ import type { ProjectContext, Scene } from '../types/domain';
 import { LocalPrototypeBibleExtractor, changedRange, contentHash, excerptFor } from './bibleExtractor';
 import { DeterministicProjectContextBuilder } from './contextBuilder';
 import { answerFromProjectContext } from './providerBridge';
+import { providerRouter } from './aiProviderService';
 
 const store = new Map<string, string>();
 vi.stubGlobal('localStorage', { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => store.set(key, value), removeItem: (key: string) => store.delete(key) });
@@ -35,6 +36,12 @@ describe('Desktop-Fehler und Autosave', () => {
 });
 
 describe('Story-Bible-Review und grounded context', () => {
+  it('ProviderRouter verwendet im Browser ausschließlich den lokalen Provider', async () => {
+    const { provider, settings } = await providerRouter.getActiveProvider();
+    expect(provider.id).toBe('local-prototype');
+    expect(settings.allowLocalFallback).toBe(true);
+    expect((await providerRouter.getProviderStatus('local-prototype')).available).toBe(true);
+  });
   it('übernimmt einen Fakt als bestätigten Kanon und verhindert eine zweite Review-Aktion', async () => {
     const repository = new BrowserDemoRepository();
     const workspace = await repository.loadWorkspace();
@@ -115,6 +122,7 @@ describe('Story-Bible-Review und grounded context', () => {
 
   it('begrenzt Chat-Quellen auf die tatsächlich verwendeten Einträge', () => {
     const context: ProjectContext = {
+      projectId: 'p',
       currentScene: undefined,
       currentChapter: undefined,
       relevantEntities: [

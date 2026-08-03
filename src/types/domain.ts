@@ -23,11 +23,11 @@ export type BibleReviewStatus = 'pending' | 'accepted' | 'edited' | 'rejected';
 export interface BibleUpdateRun { id: string; projectId: string; sceneId: string; sceneUpdatedAt: string; contentHash: string; extractorId: string; analyzedContent?: string; status: BibleRunStatus; createdAt: string; completedAt?: string; errorMessage?: string; }
 export interface BibleProposal { id: string; runId: string; projectId: string; sceneId: string; targetEntityId?: string; proposalAction: BibleProposalAction; entityType: EntityType; candidateName: string; candidateDescription: string; candidateStatus: EntityStatus; confidence: number; classification: BibleClassification; evidenceExcerpt: string; startOffset?: number; endOffset?: number; reason: string; reviewStatus: BibleReviewStatus; reviewedAt?: string; createdAt: string; }
 export interface BibleProposalDraft { targetEntityId?: string; proposalAction: BibleProposalAction; entityType: EntityType; candidateName: string; candidateDescription: string; candidateStatus: EntityStatus; confidence: number; classification: BibleClassification; evidenceExcerpt: string; startOffset?: number; endOffset?: number; reason: string; }
-export interface BibleExtractionInput { project: Project; chapter: Chapter; scene: Scene; existingEntities: StoryEntity[]; previousAnalyzedContent?: string; changedRange?: { start: number; end: number }; }
+export interface BibleExtractionInput { project: Project; chapter: Chapter; scene: Scene; existingEntities: StoryEntity[]; relevantSources?: StorySourceReference[]; previousAnalyzedContent?: string; changedRange?: { start: number; end: number }; }
 export interface BibleExtractionResult { proposals: BibleProposalDraft[]; warnings: string[]; }
 export interface BibleExtractor { readonly id: string; extract(input: BibleExtractionInput): Promise<BibleExtractionResult>; }
 export interface ContextRequest { projectId: string; currentChapterId?: string; currentSceneId?: string; userQuestion: string; }
-export interface ProjectContext { currentScene?: Scene; currentChapter?: Chapter; relevantEntities: StoryEntity[]; relevantSources: StorySourceReference[]; openPlotThreads: StoryEntity[]; possibleContradictions: StoryEntity[]; }
+export interface ProjectContext { projectId: string; currentScene?: Scene; currentChapter?: Chapter; relevantEntities: StoryEntity[]; relevantSources: StorySourceReference[]; openPlotThreads: StoryEntity[]; possibleContradictions: StoryEntity[]; }
 export interface ChatSource { id: string; label: string; chapterId?: string; sceneId?: string; entityId?: string; excerpt?: string; startOffset?: number; endOffset?: number; }
 export interface TimelineEvent { id: string; title: string; storyTime: string; chapter: string; scene: string; location: string; characters: string[]; pov: string; summary: string; consequences: string; knowledge: string; clue?: string; status: EntityStatus; track: string; }
 export interface MindNode { id: string; label: string; type: string; x: number; y: number; status?: EntityStatus; }
@@ -35,6 +35,11 @@ export interface MindEdge { id: string; source: string; target: string; label: s
 export interface ChatMessage { id: string; role: 'user' | 'assistant'; content: string; sources?: ChatSource[]; time: string; }
 export interface AiTask { id: string; type: AiTaskType; prompt: string; context: string[]; }
 export interface ProviderStatus { available: boolean; label: string; detail: string; }
+export type CodexAuthenticationState = 'authenticated' | 'notAuthenticated' | 'unknown';
+export interface CodexCliCapabilities { installed: boolean; binaryPath?: string; version?: string; supportsExec: boolean; supportsJson: boolean; supportsEphemeral: boolean; supportsOutputSchema: boolean; supportsReadOnlySandbox: boolean; supportsSkipGitCheck: boolean; supportsModel: boolean; authentication: CodexAuthenticationState; compatible: boolean; detail: string; }
+export interface AiProviderSettings { activeProvider: 'local-prototype' | 'codex-cli'; codexBinaryPath?: string; codexModelOverride?: string; bibleUpdateTimeoutSeconds: number; chatTimeoutSeconds: number; allowLocalFallback: boolean; }
+export type CodexTaskKind = 'extractBiblePatch' | 'answerWithProjectContext';
+export interface GroundedChatResult { answer: string; usedEntityIds: string[]; usedSourceIds: string[]; uncertainty: 'low' | 'medium' | 'high'; warnings: string[]; }
 export interface Correction { id: string; kind: CorrectionKind; from: string; to: string; reason: string; start: number; end: number; }
 export interface CorrectionResult { id: string; sourceText: string; corrections: Correction[]; provider: string; message?: string; }
 

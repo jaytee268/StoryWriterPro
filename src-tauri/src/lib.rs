@@ -7,6 +7,8 @@ mod providers;
 mod services;
 
 use database::DbState;
+use providers::codex::CodexRuntimeState;
+use std::sync::Arc;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -15,6 +17,7 @@ pub fn run() {
         .setup(|app| {
             let state = DbState::open(app.handle())?;
             app.manage(state);
+            app.manage(Arc::new(CodexRuntimeState::default()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -45,7 +48,12 @@ pub fn run() {
             commands::complete_bible_review,
             commands::database_info,
             commands::check_local_languagetool,
-            commands::provider_status
+            commands::provider_status,
+            commands::get_ai_provider_settings,
+            commands::save_ai_provider_settings,
+            commands::get_codex_provider_status,
+            commands::run_codex_task,
+            commands::cancel_codex_task
         ])
         .run(tauri::generate_context!())
         .expect("error while running StoryMemory");

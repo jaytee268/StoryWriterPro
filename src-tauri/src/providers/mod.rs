@@ -1,3 +1,5 @@
+pub mod codex;
+
 pub trait AiProvider {
     fn id(&self) -> &str;
     fn display_name(&self) -> &str;

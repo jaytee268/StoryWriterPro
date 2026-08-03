@@ -26,7 +26,7 @@ export class DeterministicProjectContextBuilder implements ProjectContextBuilder
     }).slice(0, 30);
     const relevantIds = new Set(relevantEntities.map((entity) => entity.id));
     const relevantSources = sources.filter((source) => (currentScene && source.sceneId === currentScene.id) || (source.entityId && relevantIds.has(source.entityId))).slice(0, 30);
-    return { currentScene, currentChapter, relevantEntities, relevantSources, openPlotThreads: relevantEntities.filter((entity) => entity.type === 'plot_thread' && entity.status !== 'confirmed'), possibleContradictions: relevantEntities.filter((entity) => entity.status === 'contradicted') };
+    return { projectId: input.projectId, currentScene, currentChapter, relevantEntities, relevantSources, openPlotThreads: relevantEntities.filter((entity) => entity.type === 'plot_thread' && entity.status !== 'confirmed'), possibleContradictions: relevantEntities.filter((entity) => entity.status === 'contradicted') };
   }
 }
 

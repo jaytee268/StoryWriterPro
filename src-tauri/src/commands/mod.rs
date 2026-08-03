@@ -1,3 +1,7 @@
+use crate::providers::codex::{
+    self, AiProviderSettings, CodexCliCapabilities, CodexError, CodexRuntimeState,
+    RunCodexTaskInput,
+};
 use crate::{
     database::DbState,
     models::{
@@ -13,6 +17,7 @@ use crate::{
 };
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension, Result as SqlResult};
+use std::sync::Arc;
 use tauri::State;
 
 fn lock_db<'a>(
@@ -1395,6 +1400,137 @@ pub fn provider_status() -> Vec<ProviderStatus> {
             detail: "Offizieller CLI-Client noch nicht konfiguriert".into(),
         },
     ]
+}
+
+fn load_ai_provider_settings(db: &Connection) -> Result<AiProviderSettings, String> {
+    let value = db
+        .query_row(
+            "SELECT value_json FROM app_settings WHERE key='ai_provider_settings'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| {
+            sql_error(
+                "KI-Anbieter-Einstellungen konnten nicht geladen werden",
+                error,
+            )
+        })?;
+    match value {
+        Some(json) => serde_json::from_str(&json)
+            .map_err(|error| sql_error("KI-Anbieter-Einstellungen sind ungültig", error)),
+        None => Ok(AiProviderSettings::default()),
+    }
+}
+
+fn validate_ai_provider_settings(settings: &AiProviderSettings) -> Result<(), String> {
+    if !matches!(
+        settings.active_provider.as_str(),
+        "local-prototype" | "codex-cli"
+    ) {
+        return Err("Unbekannter KI-Anbieter.".into());
+    }
+    if !(1..=900).contains(&settings.bible_update_timeout_seconds)
+        || !(1..=900).contains(&settings.chat_timeout_seconds)
+    {
+        return Err("Timeouts müssen zwischen 1 und 900 Sekunden liegen.".into());
+    }
+    if settings
+        .codex_binary_path
+        .as_deref()
+        .is_some_and(|path| path.len() > 1000 || path.contains('\0'))
+    {
+        return Err("Der Codex-Pfad ist ungültig.".into());
+    }
+    if settings
+        .codex_model_override
+        .as_deref()
+        .is_some_and(|model| model.len() > 100 || model.starts_with('-'))
+    {
+        return Err("Die optionale Modellkennung ist ungültig.".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_ai_provider_settings(state: State<'_, DbState>) -> Result<AiProviderSettings, String> {
+    let db = lock_db(&state)?;
+    load_ai_provider_settings(&db)
+}
+
+#[tauri::command]
+pub fn save_ai_provider_settings(
+    state: State<'_, DbState>,
+    input: AiProviderSettings,
+) -> Result<AiProviderSettings, String> {
+    validate_ai_provider_settings(&input)?;
+    let db = lock_db(&state)?;
+    let json = serde_json::to_string(&input).map_err(|error| {
+        sql_error(
+            "KI-Anbieter-Einstellungen konnten nicht vorbereitet werden",
+            error,
+        )
+    })?;
+    let timestamp = now();
+    db.execute("INSERT INTO app_settings (key, value_json, created_at, updated_at) VALUES ('ai_provider_settings', ?1, ?2, ?2) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at", params![json, timestamp]).map_err(|error| sql_error("KI-Anbieter-Einstellungen konnten nicht gespeichert werden", error))?;
+    Ok(input)
+}
+
+#[tauri::command]
+pub fn get_codex_provider_status(
+    state: State<'_, DbState>,
+) -> Result<CodexCliCapabilities, String> {
+    let db = lock_db(&state)?;
+    let settings = load_ai_provider_settings(&db)?;
+    Ok(codex::codex_status(settings.codex_binary_path.as_deref()))
+}
+
+fn record_codex_audit(
+    db: &Connection,
+    input: &RunCodexTaskInput,
+    status: &str,
+    error_code: Option<&str>,
+) -> Result<(), String> {
+    let payload = codex::task_audit_payload(input, status, error_code).to_string();
+    db.execute("INSERT INTO analysis_jobs (id, job_type, status, progress, payload_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6) ON CONFLICT(id) DO UPDATE SET status=excluded.status, progress=excluded.progress, payload_json=excluded.payload_json, updated_at=excluded.updated_at", params![input.task_id, format!("codex:{:?}", input.task_kind), status, if status == "completed" { 1.0 } else { 0.0 }, payload, now()]).map_err(|error| sql_error("Codex-Task-Audit konnte nicht gespeichert werden", error))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn run_codex_task(
+    state: State<'_, DbState>,
+    runtime: State<'_, Arc<CodexRuntimeState>>,
+    input: RunCodexTaskInput,
+) -> Result<codex::CodexTaskResult, String> {
+    let settings = {
+        let db = lock_db(&state)?;
+        let settings = load_ai_provider_settings(&db)?;
+        record_codex_audit(&db, &input, "running", None)?;
+        settings
+    };
+    let runtime = runtime.inner().clone();
+    let task_input = input.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        codex::run_task(runtime, task_input, settings)
+    })
+    .await
+    .map_err(|error| {
+        format!("CODEX_PROCESS_FAILED: Codex-Task konnte nicht ausgeführt werden: {error}")
+    })?;
+    let db = lock_db(&state)?;
+    match &result {
+        Ok(_) => record_codex_audit(&db, &input, "completed", None)?,
+        Err(error) => record_codex_audit(&db, &input, "failed", Some(error.code))?,
+    }
+    result.map_err(|error: CodexError| error.to_string())
+}
+
+#[tauri::command]
+pub fn cancel_codex_task(
+    runtime: State<'_, Arc<CodexRuntimeState>>,
+    task_id: String,
+) -> Result<(), String> {
+    codex::cancel_task(runtime.inner(), &task_id).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
