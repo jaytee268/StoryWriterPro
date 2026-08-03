@@ -1,10 +1,14 @@
 use crate::{
     database::DbState,
     models::{
-        validate_entity_status, validate_scene_status, validate_scene_version_reason, Book,
-        Chapter, CreateChapterInput, CreateProjectInput, CreateSceneInput, CreateSceneVersionInput,
-        DatabaseInfo, EditorPreferences, Project, ProviderStatus, RestoreSceneVersionInput, Scene,
-        SceneInput, SceneVersion, StoryEntity, StoryEntityInput, WorkspaceSnapshot,
+        validate_entity_status, validate_proposal_action, validate_proposal_classification,
+        validate_review_status, validate_scene_status, validate_scene_version_reason,
+        BibleProposal, BibleProposalInput, BibleUpdateRun, Book, Chapter,
+        CreateBibleUpdateRunInput, CreateChapterInput, CreateProjectInput, CreateSceneInput,
+        CreateSceneVersionInput, CreateSourceReferenceInput, CreateStoryEntityInput, DatabaseInfo,
+        EditorPreferences, Project, ProviderStatus, RestoreSceneVersionInput,
+        ReviewBibleProposalInput, Scene, SceneInput, SceneVersion, StoryEntity, StoryEntityInput,
+        StorySourceReference, UpdateStoryEntityInput, WorkspaceSnapshot,
     },
 };
 use chrono::Utc;
@@ -285,6 +289,7 @@ fn load_chapters(db: &Connection, books: &[Book]) -> Result<Vec<Chapter>, String
 }
 
 fn entity_from_row(row: &rusqlite::Row<'_>) -> SqlResult<StoryEntity> {
+    let tags_json: String = row.get(14)?;
     Ok(StoryEntity {
         id: row.get(0)?,
         project_id: row.get(1)?,
@@ -299,12 +304,13 @@ fn entity_from_row(row: &rusqlite::Row<'_>) -> SqlResult<StoryEntity> {
         author_confirmed: row.get::<_, i64>(10)? != 0,
         created_at: row.get(11)?,
         updated_at: row.get(12)?,
-        tags: Vec::new(),
+        tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+        origin: row.get(13)?,
     })
 }
 
 fn load_entities(db: &Connection, project_id: &str) -> Result<Vec<StoryEntity>, String> {
-    let mut statement = db.prepare("SELECT id, project_id, name, entity_type, description, status, confidence, source, chapter, scene, author_confirmed, created_at, updated_at FROM story_entities WHERE project_id=?1 ORDER BY updated_at DESC").map_err(|error| sql_error("Story-Bible-Einträge konnten nicht geladen werden", error))?;
+    let mut statement = db.prepare("SELECT id, project_id, name, entity_type, description, status, confidence, source, chapter, scene, author_confirmed, created_at, updated_at, origin, tags_json FROM story_entities WHERE project_id=?1 ORDER BY updated_at DESC").map_err(|error| sql_error("Story-Bible-Einträge konnten nicht geladen werden", error))?;
     let result = statement
         .query_map(params![project_id], entity_from_row)
         .map_err(|error| sql_error("Story-Bible-Einträge konnten nicht geladen werden", error))?
@@ -622,6 +628,498 @@ pub fn save_editor_preferences(
     Ok(input)
 }
 
+fn entity_query() -> &'static str {
+    "SELECT id, project_id, name, entity_type, description, status, confidence, source, chapter, scene, author_confirmed, created_at, updated_at, origin, tags_json FROM story_entities WHERE id=?1"
+}
+
+fn load_entity(db: &Connection, id: &str) -> Result<StoryEntity, String> {
+    db.query_row(entity_query(), params![id], entity_from_row)
+        .map_err(|error| sql_error("Story-Bible-Eintrag konnte nicht geladen werden", error))
+}
+
+fn validate_entity_type(value: &str) -> Result<(), String> {
+    match value {
+        "character" | "relationship" | "place" | "organization" | "world_rule" | "object"
+        | "event" | "fact" | "clue" | "secret" | "plot_thread" | "retcon" | "author_note" => Ok(()),
+        _ => Err(format!("Ungültiger Story-Bible-Typ: {value}")),
+    }
+}
+
+fn reference_location(
+    db: &Connection,
+    chapter_id: Option<&str>,
+    scene_id: Option<&str>,
+) -> Result<(String, String, String), String> {
+    match (chapter_id, scene_id) {
+        (Some(chapter_id), Some(scene_id)) => db
+            .query_row(
+                "SELECT chapters.id, chapters.title, scenes.title FROM scenes JOIN chapters ON chapters.id=scenes.chapter_id WHERE scenes.id=?1 AND chapters.id=?2",
+                params![scene_id, chapter_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(|error| sql_error("Kapitel und Szene der Quelle passen nicht zusammen", error)),
+        (None, None) => Ok((String::new(), String::new(), String::new())),
+        _ => Err("Eine Quelle benötigt sowohl Kapitel als auch Szene.".into()),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_entity_tx(
+    transaction: &rusqlite::Transaction<'_>,
+    project_id: &str,
+    name: &str,
+    entity_type: &str,
+    description: &str,
+    status: &str,
+    confidence: f64,
+    chapter: &str,
+    scene: &str,
+    excerpt: &str,
+    author_confirmed: bool,
+    tags: &[String],
+    origin: &str,
+    timestamp: &str,
+) -> Result<String, String> {
+    let id = new_id();
+    let tags_json = serde_json::to_string(tags)
+        .map_err(|error| sql_error("Tags konnten nicht vorbereitet werden", error))?;
+    transaction
+        .execute(
+            "INSERT INTO story_entities (id, project_id, name, entity_type, description, status, confidence, source, chapter, scene, author_confirmed, created_at, updated_at, origin, tags_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?13, ?14)",
+            params![id, project_id, name.trim(), entity_type, description, status, confidence.clamp(0.0, 1.0), excerpt, chapter, scene, author_confirmed, timestamp, origin, tags_json],
+        )
+        .map_err(|error| sql_error("Story-Bible-Eintrag konnte nicht gespeichert werden", error))?;
+    Ok(id)
+}
+
+pub(crate) fn create_story_entity_in_db(
+    db: &Connection,
+    input: CreateStoryEntityInput,
+) -> Result<StoryEntity, String> {
+    required(&input.name, "Der Eintragsname")?;
+    validate_entity_type(&input.entity_type)?;
+    validate_entity_status(&input.status)?;
+    let (chapter_id, chapter, scene) =
+        reference_location(db, input.chapter_id.as_deref(), input.scene_id.as_deref())?;
+    let project_exists: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+            params![input.project_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| sql_error("Projekt konnte nicht geprüft werden", error))?;
+    if !project_exists {
+        return Err("Das Projekt des Story-Bible-Eintrags wurde nicht gefunden.".into());
+    }
+    let transaction = db.unchecked_transaction().map_err(|error| {
+        sql_error(
+            "Story-Bible-Speicherung konnte nicht gestartet werden",
+            error,
+        )
+    })?;
+    let timestamp = now();
+    let id = insert_entity_tx(
+        &transaction,
+        &input.project_id,
+        &input.name,
+        &input.entity_type,
+        &input.description,
+        &input.status,
+        input.confidence,
+        &chapter,
+        &scene,
+        &input.excerpt,
+        input.author_confirmed,
+        &input.tags,
+        "manual",
+        &timestamp,
+    )?;
+    if !chapter_id.is_empty() {
+        transaction.execute("INSERT INTO story_source_references (id, project_id, entity_id, chapter_id, scene_id, excerpt, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)", params![new_id(), input.project_id, id, chapter_id, input.scene_id, input.excerpt, timestamp]).map_err(|error| sql_error("Quelle konnte nicht gespeichert werden", error))?;
+    }
+    transaction.commit().map_err(|error| {
+        sql_error(
+            "Story-Bible-Speicherung konnte nicht abgeschlossen werden",
+            error,
+        )
+    })?;
+    load_entity(db, &id)
+}
+
+pub(crate) fn update_story_entity_in_db(
+    db: &Connection,
+    input: UpdateStoryEntityInput,
+) -> Result<StoryEntity, String> {
+    required(&input.name, "Der Eintragsname")?;
+    validate_entity_type(&input.entity_type)?;
+    validate_entity_status(&input.status)?;
+    let current = load_entity(db, &input.id)?;
+    if current.project_id != input.project_id {
+        return Err("Der Eintrag gehört nicht zu diesem Projekt.".into());
+    }
+    let (_chapter_id, chapter, scene) =
+        reference_location(db, input.chapter_id.as_deref(), input.scene_id.as_deref())?;
+    let transaction = db.unchecked_transaction().map_err(|error| {
+        sql_error(
+            "Story-Bible-Speicherung konnte nicht gestartet werden",
+            error,
+        )
+    })?;
+    let timestamp = now();
+    let tags_json = serde_json::to_string(&input.tags)
+        .map_err(|error| sql_error("Tags konnten nicht vorbereitet werden", error))?;
+    transaction.execute("UPDATE story_entities SET name=?2, entity_type=?3, description=?4, status=?5, confidence=?6, source=?7, chapter=?8, scene=?9, author_confirmed=?10, updated_at=?11, tags_json=?12 WHERE id=?1", params![input.id, input.name.trim(), input.entity_type, input.description, input.status, input.confidence.clamp(0.0, 1.0), input.excerpt, chapter, scene, input.author_confirmed, timestamp, tags_json]).map_err(|error| sql_error("Story-Bible-Eintrag konnte nicht aktualisiert werden", error))?;
+    if let (Some(chapter_id), Some(scene_id)) =
+        (input.chapter_id.as_deref(), input.scene_id.as_deref())
+    {
+        transaction.execute("INSERT INTO story_source_references (id, project_id, entity_id, chapter_id, scene_id, excerpt, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)", params![new_id(), input.project_id, input.id, chapter_id, scene_id, input.excerpt, timestamp]).map_err(|error| sql_error("Quelle konnte nicht gespeichert werden", error))?;
+    }
+    transaction.commit().map_err(|error| {
+        sql_error(
+            "Story-Bible-Speicherung konnte nicht abgeschlossen werden",
+            error,
+        )
+    })?;
+    let _ = current;
+    load_entity(db, &input.id)
+}
+
+#[tauri::command]
+pub fn create_story_entity(
+    state: State<'_, DbState>,
+    input: CreateStoryEntityInput,
+) -> Result<StoryEntity, String> {
+    let db = lock_db(&state)?;
+    create_story_entity_in_db(&db, input)
+}
+
+#[tauri::command]
+pub fn update_story_entity(
+    state: State<'_, DbState>,
+    input: UpdateStoryEntityInput,
+) -> Result<StoryEntity, String> {
+    let db = lock_db(&state)?;
+    update_story_entity_in_db(&db, input)
+}
+
+#[tauri::command]
+pub fn archive_story_entity(state: State<'_, DbState>, id: String) -> Result<StoryEntity, String> {
+    let db = lock_db(&state)?;
+    let timestamp = now();
+    let changed = db
+        .execute(
+            "UPDATE story_entities SET status='archived', updated_at=?2 WHERE id=?1",
+            params![id, timestamp],
+        )
+        .map_err(|error| sql_error("Eintrag konnte nicht archiviert werden", error))?;
+    if changed == 0 {
+        return Err("Der Story-Bible-Eintrag wurde nicht gefunden.".into());
+    }
+    load_entity(&db, &id)
+}
+
+#[tauri::command]
+pub fn get_story_entity(state: State<'_, DbState>, id: String) -> Result<StoryEntity, String> {
+    let db = lock_db(&state)?;
+    load_entity(&db, &id)
+}
+
+fn source_from_row(row: &rusqlite::Row<'_>) -> SqlResult<StorySourceReference> {
+    Ok(StorySourceReference {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        entity_id: row.get(2)?,
+        proposal_id: row.get(3)?,
+        chapter_id: row.get(4)?,
+        scene_id: row.get(5)?,
+        excerpt: row.get(6)?,
+        start_offset: row.get(7)?,
+        end_offset: row.get(8)?,
+        created_at: row.get(9)?,
+    })
+}
+
+#[tauri::command]
+pub fn create_source_reference(
+    state: State<'_, DbState>,
+    input: CreateSourceReferenceInput,
+) -> Result<StorySourceReference, String> {
+    let db = lock_db(&state)?;
+    let timestamp = now();
+    let id = new_id();
+    db.execute("INSERT INTO story_source_references (id, project_id, entity_id, proposal_id, chapter_id, scene_id, excerpt, start_offset, end_offset, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)", params![id, input.project_id, input.entity_id, input.proposal_id, input.chapter_id, input.scene_id, input.excerpt, input.start_offset, input.end_offset, timestamp]).map_err(|error| sql_error("Quellenreferenz konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT id, project_id, entity_id, proposal_id, chapter_id, scene_id, excerpt, start_offset, end_offset, created_at FROM story_source_references WHERE id=?1", params![id], source_from_row).map_err(|error| sql_error("Gespeicherte Quellenreferenz konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn list_source_references(
+    state: State<'_, DbState>,
+    project_id: String,
+    entity_id: Option<String>,
+) -> Result<Vec<StorySourceReference>, String> {
+    let db = lock_db(&state)?;
+    let mut statement = db.prepare("SELECT id, project_id, entity_id, proposal_id, chapter_id, scene_id, excerpt, start_offset, end_offset, created_at FROM story_source_references WHERE project_id=?1 AND (?2 IS NULL OR entity_id=?2) ORDER BY created_at DESC").map_err(|error| sql_error("Quellen konnten nicht geladen werden", error))?;
+    let result = statement
+        .query_map(params![project_id, entity_id], source_from_row)
+        .map_err(|error| sql_error("Quellen konnten nicht geladen werden", error))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|error| sql_error("Quellen konnten nicht geladen werden", error));
+    result
+}
+
+fn run_from_row(row: &rusqlite::Row<'_>) -> SqlResult<BibleUpdateRun> {
+    Ok(BibleUpdateRun {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        scene_id: row.get(2)?,
+        scene_updated_at: row.get(3)?,
+        content_hash: row.get(4)?,
+        extractor_id: row.get(5)?,
+        status: row.get(6)?,
+        created_at: row.get(7)?,
+        completed_at: row.get(8)?,
+        error_message: row.get(9)?,
+    })
+}
+
+fn proposal_from_row(row: &rusqlite::Row<'_>) -> SqlResult<BibleProposal> {
+    Ok(BibleProposal {
+        id: row.get(0)?,
+        run_id: row.get(1)?,
+        project_id: row.get(2)?,
+        scene_id: row.get(3)?,
+        target_entity_id: row.get(4)?,
+        proposal_action: row.get(5)?,
+        entity_type: row.get(6)?,
+        candidate_name: row.get(7)?,
+        candidate_description: row.get(8)?,
+        candidate_status: row.get(9)?,
+        confidence: row.get(10)?,
+        classification: row.get(11)?,
+        evidence_excerpt: row.get(12)?,
+        start_offset: row.get(13)?,
+        end_offset: row.get(14)?,
+        reason: row.get(15)?,
+        review_status: row.get(16)?,
+        reviewed_at: row.get(17)?,
+        created_at: row.get(18)?,
+    })
+}
+
+fn load_run(db: &Connection, id: &str) -> Result<BibleUpdateRun, String> {
+    db.query_row("SELECT id, project_id, scene_id, scene_updated_at, content_hash, extractor_id, status, created_at, completed_at, error_message FROM bible_update_runs WHERE id=?1", params![id], run_from_row).map_err(|error| sql_error("Bible-Update-Lauf konnte nicht geladen werden", error))
+}
+
+fn load_proposal(db: &Connection, id: &str) -> Result<BibleProposal, String> {
+    db.query_row("SELECT id, run_id, project_id, scene_id, target_entity_id, proposal_action, entity_type, candidate_name, candidate_description, candidate_status, confidence, classification, evidence_excerpt, start_offset, end_offset, reason, review_status, reviewed_at, created_at FROM bible_proposals WHERE id=?1", params![id], proposal_from_row).map_err(|error| sql_error("Bible-Vorschlag konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn create_bible_update_run(
+    state: State<'_, DbState>,
+    input: CreateBibleUpdateRunInput,
+) -> Result<BibleUpdateRun, String> {
+    let db = lock_db(&state)?;
+    let scene_project: String = db.query_row("SELECT books.project_id FROM scenes JOIN chapters ON chapters.id=scenes.chapter_id JOIN books ON books.id=chapters.book_id WHERE scenes.id=?1", params![input.scene_id], |row| row.get(0)).map_err(|error| sql_error("Szene konnte nicht geprüft werden", error))?;
+    if scene_project != input.project_id {
+        return Err("Die Szene gehört nicht zu diesem Projekt.".into());
+    }
+    if !input.force {
+        if let Some(existing) = db.query_row("SELECT id FROM bible_update_runs WHERE project_id=?1 AND scene_id=?2 AND content_hash=?3 AND extractor_id=?4 AND status IN ('completed','reviewed') ORDER BY created_at DESC LIMIT 1", params![input.project_id, input.scene_id, input.content_hash, input.extractor_id], |row| row.get::<_, String>(0)).optional().map_err(|error| sql_error("Vorherige Bible-Updates konnten nicht geprüft werden", error))? {
+            return load_run(&db, &existing);
+        }
+    }
+    let id = new_id();
+    let timestamp = now();
+    db.execute("INSERT INTO bible_update_runs (id, project_id, scene_id, scene_updated_at, content_hash, extractor_id, status, created_at) VALUES (?1,?2,?3,?4,?5,?6,'pending',?7)", params![id, input.project_id, input.scene_id, input.scene_updated_at, input.content_hash, input.extractor_id, timestamp]).map_err(|error| sql_error("Bible-Update-Lauf konnte nicht angelegt werden", error))?;
+    load_run(&db, &id)
+}
+
+#[tauri::command]
+pub fn list_bible_update_runs(
+    state: State<'_, DbState>,
+    project_id: String,
+    scene_id: Option<String>,
+) -> Result<Vec<BibleUpdateRun>, String> {
+    let db = lock_db(&state)?;
+    let mut statement = db.prepare("SELECT id, project_id, scene_id, scene_updated_at, content_hash, extractor_id, status, created_at, completed_at, error_message FROM bible_update_runs WHERE project_id=?1 AND (?2 IS NULL OR scene_id=?2) ORDER BY created_at DESC").map_err(|error| sql_error("Bible-Update-Läufe konnten nicht geladen werden", error))?;
+    let result = statement
+        .query_map(params![project_id, scene_id], run_from_row)
+        .map_err(|error| sql_error("Bible-Update-Läufe konnten nicht geladen werden", error))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|error| sql_error("Bible-Update-Läufe konnten nicht geladen werden", error));
+    result
+}
+
+#[tauri::command]
+pub fn list_bible_proposals(
+    state: State<'_, DbState>,
+    run_id: String,
+) -> Result<Vec<BibleProposal>, String> {
+    let db = lock_db(&state)?;
+    let mut statement = db.prepare("SELECT id, run_id, project_id, scene_id, target_entity_id, proposal_action, entity_type, candidate_name, candidate_description, candidate_status, confidence, classification, evidence_excerpt, start_offset, end_offset, reason, review_status, reviewed_at, created_at FROM bible_proposals WHERE run_id=?1 ORDER BY created_at, id").map_err(|error| sql_error("Bible-Vorschläge konnten nicht geladen werden", error))?;
+    let result = statement
+        .query_map(params![run_id], proposal_from_row)
+        .map_err(|error| sql_error("Bible-Vorschläge konnten nicht geladen werden", error))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|error| sql_error("Bible-Vorschläge konnten nicht geladen werden", error));
+    result
+}
+
+#[tauri::command]
+pub fn save_bible_proposals(
+    state: State<'_, DbState>,
+    run_id: String,
+    proposals: Vec<BibleProposalInput>,
+) -> Result<Vec<BibleProposal>, String> {
+    let db = lock_db(&state)?;
+    let run = load_run(&db, &run_id)?;
+    let transaction = db
+        .unchecked_transaction()
+        .map_err(|error| sql_error("Vorschläge konnten nicht gespeichert werden", error))?;
+    for input in proposals {
+        if input.run_id != run_id
+            || input.project_id != run.project_id
+            || input.scene_id != run.scene_id
+        {
+            return Err("Der Vorschlag gehört nicht zum ausgewählten Lauf.".into());
+        }
+        validate_proposal_action(&input.proposal_action)?;
+        validate_proposal_classification(&input.classification)?;
+        validate_entity_type(&input.entity_type)?;
+        validate_entity_status(&input.candidate_status)?;
+        let id = input.id.unwrap_or_else(new_id);
+        transaction.execute("INSERT OR REPLACE INTO bible_proposals (id,run_id,project_id,scene_id,target_entity_id,proposal_action,entity_type,candidate_name,candidate_description,candidate_status,confidence,classification,evidence_excerpt,start_offset,end_offset,reason,review_status,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,'pending',COALESCE((SELECT created_at FROM bible_proposals WHERE id=?1),?17))", params![id, input.run_id, input.project_id, input.scene_id, input.target_entity_id, input.proposal_action, input.entity_type, input.candidate_name, input.candidate_description, input.candidate_status, input.confidence.clamp(0.0, 1.0), input.classification, input.evidence_excerpt, input.start_offset, input.end_offset, input.reason, now()]).map_err(|error| sql_error("Bible-Vorschlag konnte nicht gespeichert werden", error))?;
+    }
+    let timestamp = now();
+    transaction.execute("UPDATE bible_update_runs SET status='completed', completed_at=?, error_message=NULL WHERE id=?", params![timestamp, run_id]).map_err(|error| sql_error("Bible-Update-Lauf konnte nicht abgeschlossen werden", error))?;
+    transaction
+        .commit()
+        .map_err(|error| sql_error("Bible-Update-Lauf konnte nicht abgeschlossen werden", error))?;
+    let mut statement = db.prepare("SELECT id, run_id, project_id, scene_id, target_entity_id, proposal_action, entity_type, candidate_name, candidate_description, candidate_status, confidence, classification, evidence_excerpt, start_offset, end_offset, reason, review_status, reviewed_at, created_at FROM bible_proposals WHERE run_id=?1 ORDER BY created_at, id").map_err(|error| sql_error("Bible-Vorschläge konnten nicht geladen werden", error))?;
+    let result = statement
+        .query_map(params![run_id], proposal_from_row)
+        .map_err(|error| sql_error("Bible-Vorschläge konnten nicht geladen werden", error))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|error| sql_error("Bible-Vorschläge konnten nicht geladen werden", error));
+    result
+}
+
+pub(crate) fn review_bible_proposal_in_db(
+    db: &Connection,
+    input: ReviewBibleProposalInput,
+) -> Result<BibleProposal, String> {
+    validate_review_status(&input.review_status)?;
+    let proposal = load_proposal(db, &input.proposal_id)?;
+    let name = input
+        .candidate_name
+        .unwrap_or(proposal.candidate_name.clone());
+    let description = input
+        .candidate_description
+        .unwrap_or(proposal.candidate_description.clone());
+    let status = input
+        .candidate_status
+        .unwrap_or(proposal.candidate_status.clone());
+    let classification = input
+        .classification
+        .unwrap_or(proposal.classification.clone());
+    validate_entity_status(&status)?;
+    validate_proposal_classification(&classification)?;
+    let transaction = db
+        .unchecked_transaction()
+        .map_err(|error| sql_error("Review konnte nicht gestartet werden", error))?;
+    let mut entity_id = proposal.target_entity_id.clone();
+    if input.review_status != "rejected" {
+        let action = proposal.proposal_action.as_str();
+        if matches!(
+            action,
+            "create_entity" | "create_open_question" | "create_author_note"
+        ) || (action == "add_source" && entity_id.is_none())
+        {
+            let effective_status =
+                if classification == "interpretation" || classification == "open_question" {
+                    "uncertain"
+                } else {
+                    status.as_str()
+                };
+            entity_id = Some(insert_entity_tx(
+                &transaction,
+                &proposal.project_id,
+                &name,
+                &proposal.entity_type,
+                &description,
+                effective_status,
+                proposal.confidence,
+                "",
+                "",
+                &proposal.evidence_excerpt,
+                false,
+                &[],
+                "bible_update",
+                &now(),
+            )?);
+        } else if action == "update_entity" {
+            let target = entity_id
+                .clone()
+                .ok_or_else(|| "Der Vorschlag hat keinen Ziel-Eintrag.".to_string())?;
+            let changed = transaction.execute("UPDATE story_entities SET name=?2, description=?3, status=?4, confidence=?5, updated_at=?6, origin='bible_update' WHERE id=?1 AND project_id=?7", params![target, name, description, status, proposal.confidence, now(), proposal.project_id]).map_err(|error| sql_error("Story-Bible-Eintrag konnte nicht geändert werden", error))?;
+            if changed == 0 {
+                return Err("Der Ziel-Eintrag des Vorschlags wurde nicht gefunden.".into());
+            }
+        } else if action == "mark_contradiction" {
+            if let Some(target) = entity_id.as_deref() {
+                transaction.execute("UPDATE story_entities SET status='contradicted', updated_at=?2 WHERE id=?1", params![target, now()]).map_err(|error| sql_error("Widerspruch konnte nicht markiert werden", error))?;
+            }
+        }
+        let chapter_id: String = transaction
+            .query_row(
+                "SELECT chapter_id FROM scenes WHERE id=?1",
+                params![proposal.scene_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| sql_error("Quellenszene konnte nicht geladen werden", error))?;
+        transaction.execute("INSERT INTO story_source_references (id, project_id, entity_id, proposal_id, chapter_id, scene_id, excerpt, start_offset, end_offset, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)", params![new_id(), proposal.project_id, entity_id, proposal.id, chapter_id, proposal.scene_id, proposal.evidence_excerpt, proposal.start_offset, proposal.end_offset, now()]).map_err(|error| sql_error("Quellenreferenz konnte nicht gespeichert werden", error))?;
+    }
+    transaction.execute("UPDATE bible_proposals SET candidate_name=?2, candidate_description=?3, candidate_status=?4, classification=?5, review_status=?6, reviewed_at=?7 WHERE id=?1", params![proposal.id, name, description, status, classification, input.review_status, now()]).map_err(|error| sql_error("Review-Status konnte nicht gespeichert werden", error))?;
+    transaction
+        .commit()
+        .map_err(|error| sql_error("Review konnte nicht abgeschlossen werden", error))?;
+    load_proposal(db, &proposal.id)
+}
+
+#[tauri::command]
+pub fn review_bible_proposal(
+    state: State<'_, DbState>,
+    input: ReviewBibleProposalInput,
+) -> Result<BibleProposal, String> {
+    let db = lock_db(&state)?;
+    review_bible_proposal_in_db(&db, input)
+}
+
+#[tauri::command]
+pub fn complete_bible_review(
+    state: State<'_, DbState>,
+    run_id: String,
+) -> Result<BibleUpdateRun, String> {
+    let db = lock_db(&state)?;
+    let pending: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM bible_proposals WHERE run_id=?1 AND review_status='pending'",
+            params![run_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| sql_error("Review-Status konnte nicht geprüft werden", error))?;
+    if pending > 0 {
+        return Err("Bitte prüfe zuerst alle offenen Vorschläge.".into());
+    }
+    db.execute(
+        "UPDATE bible_update_runs SET status='reviewed' WHERE id=?1",
+        params![run_id],
+    )
+    .map_err(|error| sql_error("Bible-Review konnte nicht abgeschlossen werden", error))?;
+    load_run(&db, &run_id)
+}
+
 #[tauri::command]
 pub fn save_story_entity(
     state: State<'_, DbState>,
@@ -641,8 +1139,16 @@ pub fn save_story_entity(
         return Err("Das Projekt des Story-Bible-Eintrags wurde nicht gefunden.".into());
     }
     let timestamp = now();
-    db.execute("INSERT INTO story_entities (id, project_id, name, entity_type, description, status, confidence, source, chapter, scene, author_confirmed, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, name=excluded.name, entity_type=excluded.entity_type, description=excluded.description, status=excluded.status, confidence=excluded.confidence, source=excluded.source, chapter=excluded.chapter, scene=excluded.scene, author_confirmed=excluded.author_confirmed, updated_at=excluded.updated_at", params![input.id, input.project_id, input.name.trim(), input.entity_type, input.description, input.status, input.confidence.clamp(0.0, 1.0), input.source, input.chapter, input.scene, input.author_confirmed, timestamp]).map_err(|error| sql_error("Story-Bible-Eintrag konnte nicht gespeichert werden", error))?;
-    db.query_row("SELECT id, project_id, name, entity_type, description, status, confidence, source, chapter, scene, author_confirmed, created_at, updated_at FROM story_entities WHERE id=?1", params![input.id], entity_from_row).map_err(|error| sql_error("Gespeicherter Story-Bible-Eintrag konnte nicht geladen werden", error))
+    let tags_json = serde_json::to_string(&input.tags)
+        .map_err(|error| sql_error("Tags konnten nicht vorbereitet werden", error))?;
+    db.execute("INSERT INTO story_entities (id, project_id, name, entity_type, description, status, confidence, source, chapter, scene, author_confirmed, updated_at, origin, tags_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'manual', ?13) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, name=excluded.name, entity_type=excluded.entity_type, description=excluded.description, status=excluded.status, confidence=excluded.confidence, source=excluded.source, chapter=excluded.chapter, scene=excluded.scene, author_confirmed=excluded.author_confirmed, updated_at=excluded.updated_at, tags_json=excluded.tags_json", params![input.id, input.project_id, input.name.trim(), input.entity_type, input.description, input.status, input.confidence.clamp(0.0, 1.0), input.source, input.chapter, input.scene, input.author_confirmed, timestamp, tags_json]).map_err(|error| sql_error("Story-Bible-Eintrag konnte nicht gespeichert werden", error))?;
+    db.query_row(entity_query(), params![input.id], entity_from_row)
+        .map_err(|error| {
+            sql_error(
+                "Gespeicherter Story-Bible-Eintrag konnte nicht geladen werden",
+                error,
+            )
+        })
 }
 
 #[tauri::command]
@@ -923,6 +1429,65 @@ mod tests {
         let mut invalid = scene_input_from_scene(&load_scene(&db, "scene-1").unwrap());
         invalid.status = "unknown".into();
         assert!(update_scene_in_db(&db, invalid).is_err());
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn story_entity_service_creates_updates_archives_and_keeps_source() {
+        let (path, db) = connection("story-entity-crud");
+        let created = create_story_entity_in_db(
+            &db,
+            CreateStoryEntityInput {
+                project_id: "project-zugestellt".into(),
+                name: "Neue Spur".into(),
+                entity_type: "clue".into(),
+                description: "Eine beobachtbare Spur.".into(),
+                status: "proposed".into(),
+                confidence: 0.7,
+                chapter_id: Some("chapter-3".into()),
+                scene_id: Some("scene-3".into()),
+                excerpt: "die letzte Stelle".into(),
+                author_confirmed: false,
+                tags: vec!["Test".into()],
+            },
+        )
+        .unwrap();
+        assert_eq!(created.origin, "manual");
+        assert_eq!(created.tags, vec!["Test"]);
+        let source_count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM story_source_references WHERE entity_id=?1",
+                params![created.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(source_count, 1);
+        let updated = update_story_entity_in_db(
+            &db,
+            UpdateStoryEntityInput {
+                id: created.id.clone(),
+                project_id: created.project_id.clone(),
+                name: "Bearbeitete Spur".into(),
+                entity_type: created.entity_type.clone(),
+                description: created.description.clone(),
+                status: "confirmed".into(),
+                confidence: 0.9,
+                chapter_id: Some("chapter-3".into()),
+                scene_id: Some("scene-3".into()),
+                excerpt: created.source.clone(),
+                author_confirmed: true,
+                tags: vec!["Kanon".into()],
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.name, "Bearbeitete Spur");
+        db.execute(
+            "UPDATE story_entities SET status='archived' WHERE id=?1",
+            params![updated.id],
+        )
+        .unwrap();
+        assert_eq!(load_entity(&db, &updated.id).unwrap().status, "archived");
         drop(db);
         let _ = fs::remove_file(path);
     }

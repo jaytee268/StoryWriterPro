@@ -8,6 +8,8 @@ Die kanonische Datenhaltung bleibt relational. Flexible Analysepayloads werden a
 
 Autosave und Historie sind getrennt: Die `SceneSaveQueue` schreibt den aktuellen Szenestand debounced nach SQLite und behält fehlgeschlagene Snapshots für Retries. Historische Snapshots entstehen ausschließlich über `create_scene_version` beziehungsweise vor einer Wiederherstellung. Beim Verlassen des Editors wird der Queue-Controller vor dem View-Wechsel geflusht; beim Tauri-Fensterschließen wird das offizielle `close-requested`-Event genutzt. Der Browser-Preview verwendet nur eine Best-Effort-`beforeunload`-Warnung.
 
+Der Bible-Loop ist ebenfalls getrennt: `LocalPrototypeBibleExtractor` erzeugt typisierte Vorschläge, `bible_update_runs` verhindert unnötige Analysen derselben Szenenfassung, und die Review-Commands ändern den Kanon ausschließlich in einer Transaktion nach Autorentscheidung. `DeterministicProjectContextBuilder` begrenzt den Chat-Kontext auf aktuelle Szene, Kapitel, relevante Entity-Namen, Quellen, offene Handlungsstränge und Widersprüche. Der aktive MockProvider formuliert daraus deterministische Antworten ohne fest codierte Projekt-IDs.
+
 ## Sicherheitsgrenzen
 
 - Provider-Prozesse erhalten später nur einen schreibgeschützten, temporären Projektsnapshot.

@@ -217,6 +217,26 @@ body { background: var(--bg); color: var(--text); }
   transform: rotate(-1deg);
   font-family: "Comic Sans MS", "Bradley Hand", cursive;
 }
+
+.checkline { display: inline-flex; align-items: center; gap: 8px; color: #607186; font-size: 11px; }
+.checkline input { accent-color: var(--accent); }
+.detail-actions, .modal-actions { display: flex; align-items: center; gap: 8px; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; margin-top: 18px; }
+.form-grid .full-field { grid-column: 1 / -1; }
+.bible-form-modal { width: min(700px, calc(100vw - 50px)); }
+.bible-review-modal { width: min(820px, calc(100vw - 50px)); }
+.review-list { display: grid; gap: 10px; max-height: 48vh; overflow: auto; margin: 16px 0; }
+.review-card { display: flex; justify-content: space-between; gap: 18px; padding: 15px; border: 1px solid #d6dee8; border-radius: 9px; background: #f8fafc; }
+.review-card.rejected { opacity: .58; }
+.review-card-main { min-width: 0; }
+.review-card h3 { margin: 8px 0 5px; font-size: 14px; }
+.review-card p { margin: 0 0 7px; color: #52647a; font-size: 12px; line-height: 1.45; }
+.review-card small { color: #7a899a; font-size: 10px; line-height: 1.4; }
+.review-actions { align-items: flex-start; flex-wrap: wrap; justify-content: flex-end; }
+.reviewed-label { align-self: center; color: #287c5a; font-size: 11px; white-space: nowrap; }
+.source-chip-button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border: 1px solid #cbd7e7; border-radius: 999px; color: #526bc0; background: #eef3fb; font-size: 10px; }
+.source-chip-button:hover { border-color: #526bc0; background: #e4ebfb; }
+@media (max-width: 760px) { .form-grid { grid-template-columns: 1fr; } .form-grid .full-field { grid-column: auto; } .review-card { flex-direction: column; } }
 .paper-board .map-node:nth-child(2n) { transform: rotate(1.2deg); background: #fff8df; }
 .paper-board .map-node:nth-child(3n) { transform: rotate(-.4deg); background: #f3f8e8; }
 .paper-board .map-node:hover, .paper-board .map-node.selected { border: 2px solid #8b6d44 !important; box-shadow: 3px 6px 0 #8b6d4440, 0 12px 18px #685a4528; }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { ArrowLeft, ChevronDown, FileDown, History, LoaderCircle, Plus, Save, StickyNote, Type } from 'lucide-react';
+import { ArrowLeft, ChevronDown, FileDown, History, LoaderCircle, Plus, Save, Sparkles, StickyNote, Type } from 'lucide-react';
 import type { Chapter, EditorPreferences, Scene, SceneVersion } from '../../types/domain';
 import { SceneSaveQueue, type SceneSaveStatus } from '../../services/sceneSaveQueue';
 import { VersionHistory } from './VersionHistory';
@@ -18,12 +18,14 @@ interface EditorProps {
   onRestoreVersion: (sceneId: string, versionId: string) => Promise<Scene>;
   onGetEditorPreferences: () => Promise<EditorPreferences>;
   onSaveEditorPreferences: (preferences: EditorPreferences) => Promise<EditorPreferences>;
+  onBibleUpdate: () => Promise<void>;
   onSaveStateChange: (status: SceneSaveStatus) => void;
   onRegisterSaveController: (controller: EditorSaveController | null) => void;
 }
 
 export interface EditorSaveController {
   flush: () => Promise<void>;
+  getDraft: () => Scene | undefined;
   hasPendingChanges: () => boolean;
   getStatus: () => SceneSaveStatus;
   getError: () => unknown;
@@ -37,7 +39,7 @@ const manuscriptFonts: Record<EditorPreferences['fontFamily'], string> = {
   typewriter: "'DM Mono', 'Courier New', monospace",
 };
 
-export function EditorView({ chapters, scene, chapter, onBack, onSelectScene, onSave, onCreateChapter, onCreateScene, onListVersions, onCreateVersion, onRestoreVersion, onGetEditorPreferences, onSaveEditorPreferences, onSaveStateChange, onRegisterSaveController }: EditorProps) {
+export function EditorView({ chapters, scene, chapter, onBack, onSelectScene, onSave, onCreateChapter, onCreateScene, onListVersions, onCreateVersion, onRestoreVersion, onGetEditorPreferences, onSaveEditorPreferences, onBibleUpdate, onSaveStateChange, onRegisterSaveController }: EditorProps) {
   const [draftScene, setDraftScene] = useState<Scene | undefined>(scene);
   const latestDraft = useRef<Scene | undefined>(scene);
   const queue = useRef<SceneSaveQueue | undefined>(undefined);
@@ -69,7 +71,7 @@ export function EditorView({ chapters, scene, chapter, onBack, onSelectScene, on
     let mounted = true;
     const nextQueue = new SceneSaveQueue(onSave, { onStatus: (status) => { if (!mounted) return; setSaveStatus(status); onSaveStateChange(status); if (status !== 'error') setSaveError(''); }, onSaved: (saved) => { if (!mounted) return; latestDraft.current = saved; setDraftScene((current) => current?.id === saved.id ? { ...current, updatedAt: saved.updatedAt } : current); }, onError: (error) => { if (mounted) setSaveError(error instanceof Error ? error.message : 'Die Szene konnte nicht gespeichert werden.'); } });
     queue.current = nextQueue;
-    onRegisterSaveController({ flush: () => nextQueue.flush(), hasPendingChanges: () => nextQueue.hasPendingChanges(), getStatus: () => nextQueue.getStatus(), getError: () => nextQueue.getError() });
+    onRegisterSaveController({ flush: () => nextQueue.flush(), getDraft: () => latestDraft.current, hasPendingChanges: () => nextQueue.hasPendingChanges(), getStatus: () => nextQueue.getStatus(), getError: () => nextQueue.getError() });
     return () => { mounted = false; if (queue.current === nextQueue) { queue.current = undefined; onRegisterSaveController(null); } void nextQueue.dispose(); };
   }, [scene?.id, onSave, onSaveStateChange, onRegisterSaveController]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -94,12 +96,13 @@ export function EditorView({ chapters, scene, chapter, onBack, onSelectScene, on
   const addScene = async (chapterId: string) => { setBusyAction(chapterId); setSaveError(''); try { if (!await flushBeforeLeaving()) return; const created = await onCreateScene(chapterId, 'Neue Szene'); onSelectScene(created.id); } catch (error) { setSaveError(error instanceof Error ? error.message : 'Die Szene konnte nicht angelegt werden.'); } finally { setBusyAction(null); } };
   const addChapter = async () => { setBusyAction('chapter'); setSaveError(''); try { if (!await flushBeforeLeaving()) return; const createdChapter = await onCreateChapter(`Kapitel ${chapters.length + 1}`); const createdScene = await onCreateScene(createdChapter.id, 'Neue Szene'); onSelectScene(createdScene.id); } catch (error) { setSaveError(error instanceof Error ? error.message : 'Das Kapitel konnte nicht angelegt werden.'); } finally { setBusyAction(null); } };
   const openHistory = async () => { if (await flushBeforeLeaving()) setHistoryOpen(true); };
+  const updateBible = async () => { setSaveError(''); try { if (await flushBeforeLeaving()) await onBibleUpdate(); } catch (error) { setSaveError(error instanceof Error ? error.message : 'Das Bible Update konnte nicht gestartet werden.'); } };
   const restoreVersion = async (sceneId: string, versionId: string) => { const restored = await onRestoreVersion(sceneId, versionId); latestDraft.current = restored; setDraftScene(restored); setSaveStatus('saved'); onSaveStateChange('saved'); return restored; };
   const wordCount = useMemo(() => draftScene?.content.trim() ? draftScene.content.trim().split(/\s+/).length : 0, [draftScene?.content]);
   const paperStyle = { '--manuscript-font': manuscriptFonts[preferences.fontFamily], '--manuscript-size': `${preferences.fontSize}px`, '--manuscript-leading': preferences.lineHeight } as CSSProperties;
 
   return <section className="editor-view simple-editor">
-    <div className="simple-editor-head"><div className="editor-heading"><button className="back-button" onClick={() => void requestBack()}><ArrowLeft size={16} /> Zurück</button><span className="eyebrow">SCHREIBEN</span><h1>{chapter?.title ?? 'Kapitel auswählen'}</h1><div className="scene-selector simple-scene-selector"><ChevronDown size={16} /> {draftScene?.title ?? 'Keine Szene'}</div></div><div className="simple-editor-actions"><span className={`save-state save-state-${saveStatus}`}><Save size={15} /> {saveLabels[saveStatus]}</span><button className="ghost-button large" onClick={() => void openHistory()} disabled={!draftScene}><History size={17} /> Verlauf</button></div></div>
+    <div className="simple-editor-head"><div className="editor-heading"><button className="back-button" onClick={() => void requestBack()}><ArrowLeft size={16} /> Zurück</button><span className="eyebrow">SCHREIBEN</span><h1>{chapter?.title ?? 'Kapitel auswählen'}</h1><div className="scene-selector simple-scene-selector"><ChevronDown size={16} /> {draftScene?.title ?? 'Keine Szene'}</div></div><div className="simple-editor-actions"><span className={`save-state save-state-${saveStatus}`}><Save size={15} /> {saveLabels[saveStatus]}</span><button className="ghost-button large" onClick={() => void openHistory()} disabled={!draftScene}><History size={17} /> Verlauf</button><button className="primary-button large" onClick={() => void updateBible()} disabled={!draftScene}><Sparkles size={16} /> Story Bible aktualisieren</button></div></div>
     <div className="editor-layout simple-editor-layout outline-collapsed"><aside id="manuscript-outline" className="document-tree simple-tree chapter-sidebar-collapsed">
       <div className="chapter-rail" aria-label="Kapitelübersicht">{chapters.map((item) => <button key={item.id} className={`chapter-rail-number ${item.id === chapter?.id ? 'active' : ''}`} onClick={() => void selectChapter(item)} aria-label={`${item.title} öffnen`} title={item.title}>{String(item.orderIndex).padStart(2, '0')}</button>)}</div>
       <div className="tree-expanded-content"><div className="tree-head"><span><strong>Dein Manuskript</strong><small>Kapitel und Szenen</small></span><button className="text-button" onClick={() => void addChapter()} disabled={busyAction !== null}>{busyAction === 'chapter' ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />} Kapitel</button></div><div className="tree-list">{chapters.map((item) => <div key={item.id} className="tree-chapter"><button className={`tree-row ${item.id === chapter?.id ? 'active' : ''}`} onClick={() => void selectChapter(item)}><ChevronDown size={15} /><span>{item.title}</span><span className="scene-count">{item.scenes.length}</span></button>{item.scenes.map((itemScene) => <button key={itemScene.id} className={`tree-scene ${itemScene.id === draftScene?.id ? 'active' : ''}`} onClick={() => void selectScene(itemScene.id)} disabled={busyAction !== null}><span className="scene-marker" />{itemScene.title}</button>)}<button className="add-row" onClick={() => void addScene(item.id)} disabled={busyAction !== null}>{busyAction === item.id ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />} Szene hinzufügen</button></div>)}</div><button className="export-button"><FileDown size={16} /> Exportieren</button></div>

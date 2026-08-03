@@ -1,6 +1,6 @@
-import type { AiTask, AiTaskType, ProviderStatus } from '../types/domain';
+import type { AiTask, AiTaskType, ChatSource, ProjectContext, ProviderStatus } from '../types/domain';
 
-export interface AiTaskResult { taskId: string; text: string; structured?: Record<string, unknown>; sources: string[]; }
+export interface AiTaskResult { taskId: string; text: string; structured?: Record<string, unknown>; sources: ChatSource[]; }
 export interface AiProvider { id: string; displayName: string; isAvailable(): Promise<boolean>; getStatus(): Promise<ProviderStatus>; runTask(task: AiTask): Promise<AiTaskResult>; cancelTask(taskId: string): Promise<void>; }
 
 const responses: Record<AiTaskType, string> = {
@@ -19,8 +19,30 @@ export class MockProvider implements AiProvider {
   displayName = 'Mock Provider';
   async isAvailable(): Promise<boolean> { return true; }
   async getStatus(): Promise<ProviderStatus> { return { available: true, label: 'Bereit', detail: 'Lokale Demo-Antworten, kein Netzwerkzugriff' }; }
-  async runTask(task: AiTask): Promise<AiTaskResult> { await new Promise((resolve) => setTimeout(resolve, 240)); return { taskId: task.id, text: responses[task.type], sources: ['Band 1', 'Kapitel 3', 'Szene 2'] }; }
+  async runTask(task: AiTask): Promise<AiTaskResult> { await new Promise((resolve) => setTimeout(resolve, 240)); return { taskId: task.id, text: responses[task.type], sources: [] }; }
   async cancelTask(): Promise<void> { return Promise.resolve(); }
+}
+
+export function answerFromProjectContext(question: string, context: ProjectContext): { text: string; sources: ChatSource[] } {
+  const lower = question.toLocaleLowerCase();
+  const sources: ChatSource[] = context.relevantSources.map((source) => ({ id: source.id, label: source.excerpt ? source.excerpt.slice(0, 42) : 'Quellenstelle', chapterId: source.chapterId, sceneId: source.sceneId, entityId: source.entityId, excerpt: source.excerpt }));
+  const entities = context.relevantEntities;
+  if (lower.includes('figur') || lower.includes('charakter')) {
+    const characters = entities.filter((entity) => entity.type === 'character');
+    return { text: characters.length ? `In der aktuellen Projektumgebung sind ${characters.map((entity) => entity.name).join(', ')} als Figuren relevant. ${characters.map((entity) => `${entity.name}: ${entity.status === 'confirmed' ? 'bestätigt' : 'noch nicht bestätigt'}`).join(' · ')}` : 'Im aktuellen Projektkontext ist keine Figur sicher belegt.', sources };
+  }
+  if (lower.includes('handlungsstrang') || lower.includes('offen')) {
+    return { text: context.openPlotThreads.length ? `Offene Handlungsstränge: ${context.openPlotThreads.map((entity) => `${entity.name} (${entity.status})`).join(', ')}.` : 'Für diese Szene ist kein offener Handlungsstrang im geladenen Kontext vermerkt.', sources };
+  }
+  if (lower.includes('vermut') || lower.includes('unbestätigt')) {
+    const uncertain = entities.filter((entity) => !entity.authorConfirmed || entity.status === 'uncertain' || entity.status === 'proposed');
+    return { text: uncertain.length ? `Noch unbestätigt sind: ${uncertain.map((entity) => `${entity.name} (${entity.status})`).join(', ')}.` : 'Im relevanten Kontext sind keine unbestätigten Einträge vorhanden.', sources };
+  }
+  if (lower.includes('weiß') || lower.includes('wissen') || lower.includes('paketnummer')) {
+    const matches = entities.filter((entity) => `${entity.name} ${entity.description} ${entity.tags.join(' ')}`.toLocaleLowerCase().includes('paket') || entity.type === 'character');
+    return { text: matches.length ? `Im bestätigten beziehungsweise relevanten Kanon steht: ${matches.map((entity) => `${entity.name}: ${entity.description}`).join(' ')}` : 'Dazu ist im aktuellen bestätigten Kontext keine Information gespeichert.', sources };
+  }
+  return { text: context.currentScene ? `Ich habe die aktuelle Szene „${context.currentScene.title}“ und ${entities.length} relevante Story-Bible-Einträge geprüft. Für diese konkrete Frage finde ich im gespeicherten Kontext noch keine sichere Antwort.` : 'Ich finde keine aktuell ausgewählte Szene und kann deshalb keine quellengebundene Antwort geben.', sources };
 }
 
 export class CliProviderPlaceholder implements AiProvider {

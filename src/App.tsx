@@ -4,7 +4,9 @@ import { BookOpen, BrainCircuit, FileText, Gauge, MessageCircle, PanelLeftClose,
 import { useAppStore } from './stores/useAppStore';
 import { demoEvents, mindEdges, mindNodes } from './services/mockData';
 import { createStoryRepository, type RuntimeMode, type StoryRepository } from './services/storyRepository';
-import type { AppView, ChatMessage, Chapter, Scene, WorkspaceSnapshot } from './types/domain';
+import type { AppView, BibleProposal, BibleUpdateRun, ChatMessage, Chapter, ReviewBibleProposalInput, Scene, StoryEntity, StorySourceReference, WorkspaceSnapshot } from './types/domain';
+import { DeterministicProjectContextBuilder } from './services/contextBuilder';
+import { LocalPrototypeBibleExtractor, changedRange, contentHash } from './services/bibleExtractor';
 import { Dashboard } from './features/projects/Dashboard';
 import { EditorView, type EditorSaveController } from './features/editor/EditorView';
 import { ChatPanel } from './features/chat/ChatPanel';
@@ -35,8 +37,11 @@ export function App() {
   const allowNextClose = useRef(false);
   const [closePrompt, setClosePrompt] = useState('');
   const [viewError, setViewError] = useState('');
+  const [activeReviewRun, setActiveReviewRun] = useState<BibleUpdateRun>();
+  const [reviewProposals, setReviewProposals] = useState<BibleProposal[]>([]);
+  const contextBuilder = useMemo(() => new DeterministicProjectContextBuilder(repository), []);
   const registerSaveController = useCallback((controller: EditorSaveController | null) => { editorSaveController.current = controller; }, []);
-  const [messages, setMessages] = useState<ChatMessage[]>([{ id: 'welcome', role: 'assistant', content: 'Willkommen. Ich kenne dein Projekt und helfe dir beim Prüfen.', time: '09:42' }, { id: 'question', role: 'user', content: 'Weiß Marek bereits von der veränderten Paketnummer?', time: '09:43' }, { id: 'answer', role: 'assistant', content: 'Ja. Laut Kapitel 3 erfährt Marek davon. Die Szene ist konsistent.', sources: ['Kapitel 3', 'Szene 2'], time: '09:43' }]);
+  const [messages, setMessages] = useState<ChatMessage[]>([{ id: 'welcome', role: 'assistant', content: 'Willkommen. Stelle eine Frage zu deiner aktuellen Szene oder zur bestätigten Story Bible.', time: 'Jetzt' }]);
   const [activeModal, setActiveModal] = useState<'bible' | 'research' | 'import' | null>(null);
 
   const loadWorkspace = useCallback(async () => {
@@ -140,6 +145,7 @@ export function App() {
     setLoadState((current) => current.status !== 'ready' ? current : { status: 'ready', workspace: { ...current.workspace, project: { ...current.workspace.project, updatedAt: saved.updatedAt ?? current.workspace.project.updatedAt }, chapters: current.workspace.chapters.map((chapter) => chapter.id === saved.chapterId ? { ...chapter, scenes: chapter.scenes.map((scene) => scene.id === saved.id ? saved : scene) } : chapter) } });
   }, []);
   const saveScene = useCallback(async (scene: Scene): Promise<Scene> => { const saved = await repository.updateScene(scene); replaceScene(saved); return saved; }, [replaceScene]);
+  const replaceEntity = useCallback((saved: StoryEntity) => { setLoadState((current) => current.status !== 'ready' ? current : { status: 'ready', workspace: { ...current.workspace, entities: [saved, ...current.workspace.entities.filter((entity) => entity.id !== saved.id)] } }); }, []);
   const listSceneVersions = useCallback((sceneId: string) => repository.listSceneVersions(sceneId), []);
   const createSceneVersion = useCallback((sceneId: string) => repository.createSceneVersion({ sceneId, reason: 'manual' }), []);
   const restoreSceneVersion = useCallback(async (sceneId: string, versionId: string): Promise<Scene> => { const restored = await repository.restoreSceneVersion(sceneId, versionId); replaceScene(restored); return restored; }, [replaceScene]);
@@ -156,12 +162,32 @@ export function App() {
     setLoadState((current) => current.status !== 'ready' ? current : { status: 'ready', workspace: { ...current.workspace, chapters: current.workspace.chapters.map((chapter) => chapter.id === chapterId ? { ...chapter, scenes: [...chapter.scenes, scene] } : chapter) } });
     return scene;
   }, []);
+  const runBibleUpdate = useCallback(async (): Promise<void> => {
+    if (!workspace?.project || !currentScene || !currentChapter) throw new Error('Bitte zuerst eine Szene auswählen.');
+    const controller = editorSaveController.current;
+    if (controller) { await controller.flush(); if (controller.getStatus() === 'error') throw new Error('Die Szene konnte vor dem Bible Update nicht gespeichert werden.'); }
+    const savedScene = controller?.getDraft() ?? currentScene;
+    const existingRuns = await repository.listBibleUpdateRuns(workspace.project.id, savedScene.id);
+    const previousRun = existingRuns.find((run) => ['completed', 'reviewed'].includes(run.status));
+    const run = await repository.createBibleUpdateRun({ projectId: workspace.project.id, sceneId: savedScene.id, sceneUpdatedAt: savedScene.updatedAt ?? '', contentHash: contentHash(savedScene.content), extractorId: 'local-prototype-extractor' });
+    let proposals = await repository.listBibleProposals(run.id);
+    if (!proposals.length || run.id !== previousRun?.id) {
+      const extraction = await new LocalPrototypeBibleExtractor().extract({ project: workspace.project, chapter: currentChapter, scene: savedScene, existingEntities: workspace.entities, previousAnalyzedContent: undefined, changedRange: changedRange(undefined, savedScene.content) });
+      proposals = await repository.saveBibleProposals(run.id, extraction.proposals, workspace.project.id, savedScene.id);
+    }
+    setActiveReviewRun(run);
+    setReviewProposals(proposals);
+    await requestViewChange('bible');
+  }, [currentChapter, currentScene, requestViewChange, workspace]);
+  const reviewProposal = useCallback(async (input: ReviewBibleProposalInput) => { const saved = await repository.reviewBibleProposal(input); setReviewProposals((current) => current.map((proposal) => proposal.id === saved.id ? saved : proposal)); const refreshed = await repository.loadWorkspace(); setLoadState({ status: 'ready', workspace: refreshed }); }, []);
+  const completeBibleReview = useCallback(async () => { if (activeReviewRun) { await repository.completeBibleReview(activeReviewRun.id); setActiveReviewRun(undefined); setReviewProposals([]); setLoadState({ status: 'ready', workspace: await repository.loadWorkspace() }); } }, [activeReviewRun]);
+  const openSourceReference = useCallback(async (reference: StorySourceReference) => { setSelectedSceneId(reference.sceneId); await requestViewChange('editor'); }, [requestViewChange]);
 
   const renderView = () => {
     if (!workspace) return null;
     if (view === 'dashboard') return <Dashboard project={workspace.project} onOpen={() => void requestViewChange('editor')} onImport={() => setActiveModal('import')} />;
-    if (view === 'editor') return <EditorView chapters={workspace.chapters} scene={currentScene} chapter={currentChapter} onBack={() => void requestViewChange('dashboard')} onSelectScene={setSelectedSceneId} onSave={saveScene} onCreateChapter={createChapter} onCreateScene={createScene} onListVersions={listSceneVersions} onCreateVersion={createSceneVersion} onRestoreVersion={restoreSceneVersion} onGetEditorPreferences={getEditorPreferences} onSaveEditorPreferences={saveEditorPreferences} onSaveStateChange={setSaveStatus} onRegisterSaveController={registerSaveController} />;
-    if (view === 'bible' || view === 'characters' || view === 'threads') return <StoryBibleView entities={workspace.entities} initialFilter={view === 'characters' ? 'character' : view === 'threads' ? 'plot_thread' : undefined} />;
+    if (view === 'editor') return <EditorView chapters={workspace.chapters} scene={currentScene} chapter={currentChapter} onBack={() => void requestViewChange('dashboard')} onSelectScene={setSelectedSceneId} onSave={saveScene} onCreateChapter={createChapter} onCreateScene={createScene} onListVersions={listSceneVersions} onCreateVersion={createSceneVersion} onRestoreVersion={restoreSceneVersion} onGetEditorPreferences={getEditorPreferences} onSaveEditorPreferences={saveEditorPreferences} onBibleUpdate={runBibleUpdate} onSaveStateChange={setSaveStatus} onRegisterSaveController={registerSaveController} />;
+    if (view === 'bible' || view === 'characters' || view === 'threads') return <StoryBibleView entities={workspace.entities} projectId={workspace.project.id} chapters={workspace.chapters} repository={repository} activeRun={activeReviewRun} proposals={reviewProposals} onEntityChanged={replaceEntity} onOpenSourceReference={openSourceReference} onReview={reviewProposal} onCompleteReview={completeBibleReview} onCloseReview={() => { setActiveReviewRun(undefined); setReviewProposals([]); }} initialFilter={view === 'characters' ? 'character' : view === 'threads' ? 'plot_thread' : undefined} />;
     if (view === 'timeline') return <TimelineView events={demoEvents} />;
     if (view === 'mindmap') return <MindmapView nodes={mindNodes} edges={mindEdges} />;
     if (view === 'settings') return <SettingsView mode={repository.mode} project={workspace.project} onReload={loadWorkspace} />;
@@ -183,7 +209,7 @@ export function App() {
       <header className="topbar simple-topbar"><div className="topbar-title"><button className="sidebar-toggle" onClick={() => setSidebarOpen((open) => !open)} aria-label={sidebarOpen ? 'Sidebar einklappen' : 'Sidebar öffnen'} title={sidebarOpen ? 'Sidebar einklappen' : 'Sidebar öffnen'}>{sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}</button><div className="topbar-copy"><span className="eyebrow">{view === 'dashboard' ? 'START' : project?.title ?? 'STORYMEMORY'}</span><strong>{topLabel}</strong></div></div><div className="topbar-actions"><span className={`save-state save-state-${saveStatus}`}><span className={`status-dot status-dot-${saveStatus}`} /> {saveLabel[saveStatus]}</span><button className="assistant-button" onClick={() => setAssistantOpen(true)}><MessageCircle size={18} /> Assistent öffnen</button></div></header>
       <div className="content-scroll">{viewError && <div className="save-error workspace-save-error" role="alert"><strong>Speichern erforderlich</strong><span>{viewError}</span><button className="text-button" onClick={() => void retryEditorSave()}>Erneut versuchen</button></div>}{loadState.status === 'loading' && <LoadingView mode={repository.mode} />}{loadState.status === 'error' && <ErrorView message={loadState.message} detail={loadState.detail} onRetry={() => void loadWorkspace()} />}{loadState.status === 'ready' && renderView()}</div>
     </main>
-    {assistantOpen && <div className="assistant-drawer"><button className="drawer-close" onClick={() => setAssistantOpen(false)} aria-label="Assistent schließen"><X size={20} /></button><ChatPanel messages={messages} onMessagesChange={setMessages} /></div>}
+    {assistantOpen && <div className="assistant-drawer"><button className="drawer-close" onClick={() => setAssistantOpen(false)} aria-label="Assistent schließen"><X size={20} /></button>{workspace && <ChatPanel messages={messages} onMessagesChange={setMessages} contextBuilder={contextBuilder} contextRequest={{ projectId: workspace.project.id, currentChapterId: currentChapter?.id, currentSceneId: currentScene?.id }} onOpenSourceReference={(reference) => void openSourceReference(reference)} />}</div>}
     {activeModal && <Modal type={activeModal} onClose={() => setActiveModal(null)} />}
     {closePrompt && <ClosePrompt message={closePrompt} onRetry={() => void finishClose(false)} onForceClose={() => void finishClose(true)} onCancel={() => setClosePrompt('')} />}
   </div>;

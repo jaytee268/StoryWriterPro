@@ -116,6 +116,155 @@ pub struct StoryEntityInput {
     pub tags: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateStoryEntityInput {
+    pub project_id: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub entity_type: String,
+    pub description: String,
+    pub status: String,
+    pub confidence: f64,
+    pub chapter_id: Option<String>,
+    pub scene_id: Option<String>,
+    pub excerpt: String,
+    pub author_confirmed: bool,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateStoryEntityInput {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub entity_type: String,
+    pub description: String,
+    pub status: String,
+    pub confidence: f64,
+    pub chapter_id: Option<String>,
+    pub scene_id: Option<String>,
+    pub excerpt: String,
+    pub author_confirmed: bool,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSourceReferenceInput {
+    pub project_id: String,
+    pub entity_id: Option<String>,
+    pub proposal_id: Option<String>,
+    pub chapter_id: String,
+    pub scene_id: String,
+    pub excerpt: String,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorySourceReference {
+    pub id: String,
+    pub project_id: String,
+    pub entity_id: Option<String>,
+    pub proposal_id: Option<String>,
+    pub chapter_id: String,
+    pub scene_id: String,
+    pub excerpt: String,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BibleUpdateRun {
+    pub id: String,
+    pub project_id: String,
+    pub scene_id: String,
+    pub scene_updated_at: String,
+    pub content_hash: String,
+    pub extractor_id: String,
+    pub status: String,
+    pub created_at: String,
+    pub completed_at: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateBibleUpdateRunInput {
+    pub project_id: String,
+    pub scene_id: String,
+    pub scene_updated_at: String,
+    pub content_hash: String,
+    pub extractor_id: String,
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BibleProposalInput {
+    pub id: Option<String>,
+    pub run_id: String,
+    pub project_id: String,
+    pub scene_id: String,
+    pub target_entity_id: Option<String>,
+    pub proposal_action: String,
+    #[serde(rename = "entityType")]
+    pub entity_type: String,
+    pub candidate_name: String,
+    pub candidate_description: String,
+    pub candidate_status: String,
+    pub confidence: f64,
+    pub classification: String,
+    pub evidence_excerpt: String,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BibleProposal {
+    pub id: String,
+    pub run_id: String,
+    pub project_id: String,
+    pub scene_id: String,
+    pub target_entity_id: Option<String>,
+    pub proposal_action: String,
+    pub entity_type: String,
+    pub candidate_name: String,
+    pub candidate_description: String,
+    pub candidate_status: String,
+    pub confidence: f64,
+    pub classification: String,
+    pub evidence_excerpt: String,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub reason: String,
+    pub review_status: String,
+    pub reviewed_at: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewBibleProposalInput {
+    pub proposal_id: String,
+    pub review_status: String,
+    pub candidate_name: Option<String>,
+    pub candidate_description: Option<String>,
+    pub candidate_status: Option<String>,
+    pub classification: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
@@ -189,6 +338,7 @@ pub struct StoryEntity {
     pub created_at: String,
     pub updated_at: String,
     pub tags: Vec<String>,
+    pub origin: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -229,5 +379,35 @@ pub fn validate_entity_status(value: &str) -> Result<(), String> {
             Ok(())
         }
         _ => Err(format!("Ungültiger Story-Bible-Status: {value}")),
+    }
+}
+
+pub fn validate_proposal_action(value: &str) -> Result<(), String> {
+    match value {
+        "create_entity"
+        | "update_entity"
+        | "add_source"
+        | "mark_contradiction"
+        | "create_open_question"
+        | "create_author_note" => Ok(()),
+        _ => Err(format!("Ungültige Proposal-Aktion: {value}")),
+    }
+}
+
+pub fn validate_proposal_classification(value: &str) -> Result<(), String> {
+    match value {
+        "observable_fact"
+        | "interpretation"
+        | "open_question"
+        | "possible_contradiction"
+        | "author_note" => Ok(()),
+        _ => Err(format!("Ungültige Proposal-Klassifikation: {value}")),
+    }
+}
+
+pub fn validate_review_status(value: &str) -> Result<(), String> {
+    match value {
+        "pending" | "accepted" | "edited" | "rejected" => Ok(()),
+        _ => Err(format!("Ungültiger Review-Status: {value}")),
     }
 }

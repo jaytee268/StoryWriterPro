@@ -3,6 +3,9 @@ import { DesktopCommandError, isTauriRuntime, desktopInvoke } from './desktop';
 import { BrowserDemoRepository } from './storyRepository';
 import { SceneSaveQueue } from './sceneSaveQueue';
 import type { Scene } from '../types/domain';
+import { LocalPrototypeBibleExtractor, contentHash } from './bibleExtractor';
+import { DeterministicProjectContextBuilder } from './contextBuilder';
+import { answerFromProjectContext } from './providerBridge';
 
 const store = new Map<string, string>();
 vi.stubGlobal('localStorage', { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => store.set(key, value), removeItem: (key: string) => store.delete(key) });
@@ -29,4 +32,43 @@ describe('Desktop-Fehler und Autosave', () => {
   it('führt zwei schnelle Flush-Aufrufe ohne parallelen Konflikt aus', async () => { const scene = await firstScene(new BrowserDemoRepository()); let calls = 0; let release: (() => void) | undefined; const queue = new SceneSaveQueue((value) => new Promise<Scene>((resolve) => { calls += 1; release = () => resolve(value); }), { onStatus: () => undefined, onSaved: vi.fn(), onError: vi.fn() }); queue.schedule({ ...scene, content: 'einmal' }); const first = queue.flush(); const second = queue.flush(); expect(calls).toBe(1); release?.(); await Promise.all([first, second]); expect(calls).toBe(1); });
   it('behält einen fehlgeschlagenen Snapshot für den Retry', async () => { const scene = await firstScene(new BrowserDemoRepository()); let attempts = 0; const saved: string[] = []; const queue = new SceneSaveQueue(async (value) => { attempts += 1; if (attempts === 1) throw new Error('SQLite nicht erreichbar'); saved.push(value.content); return value; }, { onStatus: () => undefined, onSaved: vi.fn(), onError: vi.fn() }, 1); queue.schedule({ ...scene, content: 'Retry-Inhalt' }); await queue.flush(); expect(queue.hasPendingChanges()).toBe(true); expect(queue.getStatus()).toBe('error'); await queue.flush(); expect(saved).toEqual(['Retry-Inhalt']); expect(queue.hasPendingChanges()).toBe(false); expect(queue.getStatus()).toBe('saved'); });
   it('meldet pending, saving, saved und error korrekt', async () => { const scene = await firstScene(new BrowserDemoRepository()); let release: (() => void) | undefined; const queue = new SceneSaveQueue((value) => new Promise<Scene>((resolve) => { release = () => resolve(value); }), { onStatus: () => undefined, onSaved: vi.fn(), onError: vi.fn() }); expect(queue.hasPendingChanges()).toBe(false); queue.schedule(scene); expect(queue.hasPendingChanges()).toBe(true); expect(queue.getStatus()).toBe('dirty'); const flush = queue.flush(); expect(queue.getStatus()).toBe('saving'); expect(queue.hasPendingChanges()).toBe(true); release?.(); await flush; expect(queue.getStatus()).toBe('saved'); expect(queue.hasPendingChanges()).toBe(false); });
+});
+
+describe('Story-Bible-Review und grounded context', () => {
+  it('legt, bearbeitet und archiviert einen Story-Bible-Eintrag', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const created = await repository.createStoryEntity({ projectId: workspace.project.id, name: 'Neue Spur', type: 'clue', description: 'Eine überprüfbare Beobachtung.', status: 'proposed', confidence: 0.7, excerpt: 'Eine Spur', authorConfirmed: false, tags: ['Test'] });
+    const edited = await repository.updateStoryEntity({ ...created, projectId: workspace.project.id, name: 'Bearbeitete Spur', excerpt: 'Neue Passage' });
+    expect(edited.name).toBe('Bearbeitete Spur');
+    expect((await repository.archiveStoryEntity(edited.id)).status).toBe('archived');
+    expect((await repository.listStoryEntities(workspace.project.id)).find((entity) => entity.id === edited.id)?.status).toBe('archived');
+  });
+  it('trennt beobachtbare Fakten und Vermutungen im Prototype-Extractor', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const scene = workspace.chapters[2]!.scenes[0]!;
+    const result = await new LocalPrototypeBibleExtractor().extract({ project: workspace.project, chapter: workspace.chapters[2]!, scene, existingEntities: workspace.entities });
+    expect(result.proposals.some((proposal) => proposal.classification === 'observable_fact')).toBe(true);
+    expect(result.proposals.every((proposal) => proposal.candidateDescription !== 'Marek hasst Lena.')).toBe(true);
+  });
+  it('verwendet bei identischem Content Hash denselben abgeschlossenen Run', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const scene = workspace.chapters[0]!.scenes[0]!;
+    const input = { projectId: workspace.project.id, sceneId: scene.id, sceneUpdatedAt: scene.updatedAt ?? '', contentHash: contentHash(scene.content), extractorId: 'local-prototype-extractor' };
+    const first = await repository.createBibleUpdateRun(input);
+    await repository.saveBibleProposals(first.id, [{ proposalAction: 'create_entity', entityType: 'fact', candidateName: 'Testfakt', candidateDescription: 'Beobachtet.', candidateStatus: 'proposed', confidence: 0.5, classification: 'observable_fact', evidenceExcerpt: 'Text', reason: 'Test' }], input.projectId, input.sceneId);
+    const second = await repository.createBibleUpdateRun(input);
+    expect(second.id).toBe(first.id);
+  });
+  it('baut Chat-Antworten nur aus dem aktuellen Kontext', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const builder = new DeterministicProjectContextBuilder(repository);
+    const context = await builder.build({ projectId: workspace.project.id, currentChapterId: workspace.chapters[2]!.id, currentSceneId: workspace.chapters[2]!.scenes[0]!.id, userQuestion: 'Welche Figuren kommen vor?' });
+    const answer = answerFromProjectContext('Welche Figuren kommen vor?', context);
+    expect(answer.text).toContain('Marek');
+    expect(answer.sources.every((source) => source.id)).toBe(true);
+  });
 });

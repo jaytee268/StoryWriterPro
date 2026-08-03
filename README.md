@@ -40,9 +40,9 @@ Das erzeugt `StoryMemory.app`. Der DMG-Schritt kann auf diesem Volume beim Nachb
 
 ## Lokale Datenhaltung
 
-Die kanonische Datenhaltung läuft in SQLite im Rust/Tauri-Layer. Die Datenbank wird bei der ersten App-Ausführung im Tauri-App-Datenverzeichnis unter `storymemory.sqlite3` angelegt. Die versionierten Migrationen liegen in `migrations/001_initial.sql` bis `migrations/005_normalize_scene_version_numbers.sql`. Der Browser-Preview nutzt zusätzlich einen kleinen `localStorage`-Fallback, damit die UI ohne Desktop-Runtime navigierbar bleibt.
+Die kanonische Datenhaltung läuft in SQLite im Rust/Tauri-Layer. Die Datenbank wird bei der ersten App-Ausführung im Tauri-App-Datenverzeichnis unter `storymemory.sqlite3` angelegt. Die versionierten Migrationen liegen in `migrations/001_initial.sql` bis `migrations/006_story_bible_review.sql`. Der Browser-Preview nutzt zusätzlich einen kleinen `localStorage`-Fallback, damit die UI ohne Desktop-Runtime navigierbar bleibt.
 
-Die Datenbank enthält Projekte, Bücher, Kapitel, Szenen, Versionen, Story-Entitäten, Relationen, Fakten, Figurenwissen, Timeline-Ereignisse, Handlungsstränge, Hinweise, Geheimnisse, Korrekturresultate, Analysejobs, Provider-Einstellungen und App-Einstellungen. Provider-Tokens werden nicht in SQLite gespeichert. Story-Bible-Altlasten werden in Migration 004 nur bei genau einem vorhandenen Projekt automatisch zugeordnet; mehrdeutige Zeilen bleiben sichtbar unzugeordnet und werden nicht geraten.
+Die Datenbank enthält Projekte, Bücher, Kapitel, Szenen, Versionen, Story-Entitäten, strukturierte Quellenreferenzen, Bible-Update-Läufe und Review-Vorschläge sowie die bestehenden Relationen, Fakten, Figurenwissen, Timeline-Ereignisse, Handlungsstränge, Hinweise, Geheimnisse, Korrekturresultate, Analysejobs, Provider-Einstellungen und App-Einstellungen. Provider-Tokens werden nicht in SQLite gespeichert. Story-Bible-Altlasten werden in Migration 004 nur bei genau einem vorhandenen Projekt automatisch zugeordnet; mehrdeutige Zeilen bleiben sichtbar unzugeordnet und werden nicht geraten. Migration 006 ergänzt die Review- und Quellenstruktur sowie Herkunft und Tags der Einträge.
 
 ## Architektur
 
@@ -72,8 +72,9 @@ Die UI kennt keine SQL-Abfragen. Sie verwendet Service-Funktionen, die im Deskto
 - navigierbarer Manuskripteditor mit Kapitel-/Szenenbaum, Autosave und Metadaten
 - lokale SQLite-Migration und Rust-Commands für Projekte, Szenen und Story-Bible-Einträge
 - getrennte Szenen-Historie: Autosave erzeugt keine Version pro Tastaturpause; bewusste Versionen werden lokal mit Grund gespeichert
-- Chat-Prototyp mit Mock-Antworten und Quellenchips
-- Story-Bible-Liste, Suche, Filter, Status, Vertrauen und Quelldetail
+- grounded Chat-Prototyp mit deterministischem Projektkontext und Quellenchips
+- Story-Bible-Liste, Suche, Filter, manuelle CRUD-Funktionen, Archivierung, Status, Vertrauen und Quelldetail
+- Bible-Update-Review mit lokalem Prototype-Extractor, Hash-Wiederverwendung und Autor-Bestätigung vor jeder Kanonänderung
 - Timeline mit Spuren, Filtern, Zoom, Auswahl und Detailpanel
 - interaktive Mindmap mit Zoom, Knotenauswahl, Filtern und Beziehungen
 - Bible-Update-Review, Importdialog und Deep-Research-Jobdialog als lokale Mock-Workflows
