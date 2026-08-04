@@ -26,38 +26,40 @@ use crate::{
         ContinuityReviewRun, ContinuityReviewSettings, ContinuityStateLedgerEntry,
         CreateBibleUpdateRunInput, CreateChapterGenerationJobInput, CreateChapterInput,
         CreateCharacterMemoryUpdateRunInput, CreateLoreCrafterRunInput, CreateLoreEntryInput,
-        CreateManuscriptAnalysisJobInput, CreateProjectInput, CreateProjectSourceDocumentInput,
-        CreateProjectSourceReferenceInput, CreateProjectStyleAnalysisRunInput, CreateSceneInput,
-        CreateSceneVersionInput, CreateSourceReferenceInput, CreateStoryEntityInput,
-        CreateStoryEntityRelationInput, CreateStyleReferenceInput, DatabaseInfo,
-        DialogueMemoryParticipant, EditorPreferences, LoreCrafterClarification, LoreCrafterRun,
-        LoreCrafterSourceReference, LoreEntry, LoreMetadata, LoreSheetDraft, LoreSheetItem,
-        ManuscriptAnalysisArtifact, ManuscriptAnalysisDraftLedgerEntry, ManuscriptAnalysisJob,
-        ManuscriptAnalysisPageMarker, ManuscriptAnalysisPhaseResult, ManuscriptAnalysisReviewAudit,
-        ManuscriptAnalysisUnit, ManuscriptImportInput, ManuscriptImportResult, ManuscriptPosition,
-        NarrativeSummary, PlotThreadLifecycle, PlotThreadLifecycleProposal, Project,
-        ProjectOnboardingState, ProjectRule, ProjectRuleProposal, ProjectSourceDocument,
-        ProjectStyle, ProjectStyleAnalysisRun, ProjectStyleObservation, ProviderStatus,
-        ReconcileContinuityTextCorrectionInput, RelationshipMemory, RestoreSceneVersionInput,
-        ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput,
-        SaveChapterGenerationDraftLedgerInput, SaveChapterGenerationPlanInput,
-        SaveChapterGenerationReviewInput, SaveChapterGenerationSectionInput,
-        SaveCharacterDialogueMemoryInput, SaveCharacterExperienceInput,
-        SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput, SaveCharacterSceneStateInput,
-        SaveCharacterVoicePatternInput, SaveContinuityFindingInput, SaveContinuityReviewInput,
-        SaveContinuityReviewRunStatusInput, SaveContinuityStateInput,
+        CreateManuscriptAnalysisJobInput, CreateManuscriptStructureRunInput, CreateProjectInput,
+        CreateProjectSourceDocumentInput, CreateProjectSourceReferenceInput,
+        CreateProjectStyleAnalysisRunInput, CreateSceneInput, CreateSceneVersionInput,
+        CreateSourceReferenceInput, CreateStoryEntityInput, CreateStoryEntityRelationInput,
+        CreateStyleReferenceInput, DatabaseInfo, DialogueMemoryParticipant, EditorPreferences,
+        LoreCrafterClarification, LoreCrafterRun, LoreCrafterSourceReference, LoreEntry,
+        LoreMetadata, LoreSheetDraft, LoreSheetItem, ManuscriptAnalysisArtifact,
+        ManuscriptAnalysisDraftLedgerEntry, ManuscriptAnalysisJob, ManuscriptAnalysisPageMarker,
+        ManuscriptAnalysisPhaseResult, ManuscriptAnalysisReviewAudit, ManuscriptAnalysisUnit,
+        ManuscriptImportInput, ManuscriptImportResult, ManuscriptPosition,
+        ManuscriptStructureProposal, ManuscriptStructureRun, NarrativeSummary, PlotThreadLifecycle,
+        PlotThreadLifecycleProposal, Project, ProjectOnboardingState, ProjectRule,
+        ProjectRuleProposal, ProjectSourceDocument, ProjectStyle, ProjectStyleAnalysisRun,
+        ProjectStyleObservation, ProviderStatus, ReconcileContinuityTextCorrectionInput,
+        RelationshipMemory, RestoreSceneVersionInput, ReviewBibleProposalInput,
+        ReviewCharacterMemoryProposalInput, SaveChapterGenerationDraftLedgerInput,
+        SaveChapterGenerationPlanInput, SaveChapterGenerationReviewInput,
+        SaveChapterGenerationSectionInput, SaveCharacterDialogueMemoryInput,
+        SaveCharacterExperienceInput, SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput,
+        SaveCharacterSceneStateInput, SaveCharacterVoicePatternInput, SaveContinuityFindingInput,
+        SaveContinuityReviewInput, SaveContinuityReviewRunStatusInput, SaveContinuityStateInput,
         SaveLoreCrafterClarificationInput, SaveLoreCrafterSourceInput, SaveLoreMetadataInput,
         SaveLoreSheetDraftInput, SaveLoreSheetItemInput, SaveManuscriptAnalysisArtifactInput,
         SaveManuscriptAnalysisDraftLedgerInput, SaveManuscriptAnalysisPhaseResultInput,
-        SaveManuscriptAnalysisReviewAuditInput, SaveNarrativeSummaryInput,
-        SavePlotThreadLifecycleInput, SavePlotThreadLifecycleProposalInput,
-        SaveProjectOnboardingStateInput, SaveProjectRuleInput, SaveProjectRuleProposalInput,
-        SaveProjectStyleInput, SaveProjectStyleObservationInput, SaveRelationshipMemoryInput,
-        SaveStoryDirectionInput, SaveWritingPreferencesInput, Scene, SceneInput, SceneVersion,
-        StoryDirection, StoryEntity, StoryEntityInput, StoryEntityRelation, StorySourceReference,
-        StyleReference, UpdateChapterInput, UpdateLoreCrafterRunInput,
-        UpdateManuscriptAnalysisJobInput, UpdateManuscriptAnalysisUnitInput,
-        UpdateStoryEntityInput, UpdateStyleReferenceInput, WorkspaceSnapshot, WritingPreferences,
+        SaveManuscriptAnalysisReviewAuditInput, SaveManuscriptStructureProposalInput,
+        SaveNarrativeSummaryInput, SavePlotThreadLifecycleInput,
+        SavePlotThreadLifecycleProposalInput, SaveProjectOnboardingStateInput,
+        SaveProjectRuleInput, SaveProjectRuleProposalInput, SaveProjectStyleInput,
+        SaveProjectStyleObservationInput, SaveRelationshipMemoryInput, SaveStoryDirectionInput,
+        SaveWritingPreferencesInput, Scene, SceneInput, SceneVersion, StoryDirection, StoryEntity,
+        StoryEntityInput, StoryEntityRelation, StorySourceReference, StyleReference,
+        UpdateChapterInput, UpdateLoreCrafterRunInput, UpdateManuscriptAnalysisJobInput,
+        UpdateManuscriptAnalysisUnitInput, UpdateStoryEntityInput, UpdateStyleReferenceInput,
+        WorkspaceSnapshot, WritingPreferences,
     },
 };
 use chrono::Utc;
@@ -4620,6 +4622,314 @@ pub fn list_manuscript_analysis_review_audits(
     result
 }
 
+fn structure_run_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ManuscriptStructureRun> {
+    Ok(ManuscriptStructureRun {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        chapter_id: row.get(2)?,
+        content_hash: row.get(3)?,
+        provider_id: row.get(4)?,
+        prompt_version: row.get(5)?,
+        status: row.get(6)?,
+        error_message: row.get(7)?,
+        created_at: row.get(8)?,
+        updated_at: row.get(9)?,
+    })
+}
+
+fn structure_proposal_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ManuscriptStructureProposal> {
+    Ok(ManuscriptStructureProposal {
+        id: row.get(0)?,
+        run_id: row.get(1)?,
+        project_id: row.get(2)?,
+        chapter_id: row.get(3)?,
+        temporary_id: row.get(4)?,
+        start_offset: row.get(5)?,
+        end_offset: row.get(6)?,
+        title: row.get(7)?,
+        pov_character_name: row.get(8)?,
+        pov_entity_id: row.get(9)?,
+        location: row.get(10)?,
+        story_time: row.get(11)?,
+        participating_character_names: serde_json::from_str(&row.get::<_, String>(12)?)
+            .unwrap_or_default(),
+        goal: row.get(13)?,
+        conflict: row.get(14)?,
+        important_events: serde_json::from_str(&row.get::<_, String>(15)?).unwrap_or_default(),
+        transition_type: row.get(16)?,
+        boundary_reason: row.get(17)?,
+        confidence: row.get(18)?,
+        evidence_excerpt: row.get(19)?,
+        review_status: row.get(20)?,
+        manual_changes: serde_json::from_str(&row.get::<_, String>(21)?)
+            .unwrap_or_else(|_| serde_json::json!({})),
+        created_at: row.get(22)?,
+        updated_at: row.get(23)?,
+    })
+}
+
+fn chapter_plain_text(db: &Connection, chapter_id: &str) -> Result<String, String> {
+    let mut statement = db
+        .prepare("SELECT content FROM scenes WHERE chapter_id=?1 ORDER BY order_index")
+        .map_err(|e| sql_error("Kapiteltext konnte nicht geladen werden", e))?;
+    let contents = statement
+        .query_map(params![chapter_id], |row| row.get::<_, String>(0))
+        .map_err(|e| sql_error("Kapiteltext konnte nicht geladen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Kapiteltext konnte nicht gelesen werden", e))?;
+    Ok(contents
+        .iter()
+        .map(|content| canonical_editor_text(content))
+        .collect::<Vec<_>>()
+        .join("\n\n"))
+}
+
+#[tauri::command]
+pub fn create_manuscript_structure_run(
+    state: State<'_, DbState>,
+    input: CreateManuscriptStructureRunInput,
+) -> Result<ManuscriptStructureRun, String> {
+    let db = lock_db(&state)?;
+    let chapter_project: Option<String> = db
+        .query_row(
+            "SELECT b.project_id FROM chapters c JOIN books b ON b.id=c.book_id WHERE c.id=?1",
+            params![input.chapter_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| sql_error("Kapitel konnte nicht geprüft werden", e))?;
+    if chapter_project.as_deref() != Some(input.project_id.as_str()) {
+        return Err("Kapitel gehört nicht zum Projekt.".into());
+    }
+    let id = new_id();
+    let stamp = now();
+    db.execute("INSERT INTO manuscript_structure_runs(id,project_id,chapter_id,content_hash,provider_id,prompt_version,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,'pending',?7,?7)", params![id,input.project_id,input.chapter_id,input.content_hash,input.provider_id,input.prompt_version,stamp]).map_err(|e| sql_error("Strukturlauf konnte nicht gespeichert werden", e))?;
+    db.query_row("SELECT id,project_id,chapter_id,content_hash,provider_id,prompt_version,status,error_message,created_at,updated_at FROM manuscript_structure_runs WHERE id=?1", params![id], structure_run_from_row).map_err(|e| sql_error("Strukturlauf konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn update_manuscript_structure_run(
+    state: State<'_, DbState>,
+    id: String,
+    status: String,
+    error_message: Option<String>,
+) -> Result<ManuscriptStructureRun, String> {
+    if !matches!(
+        status.as_str(),
+        "pending" | "running" | "completed" | "failed" | "reviewed"
+    ) {
+        return Err("Ungültiger Strukturlaufstatus.".into());
+    }
+    let db = lock_db(&state)?;
+    if db.execute("UPDATE manuscript_structure_runs SET status=?1,error_message=?2,updated_at=?3 WHERE id=?4", params![status,error_message,now(),id]).map_err(|e| sql_error("Strukturlauf konnte nicht aktualisiert werden", e))? == 0 { return Err("Strukturlauf nicht gefunden.".into()); }
+    db.query_row("SELECT id,project_id,chapter_id,content_hash,provider_id,prompt_version,status,error_message,created_at,updated_at FROM manuscript_structure_runs WHERE id=?1", params![id], structure_run_from_row).map_err(|e| sql_error("Strukturlauf konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn list_manuscript_structure_runs(
+    state: State<'_, DbState>,
+    project_id: String,
+    chapter_id: Option<String>,
+) -> Result<Vec<ManuscriptStructureRun>, String> {
+    let db = lock_db(&state)?;
+    let mut statement = db.prepare("SELECT id,project_id,chapter_id,content_hash,provider_id,prompt_version,status,error_message,created_at,updated_at FROM manuscript_structure_runs WHERE project_id=?1 AND (?2 IS NULL OR chapter_id=?2) ORDER BY created_at DESC").map_err(|e| sql_error("Strukturläufe konnten nicht geladen werden", e))?;
+    let result = statement
+        .query_map(params![project_id, chapter_id], structure_run_from_row)
+        .map_err(|e| sql_error("Strukturläufe konnten nicht gelesen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Strukturläufe konnten nicht gelesen werden", e));
+    result
+}
+
+#[tauri::command]
+pub fn list_manuscript_structure_proposals(
+    state: State<'_, DbState>,
+    run_id: String,
+) -> Result<Vec<ManuscriptStructureProposal>, String> {
+    let db = lock_db(&state)?;
+    let mut statement = db.prepare("SELECT p.id,p.run_id,p.project_id,p.chapter_id,p.temporary_id,p.start_offset,p.end_offset,p.title,p.pov_character_name,p.pov_entity_id,p.location,p.story_time,p.participating_character_names_json,p.goal,p.conflict,p.important_events_json,p.transition_type,p.boundary_reason,p.confidence,p.evidence_excerpt,p.review_status,p.manual_changes_json,p.created_at,p.updated_at FROM manuscript_structure_proposals p JOIN manuscript_structure_runs r ON r.id=p.run_id WHERE p.run_id=?1 AND p.project_id=r.project_id ORDER BY p.start_offset").map_err(|e| sql_error("Szenenvorschläge konnten nicht geladen werden", e))?;
+    let result = statement
+        .query_map(params![run_id], structure_proposal_from_row)
+        .map_err(|e| sql_error("Szenenvorschläge konnten nicht gelesen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Szenenvorschläge konnten nicht gelesen werden", e));
+    result
+}
+
+#[tauri::command]
+pub fn save_manuscript_structure_proposals(
+    state: State<'_, DbState>,
+    run_id: String,
+    proposals: Vec<SaveManuscriptStructureProposalInput>,
+) -> Result<Vec<ManuscriptStructureProposal>, String> {
+    let mut db = lock_db(&state)?;
+    let run: ManuscriptStructureRun = db.query_row("SELECT id,project_id,chapter_id,content_hash,provider_id,prompt_version,status,error_message,created_at,updated_at FROM manuscript_structure_runs WHERE id=?1", params![run_id], structure_run_from_row).map_err(|e| sql_error("Strukturlauf konnte nicht geladen werden", e))?;
+    if proposals.is_empty() {
+        return Err("Mindestens ein Szenenvorschlag ist erforderlich.".into());
+    }
+    if proposals.iter().any(|proposal| {
+        proposal.project_id != run.project_id
+            || proposal.chapter_id != run.chapter_id
+            || proposal.run_id != run.id
+            || !(0.0..=1.0).contains(&proposal.confidence)
+    }) {
+        return Err(
+            "Szenenvorschlag gehört nicht zum Strukturlauf oder enthält ungültige Confidence."
+                .into(),
+        );
+    }
+    let text = chapter_plain_text(&db, &run.chapter_id)?;
+    let chars: Vec<char> = text.chars().collect();
+    let mut ordered = proposals.clone();
+    ordered.sort_by_key(|proposal| proposal.start_offset);
+    if ordered[0].start_offset != 0
+        || ordered.last().map(|p| p.end_offset) != Some(chars.len() as i64)
+    {
+        return Err("Szenenvorschläge müssen den vollständigen Kapiteltext abdecken.".into());
+    }
+    let mut expected = 0_i64;
+    for proposal in &ordered {
+        if proposal.start_offset != expected
+            || proposal.start_offset < 0
+            || proposal.end_offset < proposal.start_offset
+            || proposal.end_offset > chars.len() as i64
+        {
+            return Err("Szenenvorschläge enthalten eine Lücke oder Überlappung.".into());
+        }
+        let excerpt: String = chars[proposal.start_offset as usize..proposal.end_offset as usize]
+            .iter()
+            .collect();
+        if excerpt != proposal.evidence_excerpt {
+            return Err("Szenenbeleg stimmt nicht mit dem Kapiteltext überein.".into());
+        }
+        expected = proposal.end_offset;
+    }
+    let transaction = db
+        .transaction()
+        .map_err(|e| sql_error("Strukturspeicherung konnte nicht gestartet werden", e))?;
+    transaction
+        .execute(
+            "DELETE FROM manuscript_structure_proposals WHERE run_id=?1",
+            params![run_id],
+        )
+        .map_err(|e| sql_error("Alte Szenenvorschläge konnten nicht entfernt werden", e))?;
+    for proposal in ordered {
+        let id = proposal.id.unwrap_or_else(new_id);
+        let participants = serde_json::to_string(&proposal.participating_character_names)
+            .unwrap_or_else(|_| "[]".into());
+        let events =
+            serde_json::to_string(&proposal.important_events).unwrap_or_else(|_| "[]".into());
+        let manual =
+            serde_json::to_string(&proposal.manual_changes).unwrap_or_else(|_| "{}".into());
+        transaction.execute("INSERT INTO manuscript_structure_proposals(id,run_id,project_id,chapter_id,temporary_id,start_offset,end_offset,title,pov_character_name,pov_entity_id,location,story_time,participating_character_names_json,goal,conflict,important_events_json,transition_type,boundary_reason,confidence,evidence_excerpt,review_status,manual_changes_json,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,COALESCE(?21,'proposed'),?22,?23,?23)", params![id,proposal.run_id,proposal.project_id,proposal.chapter_id,proposal.temporary_id,proposal.start_offset,proposal.end_offset,proposal.title,proposal.pov_character_name,proposal.pov_entity_id,proposal.location,proposal.story_time,participants,proposal.goal,proposal.conflict,events,proposal.transition_type,proposal.boundary_reason,proposal.confidence,proposal.evidence_excerpt,proposal.review_status,manual,now()]).map_err(|e| sql_error("Szenenvorschlag konnte nicht gespeichert werden", e))?;
+    }
+    transaction
+        .commit()
+        .map_err(|e| sql_error("Szenenvorschläge konnten nicht gespeichert werden", e))?;
+    drop(db);
+    list_manuscript_structure_proposals(state, run_id)
+}
+
+#[tauri::command]
+pub fn review_manuscript_structure_proposal(
+    state: State<'_, DbState>,
+    id: String,
+    review_status: String,
+    manual_changes: Option<serde_json::Value>,
+) -> Result<ManuscriptStructureProposal, String> {
+    if !matches!(
+        review_status.as_str(),
+        "proposed" | "accepted" | "edited" | "rejected" | "uncertain"
+    ) {
+        return Err("Ungültiger Szenenvorschlagsstatus.".into());
+    }
+    let db = lock_db(&state)?;
+    let changes = serde_json::to_string(&manual_changes.unwrap_or_else(|| serde_json::json!({})))
+        .unwrap_or_else(|_| "{}".into());
+    if db.execute("UPDATE manuscript_structure_proposals SET review_status=?1,manual_changes_json=?2,updated_at=?3 WHERE id=?4", params![review_status,changes,now(),id]).map_err(|e| sql_error("Szenenvorschlag konnte nicht geprüft werden", e))? == 0 { return Err("Szenenvorschlag nicht gefunden.".into()); }
+    db.query_row("SELECT id,run_id,project_id,chapter_id,temporary_id,start_offset,end_offset,title,pov_character_name,pov_entity_id,location,story_time,participating_character_names_json,goal,conflict,important_events_json,transition_type,boundary_reason,confidence,evidence_excerpt,review_status,manual_changes_json,created_at,updated_at FROM manuscript_structure_proposals WHERE id=?1", params![id], structure_proposal_from_row).map_err(|e| sql_error("Szenenvorschlag konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn apply_manuscript_structure(
+    state: State<'_, DbState>,
+    project_id: String,
+    run_id: String,
+) -> Result<Vec<Scene>, String> {
+    let mut db = lock_db(&state)?;
+    let run: ManuscriptStructureRun = db.query_row("SELECT id,project_id,chapter_id,content_hash,provider_id,prompt_version,status,error_message,created_at,updated_at FROM manuscript_structure_runs WHERE id=?1", params![run_id], structure_run_from_row).map_err(|e| sql_error("Strukturlauf konnte nicht geladen werden", e))?;
+    if run.project_id != project_id {
+        return Err("Strukturlauf gehört nicht zum Projekt.".into());
+    }
+    let proposals = {
+        let mut statement = db.prepare("SELECT id,run_id,project_id,chapter_id,temporary_id,start_offset,end_offset,title,pov_character_name,pov_entity_id,location,story_time,participating_character_names_json,goal,conflict,important_events_json,transition_type,boundary_reason,confidence,evidence_excerpt,review_status,manual_changes_json,created_at,updated_at FROM manuscript_structure_proposals WHERE run_id=?1 ORDER BY start_offset").map_err(|e| sql_error("Szenenvorschläge konnten nicht geladen werden", e))?;
+        let rows = statement
+            .query_map(params![run_id], structure_proposal_from_row)
+            .map_err(|e| sql_error("Szenenvorschläge konnten nicht gelesen werden", e))?
+            .collect::<SqlResult<Vec<_>>>()
+            .map_err(|e| sql_error("Szenenvorschläge konnten nicht gelesen werden", e));
+        rows?
+    };
+    if proposals.is_empty()
+        || proposals
+            .iter()
+            .any(|proposal| !matches!(proposal.review_status.as_str(), "accepted" | "edited"))
+    {
+        return Err(
+            "Alle Szenenvorschläge müssen vor der Übernahme bestätigt oder bearbeitet werden."
+                .into(),
+        );
+    }
+    let text = chapter_plain_text(&db, &run.chapter_id)?;
+    let chars: Vec<char> = text.chars().collect();
+    let mut expected = 0_i64;
+    for proposal in &proposals {
+        if proposal.start_offset != expected
+            || proposal.end_offset < proposal.start_offset
+            || proposal.end_offset as usize > chars.len()
+        {
+            return Err("Szenenvorschläge sind nicht lückenlos.".into());
+        }
+        expected = proposal.end_offset;
+    }
+    if expected != chars.len() as i64 {
+        return Err("Szenenvorschläge decken das Kapitel nicht vollständig ab.".into());
+    }
+    let old_scene: Scene = db.query_row("SELECT id,chapter_id,title,order_index,content,pov,location,story_time,status,goal,notes,is_implicit,created_at,updated_at FROM scenes WHERE chapter_id=?1 ORDER BY order_index LIMIT 1", params![run.chapter_id], scene_from_row).map_err(|e| sql_error("Implizite Importszene konnte nicht geladen werden", e))?;
+    let timestamp = now();
+    let transaction = db
+        .transaction()
+        .map_err(|e| sql_error("Strukturübernahme konnte nicht gestartet werden", e))?;
+    insert_scene_version_in_transaction(&transaction, &old_scene, &timestamp, "structure_review")?;
+    let mut result = Vec::new();
+    for (index, proposal) in proposals.iter().enumerate() {
+        let content: String = chars[proposal.start_offset as usize..proposal.end_offset as usize]
+            .iter()
+            .collect();
+        let id = if index == 0 {
+            old_scene.id.clone()
+        } else {
+            new_id()
+        };
+        transaction.execute("INSERT INTO scenes(id,chapter_id,title,order_index,content,pov,location,story_time,status,goal,notes,is_implicit,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'draft',?9,?10,0,?11,?11) ON CONFLICT(id) DO UPDATE SET title=excluded.title,order_index=excluded.order_index,content=excluded.content,pov=excluded.pov,location=excluded.location,story_time=excluded.story_time,status=excluded.status,goal=excluded.goal,notes=excluded.notes,is_implicit=0,updated_at=excluded.updated_at", params![id,run.chapter_id,proposal.title,index as i64+1,content,proposal.pov_character_name.clone().unwrap_or_default(),proposal.location,proposal.story_time,proposal.goal,proposal.boundary_reason,timestamp]).map_err(|e| sql_error("Szene konnte nicht atomar übernommen werden", e))?;
+        let scene = transaction.query_row("SELECT id,chapter_id,title,order_index,content,pov,location,story_time,status,goal,notes,is_implicit,created_at,updated_at FROM scenes WHERE id=?1", params![id], scene_from_row).map_err(|e| sql_error("Übernommene Szene konnte nicht geladen werden", e))?;
+        transaction.execute("INSERT INTO scene_versions(id,scene_id,content,reason,created_at,version_number,snapshot_json) VALUES(?1,?2,?3,'structure_review',?4,1,'')", params![new_id(),scene.id,scene.content,timestamp]).map_err(|e| sql_error("Anfangsversion der Szene konnte nicht gespeichert werden", e))?;
+        result.push(scene);
+    }
+    transaction
+        .execute(
+            "DELETE FROM scenes WHERE chapter_id=?1 AND id<>?2 AND is_implicit=1",
+            params![run.chapter_id, old_scene.id],
+        )
+        .map_err(|e| sql_error("Alte implizite Szenen konnten nicht bereinigt werden", e))?;
+    transaction
+        .commit()
+        .map_err(|e| sql_error("Strukturübernahme konnte nicht abgeschlossen werden", e))?;
+    drop(db);
+    update_manuscript_structure_run(state, run_id, "reviewed".into(), None)?;
+    Ok(result)
+}
+
 #[tauri::command]
 pub fn list_continuity_review_runs(
     state: State<'_, DbState>,
@@ -7938,7 +8248,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            25
+            26
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);

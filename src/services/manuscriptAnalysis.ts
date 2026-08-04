@@ -5,6 +5,7 @@ import { editorContentToPlainText } from '../utils/editorContent';
 import { providerRouter, type StoryAiProvider as Provider } from './aiProviderService';
 import { runContinuityReview } from './continuityReview';
 import { DeterministicProjectContextBuilder } from './contextBuilder';
+import { validateManuscriptStructure, localStructureHints } from './manuscriptStructure';
 
 const activeJobs = new Map<string, Promise<void>>();
 const PHASES: ManuscriptAnalysisPhase[] = ['structure', 'passage_continuity', 'bible_extraction', 'character_memory', 'scene_or_chapter_synthesis', 'narrative_summaries', 'plot_thread_synthesis', 'book_end_state', 'global_countercheck', 'user_review', 'completed'];
@@ -148,7 +149,7 @@ export class ManuscriptAnalysisController {
       if (!await this.checkControl(job)) return;
       try {
         job = await this.savePhase(job, phase, { status: 'running', requestedProvider: active.provider.id, errorCode: undefined, errorMessage: undefined }, 'running');
-        if (phase === 'structure') await this.runStructure(job, chapters, units);
+        if (phase === 'structure') await this.runStructure(job, workspace, chapters, units, active.provider, active.settings.bibleUpdateTimeoutSeconds);
         else if (phase === 'passage_continuity') await this.runContinuity(job, workspace, units, active.provider);
         else if (phase === 'bible_extraction') await this.runBible(job, workspace, units, active.provider, active.settings.bibleUpdateTimeoutSeconds);
         else if (phase === 'character_memory') await this.runCharacterMemory(job, workspace, units, active.provider, active.settings.bibleUpdateTimeoutSeconds);
@@ -175,10 +176,38 @@ export class ManuscriptAnalysisController {
     await this.repository.updateManuscriptAnalysisJob({ id: this.jobId, status: 'completed', currentPhase: 'completed', phaseProgress: { ...finalJob.phaseProgress, completed: { ...(finalJob.phaseProgress.completed ?? this.emptyProgress('completed', 1, active.provider.id)), status: 'completed', totalUnits: 1, completedUnits: 1, actualProvider: active.provider.id, updatedAt: new Date().toISOString() } }, currentUnitId: undefined, errorMessage: undefined });
   }
 
-  private async runStructure(job: ManuscriptAnalysisJob, chapters: Chapter[], units: ManuscriptAnalysisUnit[]): Promise<void> {
+  private async runStructure(job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, chapters: Chapter[], units: ManuscriptAnalysisUnit[], provider: Provider, timeout: number): Promise<void> {
     if (!chapters.length || units.length === 0) throw new Error('Das Manuskript enthält keine analysierbaren Kapitelprüfeinheiten.');
     if (chapters.some((chapter) => chapter.scenes.length === 0)) throw new Error('Ein Kapitel besitzt keine implizite Importszene. Die Struktur muss zuerst repariert werden.');
-    await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'running', phaseProgress: { ...job.phaseProgress, structure: { ...(job.phaseProgress.structure ?? this.emptyProgress('structure', chapters.length, job.providerId)), status: 'completed', totalUnits: chapters.length, completedUnits: chapters.length, updatedAt: new Date().toISOString() } } });
+    const progress = job.phaseProgress.structure ?? this.emptyProgress('structure', chapters.length, provider.id);
+    if (typeof provider.analyzeManuscriptStructure !== 'function') {
+      await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'running', phaseProgress: { ...job.phaseProgress, structure: { ...progress, status: 'completed', totalUnits: chapters.length, completedUnits: chapters.length, updatedAt: new Date().toISOString() } } });
+      return;
+    }
+    for (let index = 0; index < chapters.length; index += 1) {
+      if (!await this.checkControl(job)) return;
+      const chapter = chapters[index];
+      const text = chapterText(chapter);
+      const hash = contentHash(text);
+      const existing = (await this.repository.listManuscriptStructureRuns(workspace.project.id, chapter.id)).find((run) => run.contentHash === hash && ['completed', 'reviewed'].includes(run.status));
+      if (existing) { progress.completedUnits = index + 1; progress.lastSuccessfulUnitId = existing.id; continue; }
+      const run = await this.repository.createManuscriptStructureRun(workspace.project.id, chapter.id, hash, provider.id, `${PROMPT_VERSION}-structure`);
+      await this.repository.updateManuscriptStructureRun(run.id, 'running');
+      try {
+        const [lore, rules] = await Promise.all([this.repository.getLoreMetadata(workspace.project.id), this.repository.listProjectRules(workspace.project.id, true)]);
+        const structureChapter = { ...chapter, scenes: chapter.scenes.map((scene) => ({ ...scene, content: editorContentToPlainText(scene.content) })) };
+        const result = await provider.analyzeManuscriptStructure({ projectId: workspace.project.id, chapter: structureChapter, pageMarkers: job.pageMarkers.filter((marker) => marker.chapterId === chapter.id), localHints: localStructureHints(text), confirmedLore: lore.filter((item) => workspace.entities.some((entity) => entity.id === item.entityId && entity.authorConfirmed)), confirmedRules: rules.filter((rule) => rule.status === 'confirmed' && rule.authorConfirmed) }, timeout);
+        const proposals = result.scenes.map((proposal) => ({ ...proposal, runId: run.id, projectId: workspace.project.id, chapterId: chapter.id, reviewStatus: 'proposed' as const, evidenceExcerpt: proposal.evidenceExcerpt }));
+        validateManuscriptStructure(text, proposals);
+        await this.repository.saveManuscriptStructureProposals(run.id, proposals);
+        await this.repository.updateManuscriptStructureRun(run.id, 'completed');
+        progress.completedUnits = index + 1; progress.lastSuccessfulUnitId = run.id; progress.actualProvider = provider.id; progress.updatedAt = new Date().toISOString();
+        await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'running', currentPhase: 'structure', phaseProgress: { ...(await this.repository.getManuscriptAnalysisJob(job.id)).phaseProgress, structure: progress } });
+      } catch (error) {
+        await this.repository.updateManuscriptStructureRun(run.id, 'failed', errorText(error));
+        throw error;
+      }
+    }
   }
 
   private async runContinuity(job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, units: ManuscriptAnalysisUnit[], provider: Provider): Promise<void> {

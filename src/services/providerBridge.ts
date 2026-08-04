@@ -13,6 +13,7 @@ const responses: Record<AiTaskType, string> = {
   timeline_validation: 'Keine harten Zeitkonflikte in den geladenen Beispieldaten gefunden.',
   character_analysis: 'Mareks Reaktion passt zum bestätigten Charakterbogen; seine Lüge markiert eine neue Eskalationsstufe.',
   continuity_passage: 'Die semantische Continuity-Prüfung wird über den aktiven AI-Provider ausgeführt; lokale Heuristiken markieren nur Kandidaten.',
+  manuscript_structure: 'Die semantische Manuskriptstruktur wird über den aktiven AI-Provider vorgeschlagen und bleibt reviewpflichtig.',
 };
 
 export class MockProvider implements AiProvider {

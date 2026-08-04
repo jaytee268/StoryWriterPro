@@ -717,6 +717,94 @@ pub struct SaveManuscriptAnalysisReviewAuditInput {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ManuscriptStructureRun {
+    pub id: String,
+    pub project_id: String,
+    pub chapter_id: String,
+    pub content_hash: String,
+    pub provider_id: String,
+    pub prompt_version: String,
+    pub status: String,
+    pub error_message: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManuscriptStructureProposal {
+    pub id: String,
+    pub run_id: String,
+    pub project_id: String,
+    pub chapter_id: String,
+    pub temporary_id: String,
+    pub start_offset: i64,
+    pub end_offset: i64,
+    pub title: String,
+    pub pov_character_name: Option<String>,
+    pub pov_entity_id: Option<String>,
+    pub location: String,
+    pub story_time: String,
+    pub participating_character_names: Vec<String>,
+    pub goal: String,
+    pub conflict: String,
+    pub important_events: Vec<String>,
+    pub transition_type: String,
+    pub boundary_reason: String,
+    pub confidence: f64,
+    pub evidence_excerpt: String,
+    pub review_status: String,
+    pub manual_changes: serde_json::Value,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateManuscriptStructureRunInput {
+    pub project_id: String,
+    pub chapter_id: String,
+    pub content_hash: String,
+    pub provider_id: String,
+    pub prompt_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveManuscriptStructureProposalInput {
+    pub id: Option<String>,
+    pub run_id: String,
+    pub project_id: String,
+    pub chapter_id: String,
+    pub temporary_id: String,
+    pub start_offset: i64,
+    pub end_offset: i64,
+    pub title: String,
+    pub pov_character_name: Option<String>,
+    pub pov_entity_id: Option<String>,
+    #[serde(default)]
+    pub location: String,
+    #[serde(default)]
+    pub story_time: String,
+    #[serde(default)]
+    pub participating_character_names: Vec<String>,
+    #[serde(default)]
+    pub goal: String,
+    #[serde(default)]
+    pub conflict: String,
+    #[serde(default)]
+    pub important_events: Vec<String>,
+    pub transition_type: String,
+    pub boundary_reason: String,
+    pub confidence: f64,
+    pub evidence_excerpt: String,
+    pub review_status: Option<String>,
+    #[serde(default)]
+    pub manual_changes: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ContinuityReviewFinding {
     pub id: String,
     pub run_id: String,
