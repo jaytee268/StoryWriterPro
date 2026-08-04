@@ -471,6 +471,17 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
     if has_ai_continuity_evidence == 0 {
         connection.execute("INSERT INTO schema_migrations (version) VALUES (16)", [])?;
     }
+    let has_resumable_manuscript_analysis: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 17",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_resumable_manuscript_analysis == 0 {
+        connection.execute_batch(include_str!(
+            "../../../migrations/017_resumable_manuscript_analysis.sql"
+        ))?;
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (17)", [])?;
+    }
     Ok(())
 }
 
@@ -626,7 +637,7 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            16
+            17
         );
         assert_eq!(
             connection
@@ -637,9 +648,13 @@ mod tests {
         for table in [
             "continuity_review_settings",
             "continuity_review_runs",
+            "continuity_review_run_statuses",
             "continuity_review_findings",
             "plot_thread_lifecycle",
             "plot_thread_lifecycle_proposals",
+            "manuscript_analysis_jobs",
+            "manuscript_analysis_units",
+            "manuscript_analysis_draft_ledger",
         ] {
             assert_eq!(
                 connection
@@ -653,6 +668,31 @@ mod tests {
                 "missing table {table}"
             );
         }
+        drop(connection);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn resumable_analysis_schema_persists_unicode_positions_and_terminal_states() {
+        let path = temp_path("resumable-analysis-schema");
+        let connection = database_path_for_test(&path).unwrap();
+        let job_sql: String = connection
+            .query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name='manuscript_analysis_jobs'", [], |row| row.get(0))
+            .unwrap();
+        let unit_sql: String = connection
+            .query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name='manuscript_analysis_units'", [], |row| row.get(0))
+            .unwrap();
+        let run_sql: String = connection
+            .query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name='continuity_review_run_statuses'", [], |row| row.get(0))
+            .unwrap();
+        assert!(job_sql.contains("page_markers_json"));
+        assert!(job_sql.contains("'paused'"));
+        assert!(job_sql.contains("'cancelled'"));
+        assert!(unit_sql.contains("start_offset"));
+        assert!(unit_sql.contains("content_hash"));
+        assert!(run_sql.contains("'pending'"));
+        assert!(run_sql.contains("'failed'"));
+        assert!(run_sql.contains("'cancelled'"));
         drop(connection);
         let _ = fs::remove_file(path);
     }
@@ -845,7 +885,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                16
+                17
             );
             // Running startup migrations again must not change the assignment
             // or fail on the ALTER TABLE statement.

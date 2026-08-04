@@ -169,7 +169,8 @@ export function splitContinuityUnits(text: string, pageMarkers: ManuscriptPageMa
   while (cursor < characters.length) {
     const remaining = characters.slice(cursor).join('');
     if (wordCount(remaining) <= targetWords) { units.push({ text: remaining.trim(), startOffset: cursor, endOffset: characters.length }); break; }
-    const rough = Math.min(remaining.length, Math.max(1, Math.floor(remaining.length * targetWords / wordCount(remaining))));
+    const remainingCharacters = characters.length - cursor;
+    const rough = Math.min(remainingCharacters, Math.max(1, Math.floor(remainingCharacters * targetWords / wordCount(remaining))));
     const lowerBound = cursor + Math.floor(rough * 0.65);
     let endOffset = -1;
     for (let index = Math.min(characters.length, cursor + rough); index > lowerBound; index -= 1) {

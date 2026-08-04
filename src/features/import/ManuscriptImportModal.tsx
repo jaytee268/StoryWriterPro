@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Check, Merge, Scissors, Upload, X } from 'lucide-react';
-import type { ManuscriptImportResult } from '../../types/domain';
+import type { ManuscriptAnalysisPageMarker, ManuscriptImportResult } from '../../types/domain';
 import type { StoryRepository } from '../../services/storyRepository';
 import { mergeImportChapters, parseManuscriptFile, splitContinuityUnits, splitImportChapter, type ManuscriptImportChapterPreview, type ManuscriptImportPreview, type ContinuityPassageUnit } from '../../services/manuscriptImport';
 
@@ -9,7 +9,7 @@ interface Props {
   bookId: string;
   repository: StoryRepository;
   onClose: () => void;
-  onImported: (result: ManuscriptImportResult, pageMarkersFound?: number, unitsByChapter?: ContinuityPassageUnit[][]) => Promise<void>;
+  onImported: (result: ManuscriptImportResult, pageMarkersFound?: number, unitsByChapter?: ContinuityPassageUnit[][], pageMarkersByChapter?: ManuscriptAnalysisPageMarker[][]) => Promise<void>;
 }
 
 export function ManuscriptImportModal({ projectId, bookId, repository, onClose, onImported }: Props) {
@@ -72,7 +72,7 @@ export function ManuscriptImportModal({ projectId, bookId, repository, onClose, 
     setStatus('importing'); setError('');
     try {
       const result = await repository.importManuscript({ projectId, bookId, chapters: preview.chapters.map(({ title, content }) => ({ title, content })) });
-      await onImported(result, preview.pageMarkersFound, preview.chapters.map((chapter) => splitContinuityUnits(chapter.content, chapter.pageMarkers)));
+      await onImported(result, preview.pageMarkersFound, preview.chapters.map((chapter) => splitContinuityUnits(chapter.content, chapter.pageMarkers)), preview.chapters.map((chapter, index) => chapter.pageMarkers.map((marker) => ({ chapterId: result.chapters[index]?.id ?? chapter.id, pageNumber: marker.page, label: marker.label, sourceOffset: marker.sourceOffset, textOffset: marker.textOffset }))));
     } catch (reason) {
       setStatus('error'); setError(reason instanceof Error ? reason.message : 'Der Import konnte nicht gespeichert werden.');
     }

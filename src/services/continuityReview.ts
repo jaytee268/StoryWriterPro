@@ -18,6 +18,9 @@ export interface ContinuityReviewRequest {
   endOffset?: number;
   draftLedger?: ContinuityStateLedgerEntry[];
   provider?: StoryAiProvider;
+  persistStateProposals?: boolean;
+  isCancelled?: () => boolean;
+  forceAnalysis?: boolean;
 }
 
 export interface ContinuityPrefilter {
@@ -89,16 +92,16 @@ function proposedStateInput(projectId: string, chapter: Chapter | undefined, sce
   return { projectId, entityId: item.entityId, relatedEntityId: item.relatedEntityId, stateKind: item.stateKind, previousState: item.previousState, newState: item.newState, chapterId: chapter?.id, sceneId: scene?.id, startOffset: item.startOffset, endOffset: item.endOffset, status: 'proposed', confidence: item.confidence, authorConfirmed: false };
 }
 
-export async function runContinuityReview(repository: StoryRepository, input: ContinuityReviewRequest): Promise<{ runId: string; findings: ContinuityReviewFinding[]; stateProposals: ContinuityStateLedgerEntry[]; analysis: ContinuityAnalysisResult }> {
+export async function runContinuityReview(repository: StoryRepository, input: ContinuityReviewRequest): Promise<{ runId: string; findings: ContinuityReviewFinding[]; stateProposals: ContinuityStateLedgerEntry[]; draftStateChanges: ContinuityAnalysisResult['proposedStateChanges']; analysis: ContinuityAnalysisResult }> {
   const workspace = await repository.loadWorkspace();
   const settings = await repository.getContinuityReviewSettings(input.project.id);
   const currentText = editorContentToPlainText(input.currentText);
   const previousText = input.previousText ? editorContentToPlainText(input.previousText) : undefined;
   const followingText = input.followingText ? editorContentToPlainText(input.followingText) : undefined;
-  if (!shouldRunContinuityReview(previousText, currentText, settings.wordThreshold, input.sourceKind)) return { runId: '', findings: [], stateProposals: [], analysis: { observedActions: [], proposedStateChanges: [], objectiveContradictions: [], missingExplanations: [], matchedLoreRules: [], newRuleProposals: [], plotThreadChanges: [], confidence: 0, evidence: [], warnings: ['Die konfigurierte Prüfschwelle wurde noch nicht erreicht.'] } };
+  if (!input.forceAnalysis && !shouldRunContinuityReview(previousText, currentText, settings.wordThreshold, input.sourceKind)) return { runId: '', findings: [], stateProposals: [], draftStateChanges: [], analysis: { observedActions: [], proposedStateChanges: [], objectiveContradictions: [], missingExplanations: [], matchedLoreRules: [], newRuleProposals: [], plotThreadChanges: [], confidence: 0, evidence: [], warnings: ['Die konfigurierte Prüfschwelle wurde noch nicht erreicht.'] } };
   const hash = contentHash(`${currentText}\n${previousText ?? ''}\n${followingText ?? ''}`);
   const previousRun = (await repository.listContinuityReviewRuns(input.project.id, input.chapter?.id, input.scene?.id)).find((run) => run.sourceKind === input.sourceKind && run.contentHash === hash && run.status === 'completed');
-  if (previousRun) return { runId: previousRun.id, findings: await repository.listContinuityReviewFindings(input.project.id, previousRun.id), stateProposals: [], analysis: { observedActions: [], proposedStateChanges: [], objectiveContradictions: [], missingExplanations: [], matchedLoreRules: [], newRuleProposals: [], plotThreadChanges: [], confidence: 0, evidence: [], warnings: ['Dieser Abschnitt wurde bereits mit demselben Inhalt geprüft.'] } };
+  if (previousRun) return { runId: previousRun.id, findings: await repository.listContinuityReviewFindings(input.project.id, previousRun.id), stateProposals: [], draftStateChanges: [], analysis: { observedActions: [], proposedStateChanges: [], objectiveContradictions: [], missingExplanations: [], matchedLoreRules: [], newRuleProposals: [], plotThreadChanges: [], confidence: 0, evidence: [], warnings: ['Dieser Abschnitt wurde bereits mit demselben Inhalt geprüft.'] } };
 
   const entities = await repository.listStoryEntities(input.project.id);
   const [ledger, rules, sources, lore, knowledgeStates, experiences, dialogueMemories, relationshipMemories, openFindings, profiles] = await Promise.all([
@@ -121,25 +124,31 @@ export async function runContinuityReview(repository: StoryRepository, input: Co
   const relevantStates = [...prefilter.confirmedStates, ...(input.draftLedger ?? []).filter((entry) => candidateIds.has(entry.entityId))];
   const providerInput: ContinuityAnalysisInput = { projectId: input.project.id, passage: { text: currentText, changedText: Array.from(currentText).slice(input.startOffset ?? incrementalWordRange(previousText, currentText).start, input.endOffset ?? incrementalWordRange(previousText, currentText).end).join(''), chapterId: input.chapter?.id, sceneId: input.scene?.id, startOffset: input.startOffset, endOffset: input.endOffset }, previousContext: previousText ?? '', followingContext: followingText ?? '', confirmedStoryBible: confirmedEntities, confirmedLore: lore.filter((item) => candidateIds.has(item.entityId)), confirmedRules, continuityStatesBeforePosition: relevantStates, draftLedger: input.draftLedger ?? [], characterKnowledge: knowledgeStates.filter((state) => candidateIds.has(state.characterId)), characterProfiles: profiles.filter((profile): profile is NonNullable<typeof profile> => Boolean(profile)), characterMemories: [...experiences, ...dialogueMemories, ...relationshipMemories], activePlotThreads: confirmedEntities.filter((entity) => entity.type === 'plot_thread'), relevantSources, openFindings: openFindings.filter((finding) => finding.reviewStatus === 'open').map(({ id, objectiveConflict, reviewStatus }) => ({ id, objectiveConflict, reviewStatus })) };
   const run = await repository.createContinuityReviewRun({ projectId: input.project.id, chapterId: input.chapter?.id, sceneId: input.scene?.id, sourceKind: input.sourceKind, contentHash: hash, startOffset: input.startOffset, endOffset: input.endOffset, providerId: input.provider?.id });
-  const active = input.provider ? { provider: input.provider, settings: await providerRouter.getSettings() } : await providerRouter.getActiveProvider();
-  const result = await active.provider.analyzeContinuityPassage(providerInput, active.settings.bibleUpdateTimeoutSeconds);
-  const allContradictions = [...result.objectiveContradictions, ...result.missingExplanations];
-  const findings = allContradictions.map((item) => saveFinding(run.id, input.project, input.chapter, input.scene, item, confirmedRules, result, currentText, input.startOffset, input.endOffset));
-  const savedFindings = findings.length ? await repository.saveContinuityReviewFindings(run.id, findings) : [];
-  const stateProposals: ContinuityStateLedgerEntry[] = [];
-  for (const item of result.proposedStateChanges) {
-    if (!entities.some((entity) => entity.id === item.entityId && entity.projectId === input.project.id)) continue;
-    const saved = await repository.saveContinuityStateEntry(proposedStateInput(input.project.id, input.chapter, input.scene, item));
-    stateProposals.push(saved);
+  try {
+    await repository.updateContinuityReviewRunStatus({ id: run.id, status: 'running' });
+    const active = input.provider ? { provider: input.provider, settings: await providerRouter.getSettings() } : await providerRouter.getActiveProvider();
+    const result = await active.provider.analyzeContinuityPassage(providerInput, active.settings.bibleUpdateTimeoutSeconds);
+    if (input.isCancelled?.()) throw new Error('Die Kontinuitätsprüfung wurde abgebrochen.');
+    const allContradictions = [...result.objectiveContradictions, ...result.missingExplanations];
+    const findings = allContradictions.map((item) => saveFinding(run.id, input.project, input.chapter, input.scene, item, confirmedRules, result, currentText, input.startOffset, input.endOffset));
+    const savedFindings = findings.length ? await repository.saveContinuityReviewFindings(run.id, findings) : [];
+    const stateProposals: ContinuityStateLedgerEntry[] = [];
+    const draftStateChanges = result.proposedStateChanges.filter((item) => entities.some((entity) => entity.id === item.entityId && entity.projectId === input.project.id));
+    if (input.persistStateProposals !== false) {
+      for (const item of draftStateChanges) stateProposals.push(await repository.saveContinuityStateEntry(proposedStateInput(input.project.id, input.chapter, input.scene, item)));
+    }
+    for (const proposal of result.newRuleProposals) await repository.saveProjectRuleProposal({ ...proposal, id: undefined, reviewStatus: 'pending', chapterId: proposal.chapterId ?? input.chapter?.id, sceneId: proposal.sceneId ?? input.scene?.id });
+    for (const change of result.plotThreadChanges) {
+      if (!entities.some((entity) => entity.id === change.entityId && entity.type === 'plot_thread')) continue;
+      await repository.savePlotThreadLifecycleProposal({ runId: run.id, projectId: input.project.id, entityId: change.entityId, proposedStatus: change.proposedStatus, evidenceExcerpt: change.evidenceExcerpt, startOffset: change.startOffset ?? input.startOffset, endOffset: change.endOffset ?? input.endOffset, reason: change.reason });
+    }
+    await repository.updateContinuityReviewRunStatus({ id: run.id, status: 'completed' });
+    return { runId: run.id, findings: savedFindings, stateProposals, draftStateChanges, analysis: result };
+  } catch (error) {
+    const cancelled = input.isCancelled?.() ?? false;
+    await repository.updateContinuityReviewRunStatus({ id: run.id, status: cancelled ? 'cancelled' : 'failed', errorMessage: error instanceof Error ? error.message : String(error) });
+    throw error;
   }
-  for (const proposal of result.newRuleProposals) {
-    await repository.saveProjectRuleProposal({ ...proposal, id: undefined, reviewStatus: 'pending', chapterId: proposal.chapterId ?? input.chapter?.id, sceneId: proposal.sceneId ?? input.scene?.id });
-  }
-  for (const change of result.plotThreadChanges) {
-    if (!entities.some((entity) => entity.id === change.entityId && entity.type === 'plot_thread')) continue;
-    await repository.savePlotThreadLifecycleProposal({ runId: run.id, projectId: input.project.id, entityId: change.entityId, proposedStatus: change.proposedStatus, evidenceExcerpt: change.evidenceExcerpt, startOffset: change.startOffset ?? input.startOffset, endOffset: change.endOffset ?? input.endOffset, reason: change.reason });
-  }
-  return { runId: run.id, findings: savedFindings, stateProposals, analysis: result };
 }
 
 export function canonicalText(scene: Scene): string { return editorContentToPlainText(scene.content); }

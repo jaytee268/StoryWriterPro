@@ -402,6 +402,159 @@ pub struct SaveContinuityReviewInput {
     pub provider_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveContinuityReviewRunStatusInput {
+    pub id: String,
+    pub status: String,
+    pub error_message: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManuscriptAnalysisPageMarker {
+    pub chapter_id: String,
+    pub page_number: i64,
+    pub label: String,
+    pub source_offset: i64,
+    pub text_offset: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManuscriptAnalysisJob {
+    pub id: String,
+    pub project_id: String,
+    pub book_id: String,
+    pub import_reference: String,
+    pub status: String,
+    pub total_units: i64,
+    pub completed_units: i64,
+    pub failed_units: i64,
+    pub current_unit_id: Option<String>,
+    pub provider_id: String,
+    pub page_markers: Vec<ManuscriptAnalysisPageMarker>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManuscriptAnalysisUnitInput {
+    pub id: Option<String>,
+    pub chapter_id: String,
+    pub scene_id: String,
+    pub order_index: i64,
+    pub page_number: Option<i64>,
+    pub start_offset: i64,
+    pub end_offset: i64,
+    pub content: String,
+    pub content_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateManuscriptAnalysisJobInput {
+    pub project_id: String,
+    pub book_id: String,
+    pub import_reference: String,
+    pub provider_id: String,
+    #[serde(default)]
+    pub page_markers: Vec<ManuscriptAnalysisPageMarker>,
+    pub units: Vec<ManuscriptAnalysisUnitInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateManuscriptAnalysisJobInput {
+    pub id: String,
+    pub status: String,
+    pub current_unit_id: Option<String>,
+    pub error_message: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManuscriptAnalysisUnit {
+    pub id: String,
+    pub job_id: String,
+    pub project_id: String,
+    pub chapter_id: String,
+    pub scene_id: String,
+    pub order_index: i64,
+    pub page_number: Option<i64>,
+    pub start_offset: i64,
+    pub end_offset: i64,
+    pub content: String,
+    pub content_hash: String,
+    pub status: String,
+    pub retry_count: i64,
+    pub continuity_run_id: Option<String>,
+    pub error_message: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateManuscriptAnalysisUnitInput {
+    pub id: String,
+    pub status: String,
+    pub retry_count: Option<i64>,
+    pub continuity_run_id: Option<String>,
+    pub content: Option<String>,
+    pub content_hash: Option<String>,
+    pub error_message: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManuscriptAnalysisDraftLedgerEntry {
+    pub id: String,
+    pub job_id: String,
+    pub unit_id: String,
+    pub project_id: String,
+    pub entity_id: String,
+    pub related_entity_id: Option<String>,
+    pub state_kind: String,
+    pub previous_state: String,
+    pub new_state: String,
+    pub chapter_id: String,
+    pub scene_id: String,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub confidence: f64,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveManuscriptAnalysisDraftLedgerInput {
+    pub id: Option<String>,
+    pub job_id: String,
+    pub unit_id: String,
+    pub project_id: String,
+    pub entity_id: String,
+    pub related_entity_id: Option<String>,
+    pub state_kind: String,
+    pub previous_state: String,
+    pub new_state: String,
+    pub chapter_id: String,
+    pub scene_id: String,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub confidence: f64,
+    pub status: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContinuityReviewFinding {

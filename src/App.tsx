@@ -4,7 +4,7 @@ import { BookOpen, BrainCircuit, FileText, Gauge, MessageCircle, PanelLeftClose,
 import { useAppStore } from './stores/useAppStore';
 import { demoEvents, mindEdges, mindNodes } from './services/mockData';
 import { createStoryRepository, type RuntimeMode, type StoryRepository } from './services/storyRepository';
-import type { AiProviderSettings, AppView, BibleProposal, BibleUpdateRun, CharacterMemoryProposal, CharacterMemoryUpdateRun, ChatMessage, Chapter, CreateStyleReferenceInput, PendingSourceNavigation, ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput, Scene, StoryEntity, StorySourceReference, StyleReference, UpdateChapterInput, WorkspaceSnapshot } from './types/domain';
+import type { AiProviderSettings, AppView, BibleProposal, BibleUpdateRun, CharacterMemoryProposal, CharacterMemoryUpdateRun, ChatMessage, Chapter, CreateStyleReferenceInput, ManuscriptAnalysisJob, ManuscriptAnalysisUnit, PendingSourceNavigation, ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput, Scene, StoryEntity, StorySourceReference, StyleReference, UpdateChapterInput, WorkspaceSnapshot } from './types/domain';
 import { DeterministicProjectContextBuilder } from './services/contextBuilder';
 import { changedRange } from './services/bibleExtractor';
 import { Dashboard } from './features/projects/Dashboard';
@@ -19,7 +19,10 @@ import { defaultAiProviderSettings, providerRouter, type StoryAiProvider } from 
 import { createLongformRepository } from './services/longformRepository';
 import { LongformDraftView } from './features/longform/LongformDraftView';
 import { ManuscriptImportModal } from './features/import/ManuscriptImportModal';
+import { ManuscriptAnalysisProgress } from './features/import/ManuscriptAnalysisProgress';
 import { runContinuityReview } from './services/continuityReview';
+import { contentHash } from './utils/aiText';
+import { createManuscriptAnalysisUnits, loadManuscriptAnalysisProgress, ManuscriptAnalysisController } from './services/manuscriptAnalysis';
 
 const repository: StoryRepository = createStoryRepository();
 const longformRepository = createLongformRepository();
@@ -59,6 +62,9 @@ export function App() {
   const [activeModal, setActiveModal] = useState<'bible' | 'research' | 'import' | null>(null);
   const [longformInstruction, setLongformInstruction] = useState<string>();
   const continuityReviewedText = useRef<Record<string, string>>({});
+  const [manuscriptAnalysis, setManuscriptAnalysis] = useState<{ job: ManuscriptAnalysisJob; units: ManuscriptAnalysisUnit[] }>();
+  const [manuscriptAnalysisError, setManuscriptAnalysisError] = useState('');
+  const manuscriptAnalysisController = useRef<ManuscriptAnalysisController | undefined>(undefined);
 
   const loadWorkspace = useCallback(async () => {
     setLoadState({ status: 'loading' });
@@ -77,9 +83,20 @@ export function App() {
       if (!open) return;
       const proposals = await repository.listCharacterMemoryProposals(open.id);
       if (!cancelled && proposals.some((proposal) => proposal.reviewStatus === 'pending')) setResumeMemoryReview({ run: open, proposals });
-    }).catch(() => undefined);
+    }).catch((error) => {
+      if (!cancelled) setProviderNotice(error instanceof Error ? `Charakterwissen konnte nicht geladen werden: ${error.message}` : 'Charakterwissen konnte nicht geladen werden.');
+    });
     return () => { cancelled = true; };
   }, [activeMemoryRun, workspace?.project.id]);
+  const refreshManuscriptAnalysis = useCallback(async (jobId?: string) => {
+    if (!workspace?.project.id) return;
+    const jobs = await repository.listManuscriptAnalysisJobs(workspace.project.id);
+    const selected = (jobId ? jobs.find((job) => job.id === jobId) : jobs.find((job) => !['completed', 'cancelled'].includes(job.status))) ?? jobs[0];
+    if (!selected) { setManuscriptAnalysis(undefined); return; }
+    const progress = await loadManuscriptAnalysisProgress(repository, selected.id);
+    setManuscriptAnalysis({ job: progress.job, units: progress.units });
+  }, [workspace?.project.id]);
+  useEffect(() => { void refreshManuscriptAnalysis(); }, [refreshManuscriptAnalysis]);
   useEffect(() => {
     if (!workspace) return;
     const sceneIds = workspace.chapters.flatMap((chapter) => chapter.scenes).map((scene) => scene.id);
@@ -205,7 +222,18 @@ export function App() {
   const replaceScene = useCallback((saved: Scene) => {
     setLoadState((current) => current.status !== 'ready' ? current : { status: 'ready', workspace: { ...current.workspace, project: { ...current.workspace.project, updatedAt: saved.updatedAt ?? current.workspace.project.updatedAt }, chapters: current.workspace.chapters.map((chapter) => chapter.id === saved.chapterId ? { ...chapter, scenes: chapter.scenes.map((scene) => scene.id === saved.id ? saved : scene) } : chapter) } });
   }, []);
-  const saveScene = useCallback(async (scene: Scene): Promise<Scene> => { const saved = await repository.updateScene(scene); replaceScene(saved); if (!workspace) return saved; const chapter = workspace.chapters.find((item) => item.id === saved.chapterId); const canonicalText = canonicalizeSceneForAi(saved).text; void runContinuityReview(repository, { project: workspace.project, chapter, scene: saved, currentText: canonicalText, previousText: continuityReviewedText.current[saved.id], sourceKind: 'word_threshold' }).then((result) => { if (result.runId) continuityReviewedText.current[saved.id] = canonicalText; }).catch(() => undefined); return saved; }, [replaceScene, workspace]);
+  const saveScene = useCallback(async (scene: Scene): Promise<Scene> => { const saved = await repository.updateScene(scene); replaceScene(saved); if (!workspace) return saved; const chapter = workspace.chapters.find((item) => item.id === saved.chapterId); const canonicalText = canonicalizeSceneForAi(saved).text; void runContinuityReview(repository, { project: workspace.project, chapter, scene: saved, currentText: canonicalText, previousText: continuityReviewedText.current[saved.id], sourceKind: 'word_threshold' }).then((result) => { if (result.runId) continuityReviewedText.current[saved.id] = canonicalText; }).catch((error) => setProviderNotice(error instanceof Error ? `Continuity-Prüfung fehlgeschlagen: ${error.message}` : 'Continuity-Prüfung fehlgeschlagen.')); return saved; }, [replaceScene, workspace]);
+  const startManuscriptAnalysis = useCallback(async (jobId: string) => {
+    setManuscriptAnalysisError('');
+    const controller = manuscriptAnalysisController.current?.jobId === jobId ? manuscriptAnalysisController.current : new ManuscriptAnalysisController(repository, jobId);
+    manuscriptAnalysisController.current = controller;
+    try { await controller.start(); }
+    catch (error) { setManuscriptAnalysisError(error instanceof Error ? error.message : String(error)); }
+    finally { await refreshManuscriptAnalysis(jobId); }
+  }, [refreshManuscriptAnalysis]);
+  const pauseManuscriptAnalysis = useCallback(async () => { await manuscriptAnalysisController.current?.pause(); await refreshManuscriptAnalysis(manuscriptAnalysis?.job.id); }, [manuscriptAnalysis?.job.id, refreshManuscriptAnalysis]);
+  const cancelManuscriptAnalysis = useCallback(async () => { await manuscriptAnalysisController.current?.cancel(); await refreshManuscriptAnalysis(manuscriptAnalysis?.job.id); }, [manuscriptAnalysis?.job.id, refreshManuscriptAnalysis]);
+  const retryManuscriptAnalysis = useCallback(async () => { const jobId = manuscriptAnalysis?.job.id; if (!jobId) return; const controller = manuscriptAnalysisController.current?.jobId === jobId ? manuscriptAnalysisController.current : new ManuscriptAnalysisController(repository, jobId); manuscriptAnalysisController.current = controller; try { await controller.retryFailed(); } catch (error) { setManuscriptAnalysisError(error instanceof Error ? error.message : String(error)); } finally { await refreshManuscriptAnalysis(jobId); } }, [manuscriptAnalysis?.job.id, refreshManuscriptAnalysis]);
   const replaceEntity = useCallback((saved: StoryEntity) => { setLoadState((current) => current.status !== 'ready' ? current : { status: 'ready', workspace: { ...current.workspace, entities: [saved, ...current.workspace.entities.filter((entity) => entity.id !== saved.id)] } }); }, []);
   const listSceneVersions = useCallback((sceneId: string) => repository.listSceneVersions(sceneId), []);
   const createSceneVersion = useCallback((sceneId: string) => repository.createSceneVersion({ sceneId, reason: 'manual' }), []);
@@ -363,13 +391,13 @@ export function App() {
     </aside>
     <main className="main-area">
       <header className="topbar simple-topbar"><div className="topbar-title"><button className="sidebar-toggle" onClick={() => setSidebarOpen((open) => !open)} aria-label={sidebarOpen ? 'Sidebar einklappen' : 'Sidebar öffnen'} title={sidebarOpen ? 'Sidebar einklappen' : 'Sidebar öffnen'}>{sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}</button><div className="topbar-copy"><span className="eyebrow">{view === 'dashboard' ? 'START' : project?.title ?? 'STORYMEMORY'}</span><strong>{topLabel}</strong></div></div><div className="topbar-actions"><span className={`save-state save-state-${saveStatus}`}><span className={`status-dot status-dot-${saveStatus}`} /> {saveLabel[saveStatus]}</span><button className="assistant-button" onClick={() => setAssistantOpen(true)}><MessageCircle size={18} /> Assistent öffnen</button></div></header>
-      <div className="content-scroll">{providerNotice && <div className="provider-notice" role="status"><span>{providerNotice}</span><button className="text-button" onClick={() => setProviderNotice('')}>Ausblenden</button></div>}{viewError && <div className="save-error workspace-save-error" role="alert"><strong>Speichern erforderlich</strong><span>{viewError}</span><button className="text-button" onClick={() => void retryEditorSave()}>Erneut versuchen</button></div>}{loadState.status === 'loading' && <LoadingView mode={repository.mode} />}{loadState.status === 'error' && <ErrorView message={loadState.message} detail={loadState.detail} onRetry={() => void loadWorkspace()} />}{loadState.status === 'ready' && renderView()}</div>
+      <div className="content-scroll">{manuscriptAnalysis && <ManuscriptAnalysisProgress job={manuscriptAnalysis.job} units={manuscriptAnalysis.units} error={manuscriptAnalysisError} onResume={() => void startManuscriptAnalysis(manuscriptAnalysis.job.id)} onRetry={() => void retryManuscriptAnalysis()} onPause={() => void pauseManuscriptAnalysis()} onCancel={() => void cancelManuscriptAnalysis()} />}{providerNotice && <div className="provider-notice" role="status"><span>{providerNotice}</span><button className="text-button" onClick={() => setProviderNotice('')}>Ausblenden</button></div>}{viewError && <div className="save-error workspace-save-error" role="alert"><strong>Speichern erforderlich</strong><span>{viewError}</span><button className="text-button" onClick={() => void retryEditorSave()}>Erneut versuchen</button></div>}{loadState.status === 'loading' && <LoadingView mode={repository.mode} />}{loadState.status === 'error' && <ErrorView message={loadState.message} detail={loadState.detail} onRetry={() => void loadWorkspace()} />}{loadState.status === 'ready' && renderView()}</div>
     </main>
     {assistantOpen && <div className="assistant-drawer"><button className="drawer-close" onClick={() => setAssistantOpen(false)} aria-label="Assistent schließen"><X size={20} /></button>{workspace && <ChatPanel messages={messages} onMessagesChange={setMessages} contextBuilder={contextBuilder} contextRequest={{ projectId: workspace.project.id, currentChapterId: currentChapter?.id, currentSceneId: currentScene?.id }} onOpenSourceReference={(reference) => void openSourceReference(reference)} providerRouter={providerRouter} onLongformRequest={(instruction) => { setLongformInstruction(instruction); setAssistantOpen(false); }} />}</div>}
     {resumeMemoryReview && !activeMemoryRun && <div className="provider-notice" role="status"><span>Ein offener Character-Memory-Review wartet auf deine Entscheidung.</span><button className="primary-button" onClick={() => { setActiveMemoryRun(resumeMemoryReview.run); setMemoryProposals(resumeMemoryReview.proposals); setResumeMemoryReview(undefined); void requestViewChange('bible'); }}>Review fortsetzen</button><button className="text-button" onClick={() => setResumeMemoryReview(undefined)}>Später</button></div>}
     {longformInstruction && workspace && <div className="longform-overlay"><LongformDraftView project={workspace.project} chapters={workspace.chapters} entities={workspace.entities} repository={longformRepository} instruction={longformInstruction} activeProvider={providerSettings.activeProvider} onClose={() => setLongformInstruction(undefined)} onAccepted={async () => { setLongformInstruction(undefined); await loadWorkspace(); await requestViewChange('editor'); }} /></div>}
     {activeModal && activeModal !== 'import' && <Modal type={activeModal} onClose={() => setActiveModal(null)} />}
-    {activeModal === 'import' && workspace?.books[0] && <ManuscriptImportModal projectId={workspace.project.id} bookId={workspace.books[0].id} repository={repository} onClose={() => setActiveModal(null)} onImported={async (result, ...args) => { const unitsByChapter = args[1] ?? []; setSelectedSceneId(result.scenes[0]?.id ?? ''); setActiveModal(null); await Promise.all(result.chapters.map((chapter, chapterIndex) => { const scene = result.scenes.find((candidate) => candidate.chapterId === chapter.id); if (!scene) return Promise.resolve(); const units = unitsByChapter[chapterIndex] ?? [{ text: canonicalizeSceneForAi(scene).text, startOffset: 0, endOffset: canonicalizeSceneForAi(scene).text.length }]; return Promise.all(units.map((unit, unitIndex) => runContinuityReview(repository, { project: workspace.project, chapter, scene, currentText: unit.text, previousText: units[unitIndex - 1]?.text, followingText: units[unitIndex + 1]?.text, startOffset: unit.startOffset, endOffset: unit.endOffset, sourceKind: unit.page === undefined ? 'word_threshold' : 'page_marker' }).catch(() => undefined))); })); await loadWorkspace(); await requestViewChange('editor'); }} />}
+    {activeModal === 'import' && workspace?.books[0] && <ManuscriptImportModal projectId={workspace.project.id} bookId={workspace.books[0].id} repository={repository} onClose={() => setActiveModal(null)} onImported={async (result, ...args) => { const unitsByChapter = args[1] ?? []; const pageMarkersByChapter = args[2] ?? []; const units = createManuscriptAnalysisUnits(result.chapters, unitsByChapter, result.scenes); const pageMarkers = pageMarkersByChapter.flat(); const job = await repository.createManuscriptAnalysisJob({ projectId: workspace.project.id, bookId: workspace.books[0].id, importReference: contentHash(result.chapters.map((chapter) => `${chapter.id}\n${chapter.scenes.map((scene) => canonicalizeSceneForAi(scene).text).join('\n')}`).join('\n')), providerId: providerSettings.activeProvider, pageMarkers, units }); setSelectedSceneId(result.scenes[0]?.id ?? ''); setActiveModal(null); await refreshManuscriptAnalysis(job.id); await startManuscriptAnalysis(job.id); await loadWorkspace(); await requestViewChange('editor'); }} />}
     {closePrompt && <ClosePrompt message={closePrompt} onRetry={() => void finishClose(false)} onForceClose={() => void finishClose(true)} onCancel={() => setClosePrompt('')} />}
   </div>;
 }

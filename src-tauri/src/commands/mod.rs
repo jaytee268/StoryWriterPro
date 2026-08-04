@@ -24,12 +24,13 @@ use crate::{
         ContinuityReviewFinding, ContinuityReviewRun, ContinuityReviewSettings,
         ContinuityStateLedgerEntry, CreateBibleUpdateRunInput, CreateChapterGenerationJobInput,
         CreateChapterInput, CreateCharacterMemoryUpdateRunInput, CreateLoreEntryInput,
-        CreateProjectInput, CreateProjectStyleAnalysisRunInput, CreateSceneInput,
-        CreateSceneVersionInput, CreateSourceReferenceInput, CreateStoryEntityInput,
-        CreateStoryEntityRelationInput, CreateStyleReferenceInput, DatabaseInfo,
-        DialogueMemoryParticipant, EditorPreferences, LoreEntry, LoreMetadata,
-        ManuscriptImportInput, ManuscriptImportResult, ManuscriptPosition, NarrativeSummary,
-        PlotThreadLifecycle, PlotThreadLifecycleProposal, Project, ProjectRule,
+        CreateManuscriptAnalysisJobInput, CreateProjectInput, CreateProjectStyleAnalysisRunInput,
+        CreateSceneInput, CreateSceneVersionInput, CreateSourceReferenceInput,
+        CreateStoryEntityInput, CreateStoryEntityRelationInput, CreateStyleReferenceInput,
+        DatabaseInfo, DialogueMemoryParticipant, EditorPreferences, LoreEntry, LoreMetadata,
+        ManuscriptAnalysisDraftLedgerEntry, ManuscriptAnalysisJob, ManuscriptAnalysisPageMarker,
+        ManuscriptAnalysisUnit, ManuscriptImportInput, ManuscriptImportResult, ManuscriptPosition,
+        NarrativeSummary, PlotThreadLifecycle, PlotThreadLifecycleProposal, Project, ProjectRule,
         ProjectRuleProposal, ProjectStyle, ProjectStyleAnalysisRun, ProjectStyleObservation,
         ProviderStatus, RelationshipMemory, RestoreSceneVersionInput, ReviewBibleProposalInput,
         ReviewCharacterMemoryProposalInput, SaveChapterGenerationPlanInput,
@@ -37,17 +38,19 @@ use crate::{
         SaveCharacterDialogueMemoryInput, SaveCharacterExperienceInput,
         SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput, SaveCharacterSceneStateInput,
         SaveCharacterVoicePatternInput, SaveContinuityFindingInput, SaveContinuityReviewInput,
-        SaveContinuityStateInput, SaveLoreMetadataInput, SaveNarrativeSummaryInput,
+        SaveContinuityReviewRunStatusInput, SaveContinuityStateInput, SaveLoreMetadataInput,
+        SaveManuscriptAnalysisDraftLedgerInput, SaveNarrativeSummaryInput,
         SavePlotThreadLifecycleInput, SavePlotThreadLifecycleProposalInput, SaveProjectRuleInput,
         SaveProjectRuleProposalInput, SaveProjectStyleInput, SaveProjectStyleObservationInput,
         SaveRelationshipMemoryInput, SaveStoryDirectionInput, SaveWritingPreferencesInput, Scene,
         SceneInput, SceneVersion, StoryDirection, StoryEntity, StoryEntityInput,
         StoryEntityRelation, StorySourceReference, StyleReference, UpdateChapterInput,
+        UpdateManuscriptAnalysisJobInput, UpdateManuscriptAnalysisUnitInput,
         UpdateStoryEntityInput, UpdateStyleReferenceInput, WorkspaceSnapshot, WritingPreferences,
     },
 };
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension, Result as SqlResult};
+use rusqlite::{params, types::Type, Connection, OptionalExtension, Result as SqlResult};
 use std::sync::Arc;
 use tauri::State;
 
@@ -3126,8 +3129,326 @@ pub fn create_continuity_review_run(
     }
     let id = new_id();
     let stamp = now();
-    db.execute("INSERT INTO continuity_review_runs (id, project_id, chapter_id, scene_id, source_kind, content_hash, start_offset, end_offset, provider_id, status, created_at, completed_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'completed',?10,?10)", params![id, input.project_id, input.chapter_id, input.scene_id, input.source_kind, input.content_hash, input.start_offset, input.end_offset, input.provider_id.unwrap_or_else(|| "local-continuity-review".into()), stamp]).map_err(|error| sql_error("Kontinuitätsprüfung konnte nicht gespeichert werden", error))?;
-    db.query_row("SELECT id, project_id, chapter_id, scene_id, source_kind, content_hash, start_offset, end_offset, provider_id, status, created_at, completed_at, error_message FROM continuity_review_runs WHERE id=?1", params![id], continuity_run_from_row).map_err(|error| sql_error("Kontinuitätsprüfung konnte nicht geladen werden", error))
+    db.execute("INSERT INTO continuity_review_runs (id, project_id, chapter_id, scene_id, source_kind, content_hash, start_offset, end_offset, provider_id, status, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'pending',?10)", params![id, input.project_id, input.chapter_id, input.scene_id, input.source_kind, input.content_hash, input.start_offset, input.end_offset, input.provider_id.unwrap_or_else(|| "local-continuity-review".into()), stamp]).map_err(|error| sql_error("Kontinuitätsprüfung konnte nicht gespeichert werden", error))?;
+    db.execute("INSERT INTO continuity_review_run_statuses (run_id, status, updated_at) VALUES (?1,'pending',?2)", params![id, stamp]).map_err(|error| sql_error("Status der Kontinuitätsprüfung konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT r.id, r.project_id, r.chapter_id, r.scene_id, r.source_kind, r.content_hash, r.start_offset, r.end_offset, r.provider_id, COALESCE(s.status, r.status), r.created_at, COALESCE(s.completed_at, r.completed_at), COALESCE(s.error_message, r.error_message) FROM continuity_review_runs r LEFT JOIN continuity_review_run_statuses s ON s.run_id=r.id WHERE r.id=?1", params![id], continuity_run_from_row).map_err(|error| sql_error("Kontinuitätsprüfung konnte nicht geladen werden", error))
+}
+
+fn continuity_run_status_valid(value: &str) -> bool {
+    matches!(
+        value,
+        "pending" | "running" | "completed" | "failed" | "cancelled" | "reviewed"
+    )
+}
+
+#[tauri::command]
+pub fn update_continuity_review_run_status(
+    state: State<'_, DbState>,
+    input: SaveContinuityReviewRunStatusInput,
+) -> Result<ContinuityReviewRun, String> {
+    if !continuity_run_status_valid(&input.status) {
+        return Err("Ungültiger Status der Kontinuitätsprüfung.".into());
+    }
+    let db = lock_db(&state)?;
+    let completed_at = if matches!(
+        input.status.as_str(),
+        "completed" | "failed" | "cancelled" | "reviewed"
+    ) {
+        Some(input.completed_at.unwrap_or_else(now))
+    } else {
+        None
+    };
+    let legacy_status = if input.status == "cancelled" {
+        "failed"
+    } else {
+        input.status.as_str()
+    };
+    db.execute("UPDATE continuity_review_runs SET status=?2, error_message=?3, completed_at=?4 WHERE id=?1", params![input.id, legacy_status, input.error_message, completed_at]).map_err(|error| sql_error("Status der Kontinuitätsprüfung konnte nicht gespeichert werden", error))?;
+    db.execute("INSERT INTO continuity_review_run_statuses (run_id, status, completed_at, error_message, updated_at) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(run_id) DO UPDATE SET status=excluded.status, completed_at=excluded.completed_at, error_message=excluded.error_message, updated_at=excluded.updated_at", params![input.id, input.status, completed_at, input.error_message, now()]).map_err(|error| sql_error("Status der Kontinuitätsprüfung konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT r.id, r.project_id, r.chapter_id, r.scene_id, r.source_kind, r.content_hash, r.start_offset, r.end_offset, r.provider_id, COALESCE(s.status, r.status), r.created_at, COALESCE(s.completed_at, r.completed_at), COALESCE(s.error_message, r.error_message) FROM continuity_review_runs r LEFT JOIN continuity_review_run_statuses s ON s.run_id=r.id WHERE r.id=?1", params![input.id], continuity_run_from_row).map_err(|error| sql_error("Kontinuitätsprüfung konnte nicht geladen werden", error))
+}
+
+fn manuscript_analysis_job_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ManuscriptAnalysisJob> {
+    let page_markers_json: String = row.get(10)?;
+    let page_markers = serde_json::from_str::<Vec<ManuscriptAnalysisPageMarker>>(
+        &page_markers_json,
+    )
+    .map_err(|error| rusqlite::Error::FromSqlConversionFailure(10, Type::Text, Box::new(error)))?;
+    Ok(ManuscriptAnalysisJob {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        book_id: row.get(2)?,
+        import_reference: row.get(3)?,
+        status: row.get(4)?,
+        total_units: row.get(5)?,
+        completed_units: row.get(6)?,
+        failed_units: row.get(7)?,
+        current_unit_id: row.get(8)?,
+        provider_id: row.get(9)?,
+        page_markers,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+        completed_at: row.get(13)?,
+        error_message: row.get(14)?,
+    })
+}
+
+fn manuscript_analysis_unit_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ManuscriptAnalysisUnit> {
+    Ok(ManuscriptAnalysisUnit {
+        id: row.get(0)?,
+        job_id: row.get(1)?,
+        project_id: row.get(2)?,
+        chapter_id: row.get(3)?,
+        scene_id: row.get(4)?,
+        order_index: row.get(5)?,
+        page_number: row.get(6)?,
+        start_offset: row.get(7)?,
+        end_offset: row.get(8)?,
+        content: row.get(9)?,
+        content_hash: row.get(10)?,
+        status: row.get(11)?,
+        retry_count: row.get(12)?,
+        continuity_run_id: row.get(13)?,
+        error_message: row.get(14)?,
+        created_at: row.get(15)?,
+        updated_at: row.get(16)?,
+        completed_at: row.get(17)?,
+    })
+}
+
+fn manuscript_analysis_draft_from_row(
+    row: &rusqlite::Row<'_>,
+) -> SqlResult<ManuscriptAnalysisDraftLedgerEntry> {
+    Ok(ManuscriptAnalysisDraftLedgerEntry {
+        id: row.get(0)?,
+        job_id: row.get(1)?,
+        unit_id: row.get(2)?,
+        project_id: row.get(3)?,
+        entity_id: row.get(4)?,
+        related_entity_id: row.get(5)?,
+        state_kind: row.get(6)?,
+        previous_state: row.get(7)?,
+        new_state: row.get(8)?,
+        chapter_id: row.get(9)?,
+        scene_id: row.get(10)?,
+        start_offset: row.get(11)?,
+        end_offset: row.get(12)?,
+        confidence: row.get(13)?,
+        status: row.get(14)?,
+        created_at: row.get(15)?,
+        updated_at: row.get(16)?,
+    })
+}
+
+fn manuscript_analysis_job_status_valid(value: &str) -> bool {
+    matches!(
+        value,
+        "pending" | "running" | "paused" | "completed" | "failed" | "cancelled"
+    )
+}
+
+fn manuscript_analysis_unit_status_valid(value: &str) -> bool {
+    matches!(
+        value,
+        "pending" | "running" | "completed" | "failed" | "skipped"
+    )
+}
+
+fn manuscript_analysis_draft_status_valid(value: &str) -> bool {
+    matches!(value, "proposed" | "confirmed" | "rejected")
+}
+
+#[tauri::command]
+pub fn create_manuscript_analysis_job(
+    state: State<'_, DbState>,
+    input: CreateManuscriptAnalysisJobInput,
+) -> Result<ManuscriptAnalysisJob, String> {
+    required(&input.project_id, "Das Projekt")?;
+    required(&input.book_id, "Das Buch")?;
+    required(&input.import_reference, "Die Importreferenz")?;
+    let db = lock_db(&state)?;
+    validate_book_project(&db, &input.project_id, &input.book_id)?;
+    if let Some(existing) = db.query_row("SELECT id, project_id, book_id, import_reference, status, total_units, completed_units, failed_units, current_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE project_id=?1 AND import_reference=?2", params![input.project_id, input.import_reference], manuscript_analysis_job_from_row).optional().map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geprüft werden", error))? {
+        return Ok(existing);
+    }
+    let tx = db
+        .unchecked_transaction()
+        .map_err(|error| sql_error("Manuskriptanalysejob konnte nicht angelegt werden", error))?;
+    let job_id = new_id();
+    let stamp = now();
+    let page_markers_json = serde_json::to_string(&input.page_markers)
+        .map_err(|error| format!("Seitenmarker konnten nicht serialisiert werden: {error}"))?;
+    tx.execute("INSERT INTO manuscript_analysis_jobs (id, project_id, book_id, import_reference, status, total_units, provider_id, page_markers_json, created_at, updated_at) VALUES (?1,?2,?3,?4,'pending',?5,?6,?7,?8,?8)", params![job_id, input.project_id, input.book_id, input.import_reference, input.units.len() as i64, input.provider_id, page_markers_json, stamp]).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht gespeichert werden", error))?;
+    for unit in &input.units {
+        if unit.start_offset < 0
+            || unit.end_offset < unit.start_offset
+            || unit.content.chars().count() == 0
+        {
+            return Err(
+                "Eine Prüfeinheit hat ungültige Unicode-Positionen oder keinen Inhalt.".into(),
+            );
+        }
+        validate_scene_project(&tx, &input.project_id, &unit.scene_id)?;
+        let chapter_matches: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM scenes WHERE id=?1 AND chapter_id=?2)",
+                params![unit.scene_id, unit.chapter_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| sql_error("Kapitel und Szene konnten nicht geprüft werden", error))?;
+        if !chapter_matches {
+            return Err("Kapitel und Szene einer Prüfeinheit passen nicht zusammen.".into());
+        }
+        tx.execute("INSERT INTO manuscript_analysis_units (id, job_id, project_id, chapter_id, scene_id, order_index, page_number, start_offset, end_offset, content, content_hash, status, retry_count, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'pending',0,?12,?12)", params![unit.id.clone().unwrap_or_else(new_id), job_id, input.project_id, unit.chapter_id, unit.scene_id, unit.order_index, unit.page_number, unit.start_offset, unit.end_offset, unit.content, unit.content_hash, stamp]).map_err(|error| sql_error("Manuskriptprüfeinheit konnte nicht gespeichert werden", error))?;
+    }
+    tx.commit().map_err(|error| {
+        sql_error(
+            "Manuskriptanalysejob konnte nicht abgeschlossen werden",
+            error,
+        )
+    })?;
+    db.query_row("SELECT id, project_id, book_id, import_reference, status, total_units, completed_units, failed_units, current_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE id=?1", params![job_id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn list_manuscript_analysis_jobs(
+    state: State<'_, DbState>,
+    project_id: String,
+) -> Result<Vec<ManuscriptAnalysisJob>, String> {
+    let db = lock_db(&state)?;
+    let result = db.prepare("SELECT id, project_id, book_id, import_reference, status, total_units, completed_units, failed_units, current_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE project_id=?1 ORDER BY updated_at DESC").map_err(|error| sql_error("Manuskriptanalysejobs konnten nicht geladen werden", error))?.query_map(params![project_id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejobs konnten nicht gelesen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Manuskriptanalysejobs konnten nicht gelesen werden", error));
+    result
+}
+
+#[tauri::command]
+pub fn get_manuscript_analysis_job(
+    state: State<'_, DbState>,
+    id: String,
+) -> Result<ManuscriptAnalysisJob, String> {
+    let db = lock_db(&state)?;
+    db.query_row("SELECT id, project_id, book_id, import_reference, status, total_units, completed_units, failed_units, current_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE id=?1", params![id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn list_manuscript_analysis_units(
+    state: State<'_, DbState>,
+    job_id: String,
+) -> Result<Vec<ManuscriptAnalysisUnit>, String> {
+    let db = lock_db(&state)?;
+    let result = db.prepare("SELECT id, job_id, project_id, chapter_id, scene_id, order_index, page_number, start_offset, end_offset, content, content_hash, status, retry_count, continuity_run_id, error_message, created_at, updated_at, completed_at FROM manuscript_analysis_units WHERE job_id=?1 ORDER BY order_index ASC").map_err(|error| sql_error("Manuskriptprüfeinheiten konnten nicht geladen werden", error))?.query_map(params![job_id], manuscript_analysis_unit_from_row).map_err(|error| sql_error("Manuskriptprüfeinheiten konnten nicht gelesen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Manuskriptprüfeinheiten konnten nicht gelesen werden", error));
+    result
+}
+
+#[tauri::command]
+pub fn update_manuscript_analysis_job(
+    state: State<'_, DbState>,
+    input: UpdateManuscriptAnalysisJobInput,
+) -> Result<ManuscriptAnalysisJob, String> {
+    if !manuscript_analysis_job_status_valid(&input.status) {
+        return Err("Ungültiger Status des Manuskriptanalysejobs.".into());
+    }
+    let db = lock_db(&state)?;
+    let completed_at = if matches!(input.status.as_str(), "completed" | "failed" | "cancelled") {
+        Some(input.completed_at.unwrap_or_else(now))
+    } else {
+        None
+    };
+    db.execute("UPDATE manuscript_analysis_jobs SET status=?2, current_unit_id=?3, error_message=?4, completed_at=?5, completed_units=(SELECT COUNT(*) FROM manuscript_analysis_units WHERE job_id=?1 AND status IN ('completed','skipped')), failed_units=(SELECT COUNT(*) FROM manuscript_analysis_units WHERE job_id=?1 AND status='failed'), updated_at=?6 WHERE id=?1", params![input.id, input.status, input.current_unit_id, input.error_message, completed_at, now()]).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht aktualisiert werden", error))?;
+    db.query_row("SELECT id, project_id, book_id, import_reference, status, total_units, completed_units, failed_units, current_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE id=?1", params![input.id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn update_manuscript_analysis_unit(
+    state: State<'_, DbState>,
+    input: UpdateManuscriptAnalysisUnitInput,
+) -> Result<ManuscriptAnalysisUnit, String> {
+    if !manuscript_analysis_unit_status_valid(&input.status) {
+        return Err("Ungültiger Status der Manuskriptprüfeinheit.".into());
+    }
+    let db = lock_db(&state)?;
+    let completed_at = if matches!(input.status.as_str(), "completed" | "skipped") {
+        Some(input.completed_at.unwrap_or_else(now))
+    } else {
+        None
+    };
+    db.execute("UPDATE manuscript_analysis_units SET status=?2, retry_count=COALESCE(?3,retry_count), continuity_run_id=?4, content=COALESCE(?5,content), content_hash=COALESCE(?6,content_hash), error_message=?7, completed_at=?8, updated_at=?9 WHERE id=?1", params![input.id, input.status, input.retry_count, input.continuity_run_id, input.content, input.content_hash, input.error_message, completed_at, now()]).map_err(|error| sql_error("Manuskriptprüfeinheit konnte nicht aktualisiert werden", error))?;
+    db.query_row("SELECT id, job_id, project_id, chapter_id, scene_id, order_index, page_number, start_offset, end_offset, content, content_hash, status, retry_count, continuity_run_id, error_message, created_at, updated_at, completed_at FROM manuscript_analysis_units WHERE id=?1", params![input.id], manuscript_analysis_unit_from_row).map_err(|error| sql_error("Manuskriptprüfeinheit konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn list_manuscript_analysis_draft_ledger(
+    state: State<'_, DbState>,
+    job_id: String,
+) -> Result<Vec<ManuscriptAnalysisDraftLedgerEntry>, String> {
+    let db = lock_db(&state)?;
+    let result = db.prepare("SELECT d.id, d.job_id, d.unit_id, d.project_id, d.entity_id, d.related_entity_id, d.state_kind, d.previous_state, d.new_state, d.chapter_id, d.scene_id, d.start_offset, d.end_offset, d.confidence, d.status, d.created_at, d.updated_at FROM manuscript_analysis_draft_ledger d JOIN manuscript_analysis_units u ON u.id=d.unit_id WHERE d.job_id=?1 ORDER BY u.order_index ASC, d.created_at ASC").map_err(|error| sql_error("Import-Draft-Ledger konnte nicht geladen werden", error))?.query_map(params![job_id], manuscript_analysis_draft_from_row).map_err(|error| sql_error("Import-Draft-Ledger konnte nicht gelesen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Import-Draft-Ledger konnte nicht gelesen werden", error));
+    result
+}
+
+#[tauri::command]
+pub fn replace_manuscript_analysis_draft_ledger(
+    state: State<'_, DbState>,
+    unit_id: String,
+    entries: Vec<SaveManuscriptAnalysisDraftLedgerInput>,
+) -> Result<Vec<ManuscriptAnalysisDraftLedgerEntry>, String> {
+    let db = lock_db(&state)?;
+    let (job_id, project_id): (String, String) = db
+        .query_row(
+            "SELECT job_id, project_id FROM manuscript_analysis_units WHERE id=?1",
+            params![unit_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|error| sql_error("Import-Prüfeinheit konnte nicht geladen werden", error))?;
+    let tx = db
+        .unchecked_transaction()
+        .map_err(|error| sql_error("Import-Draft-Ledger konnte nicht gespeichert werden", error))?;
+    tx.execute(
+        "DELETE FROM manuscript_analysis_draft_ledger WHERE unit_id=?1",
+        params![unit_id],
+    )
+    .map_err(|error| sql_error("Alte Import-Zustände konnten nicht entfernt werden", error))?;
+    let stamp = now();
+    for entry in &entries {
+        if entry.job_id != job_id || entry.unit_id != unit_id || entry.project_id != project_id {
+            return Err("Import-Draft-Ledger und Prüfeinheit gehören nicht zusammen.".into());
+        }
+        if !manuscript_analysis_draft_status_valid(entry.status.as_deref().unwrap_or("proposed")) {
+            return Err("Ungültiger Status des Import-Draft-Ledgers.".into());
+        }
+        validate_continuity_state_kind(&entry.state_kind)?;
+        validate_probability(entry.confidence, "Die Draft-Ledger-Sicherheit")?;
+        project_entity_exists(&tx, &entry.project_id, &entry.entity_id, None)?;
+        if let Some(related) = &entry.related_entity_id {
+            project_entity_exists(&tx, &entry.project_id, related, None)?;
+        }
+        tx.execute("INSERT INTO manuscript_analysis_draft_ledger (id, job_id, unit_id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, chapter_id, scene_id, start_offset, end_offset, confidence, status, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?16)", params![entry.id.clone().unwrap_or_else(new_id), entry.job_id, entry.unit_id, entry.project_id, entry.entity_id, entry.related_entity_id, entry.state_kind, entry.previous_state, entry.new_state, entry.chapter_id, entry.scene_id, entry.start_offset, entry.end_offset, entry.confidence, entry.status.clone().unwrap_or_else(|| "proposed".into()), stamp]).map_err(|error| sql_error("Import-Draft-Ledger konnte nicht gespeichert werden", error))?;
+    }
+    tx.commit().map_err(|error| {
+        sql_error(
+            "Import-Draft-Ledger konnte nicht abgeschlossen werden",
+            error,
+        )
+    })?;
+    let result = db.prepare("SELECT id, job_id, unit_id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, chapter_id, scene_id, start_offset, end_offset, confidence, status, created_at, updated_at FROM manuscript_analysis_draft_ledger WHERE unit_id=?1 ORDER BY created_at ASC").map_err(|error| sql_error("Import-Draft-Ledger konnte nicht geladen werden", error))?.query_map(params![unit_id], manuscript_analysis_draft_from_row).map_err(|error| sql_error("Import-Draft-Ledger konnte nicht gelesen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Import-Draft-Ledger konnte nicht gelesen werden", error));
+    result
+}
+
+#[tauri::command]
+pub fn review_manuscript_analysis_draft_ledger(
+    state: State<'_, DbState>,
+    id: String,
+    status: String,
+) -> Result<ManuscriptAnalysisDraftLedgerEntry, String> {
+    if !manuscript_analysis_draft_status_valid(&status) {
+        return Err("Ungültiger Status des Import-Draft-Ledgers.".into());
+    }
+    let db = lock_db(&state)?;
+    db.execute(
+        "UPDATE manuscript_analysis_draft_ledger SET status=?2, updated_at=?3 WHERE id=?1",
+        params![id, status, now()],
+    )
+    .map_err(|error| sql_error("Import-Draft-Ledger konnte nicht geprüft werden", error))?;
+    db.query_row("SELECT id, job_id, unit_id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, chapter_id, scene_id, start_offset, end_offset, confidence, status, created_at, updated_at FROM manuscript_analysis_draft_ledger WHERE id=?1", params![id], manuscript_analysis_draft_from_row).map_err(|error| sql_error("Import-Draft-Ledger konnte nicht geladen werden", error))
 }
 
 #[tauri::command]
@@ -3138,7 +3459,7 @@ pub fn list_continuity_review_runs(
     scene_id: Option<String>,
 ) -> Result<Vec<ContinuityReviewRun>, String> {
     let db = lock_db(&state)?;
-    let mut statement = db.prepare("SELECT id, project_id, chapter_id, scene_id, source_kind, content_hash, start_offset, end_offset, provider_id, status, created_at, completed_at, error_message FROM continuity_review_runs WHERE project_id=?1 AND (?2 IS NULL OR chapter_id=?2) AND (?3 IS NULL OR scene_id=?3) ORDER BY created_at DESC").map_err(|error| sql_error("Kontinuitätsprüfungen konnten nicht geladen werden", error))?;
+    let mut statement = db.prepare("SELECT r.id, r.project_id, r.chapter_id, r.scene_id, r.source_kind, r.content_hash, r.start_offset, r.end_offset, r.provider_id, COALESCE(s.status, r.status), r.created_at, COALESCE(s.completed_at, r.completed_at), COALESCE(s.error_message, r.error_message) FROM continuity_review_runs r LEFT JOIN continuity_review_run_statuses s ON s.run_id=r.id WHERE r.project_id=?1 AND (?2 IS NULL OR r.chapter_id=?2) AND (?3 IS NULL OR r.scene_id=?3) ORDER BY r.created_at DESC").map_err(|error| sql_error("Kontinuitätsprüfungen konnten nicht geladen werden", error))?;
     let result = statement
         .query_map(
             params![project_id, chapter_id, scene_id],
@@ -3386,6 +3707,21 @@ fn validate_scene_project(db: &Connection, project_id: &str, scene_id: &str) -> 
         Ok(())
     } else {
         Err("Die Szene gehört nicht zu diesem Projekt.".into())
+    }
+}
+
+fn validate_book_project(db: &Connection, project_id: &str, book_id: &str) -> Result<(), String> {
+    let exists: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM books WHERE id=?1 AND project_id=?2)",
+            params![book_id, project_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| sql_error("Buch konnte nicht geprüft werden", error))?;
+    if exists {
+        Ok(())
+    } else {
+        Err("Das Buch gehört nicht zum Projekt.".into())
     }
 }
 fn validate_chapter_project(
@@ -5810,7 +6146,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            16
+            17
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);
