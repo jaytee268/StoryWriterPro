@@ -19,6 +19,7 @@ import { defaultAiProviderSettings, providerRouter, type StoryAiProvider } from 
 import { createLongformRepository } from './services/longformRepository';
 import { LongformDraftView } from './features/longform/LongformDraftView';
 import { ManuscriptImportModal } from './features/import/ManuscriptImportModal';
+import { runContinuityReview } from './services/continuityReview';
 
 const repository: StoryRepository = createStoryRepository();
 const longformRepository = createLongformRepository();
@@ -57,6 +58,7 @@ export function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: 'welcome', role: 'assistant', content: 'Willkommen. Stelle eine Frage zu deiner aktuellen Szene oder zur bestätigten Story Bible.', time: 'Jetzt' }]);
   const [activeModal, setActiveModal] = useState<'bible' | 'research' | 'import' | null>(null);
   const [longformInstruction, setLongformInstruction] = useState<string>();
+  const continuityReviewedText = useRef<Record<string, string>>({});
 
   const loadWorkspace = useCallback(async () => {
     setLoadState({ status: 'loading' });
@@ -203,7 +205,7 @@ export function App() {
   const replaceScene = useCallback((saved: Scene) => {
     setLoadState((current) => current.status !== 'ready' ? current : { status: 'ready', workspace: { ...current.workspace, project: { ...current.workspace.project, updatedAt: saved.updatedAt ?? current.workspace.project.updatedAt }, chapters: current.workspace.chapters.map((chapter) => chapter.id === saved.chapterId ? { ...chapter, scenes: chapter.scenes.map((scene) => scene.id === saved.id ? saved : scene) } : chapter) } });
   }, []);
-  const saveScene = useCallback(async (scene: Scene): Promise<Scene> => { const saved = await repository.updateScene(scene); replaceScene(saved); return saved; }, [replaceScene]);
+  const saveScene = useCallback(async (scene: Scene): Promise<Scene> => { const saved = await repository.updateScene(scene); replaceScene(saved); if (!workspace) return saved; const chapter = workspace.chapters.find((item) => item.id === saved.chapterId); const canonicalText = canonicalizeSceneForAi(saved).text; void runContinuityReview(repository, { project: workspace.project, chapter, scene: saved, currentText: canonicalText, previousText: continuityReviewedText.current[saved.id], sourceKind: 'word_threshold' }).then((result) => { if (result.runId) continuityReviewedText.current[saved.id] = canonicalText; }).catch(() => undefined); return saved; }, [replaceScene, workspace]);
   const replaceEntity = useCallback((saved: StoryEntity) => { setLoadState((current) => current.status !== 'ready' ? current : { status: 'ready', workspace: { ...current.workspace, entities: [saved, ...current.workspace.entities.filter((entity) => entity.id !== saved.id)] } }); }, []);
   const listSceneVersions = useCallback((sceneId: string) => repository.listSceneVersions(sceneId), []);
   const createSceneVersion = useCallback((sceneId: string) => repository.createSceneVersion({ sceneId, reason: 'manual' }), []);
@@ -272,6 +274,10 @@ export function App() {
       }
       setActiveReviewRun(run);
       setReviewProposals(proposals);
+      const continuityText = canonical.text;
+      const continuity = await runContinuityReview(repository, { project: workspace.project, chapter: currentChapter, scene: savedScene, currentText: continuityText, previousText: continuityReviewedText.current[savedScene.id], sourceKind: 'bible_update' });
+      continuityReviewedText.current[savedScene.id] = continuityText;
+      if (continuity.findings.length) setProviderNotice(`${continuity.findings.length} Kontinuitätshinweis(e) warten auf deine Entscheidung.`);
       await requestViewChange('bible');
     } finally {
       setBibleUpdateProvider(undefined);
@@ -363,7 +369,7 @@ export function App() {
     {resumeMemoryReview && !activeMemoryRun && <div className="provider-notice" role="status"><span>Ein offener Character-Memory-Review wartet auf deine Entscheidung.</span><button className="primary-button" onClick={() => { setActiveMemoryRun(resumeMemoryReview.run); setMemoryProposals(resumeMemoryReview.proposals); setResumeMemoryReview(undefined); void requestViewChange('bible'); }}>Review fortsetzen</button><button className="text-button" onClick={() => setResumeMemoryReview(undefined)}>Später</button></div>}
     {longformInstruction && workspace && <div className="longform-overlay"><LongformDraftView project={workspace.project} chapters={workspace.chapters} entities={workspace.entities} repository={longformRepository} instruction={longformInstruction} activeProvider={providerSettings.activeProvider} onClose={() => setLongformInstruction(undefined)} onAccepted={async () => { setLongformInstruction(undefined); await loadWorkspace(); await requestViewChange('editor'); }} /></div>}
     {activeModal && activeModal !== 'import' && <Modal type={activeModal} onClose={() => setActiveModal(null)} />}
-    {activeModal === 'import' && workspace?.books[0] && <ManuscriptImportModal projectId={workspace.project.id} bookId={workspace.books[0].id} repository={repository} onClose={() => setActiveModal(null)} onImported={async (result) => { setSelectedSceneId(result.scenes[0]?.id ?? ''); setActiveModal(null); await loadWorkspace(); await requestViewChange('editor'); }} />}
+    {activeModal === 'import' && workspace?.books[0] && <ManuscriptImportModal projectId={workspace.project.id} bookId={workspace.books[0].id} repository={repository} onClose={() => setActiveModal(null)} onImported={async (result, pageMarkersFound = 0) => { setSelectedSceneId(result.scenes[0]?.id ?? ''); setActiveModal(null); if (pageMarkersFound > 0) await Promise.all(result.scenes.map((scene) => { const chapter = result.chapters.find((item) => item.id === scene.chapterId); return chapter ? runContinuityReview(repository, { project: workspace.project, chapter, scene, currentText: canonicalizeSceneForAi(scene).text, sourceKind: 'page_marker' }).catch(() => undefined) : Promise.resolve(); })); await loadWorkspace(); await requestViewChange('editor'); }} />}
     {closePrompt && <ClosePrompt message={closePrompt} onRetry={() => void finishClose(false)} onForceClose={() => void finishClose(true)} onCancel={() => setClosePrompt('')} />}
   </div>;
 }

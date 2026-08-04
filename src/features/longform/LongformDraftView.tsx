@@ -8,6 +8,7 @@ import { providerRouter } from '../../services/aiProviderService';
 import { createStoryRepository } from '../../services/storyRepository';
 import { LongformContextBundleBuilder } from '../../services/longformContext';
 import { editorContentToPlainText } from '../../utils/editorContent';
+import { findingsToLongformReviews, runContinuityReview } from '../../services/continuityReview';
 
 interface Props { project: Project; chapters: Chapter[]; entities: StoryEntity[]; repository: LongformRepository; instruction: string; activeProvider: string; onClose: () => void; onAccepted: (plan: ChapterGenerationPlan, sections: ChapterGenerationSection[]) => Promise<void>; }
 
@@ -106,9 +107,12 @@ export function LongformDraftView({ project, chapters, entities, repository, ins
 
   const generateSection = async (ai: ReturnType<typeof createLongformAiProvider>, currentJob: ChapterGenerationJob, currentPlan: ChapterGenerationPlan, beat: ChapterGenerationPlan['beats'][number], previousSections: ChapterGenerationSection[]) => {
     const emptySection: ChapterGenerationSection = await repository.saveSection({ jobId: currentJob.id, planBeatId: beat.id, orderIndex: beat.orderIndex, targetWords: beat.targetWords, content: '', continuationSummary: '', continuityState: { currentLocation: '', currentStoryTime: '', presentCharacterIds: beat.participatingCharacterIds, characterStates: [], establishedFacts: [], knowledgeChanges: beat.knowledgeChanges, relationshipChanges: beat.relationshipChanges, movedObjects: [], injuries: [], cluesIntroduced: beat.cluesUsed, promisesCreated: [], unresolvedActions: [], lastParagraphSummary: '' }, status: 'pending', providerId: activeProvider });
-    if (activeProvider !== 'codex-cli') return emptySection;
+    if (activeProvider !== 'codex-cli') return { section: emptySection, findings: [] as Awaited<ReturnType<typeof runContinuityReview>>['findings'] };
     const generated = await ai.draftSection({ project, chapters, entities, direction, preferences: preferences!, job: currentJob, plan: currentPlan, section: emptySection, previousSections, context });
-    return repository.saveSection({ ...emptySection, content: generated.content, continuationSummary: generated.continuationSummary, continuityState: generated.continuityState, status: 'generated', providerId: 'codex-cli' });
+    const saved = await repository.saveSection({ ...emptySection, content: generated.content, continuationSummary: generated.continuationSummary, continuityState: generated.continuityState, status: 'generated', providerId: 'codex-cli' });
+    const continuity = await runContinuityReview(sourceRepository, { project, chapter: chapters.at(-1), scene: chapters.at(-1)?.scenes.at(-1), currentText: generated.content, previousText: previousSections.at(-1)?.content, sourceKind: 'longform_section' });
+    if (continuity.findings.length) await repository.saveReviews(currentJob.id, findingsToLongformReviews(continuity.findings, currentJob.id, saved.id));
+    return { section: saved, findings: continuity.findings };
   };
 
   const confirmPlan = async () => {
@@ -121,8 +125,12 @@ export function LongformDraftView({ project, chapters, entities, repository, ins
       const nextSections: ChapterGenerationSection[] = [];
       for (const beat of savedPlan.beats) {
         const existing = sections.find((section) => section.orderIndex === beat.orderIndex && section.content.trim());
-        const section = existing ?? await generateSection(ai, job, savedPlan, beat, nextSections);
+        const generatedResult = existing ? { section: existing, findings: [] as Awaited<ReturnType<typeof runContinuityReview>>['findings'] } : await generateSection(ai, job, savedPlan, beat, nextSections);
+        const section = generatedResult.section;
         nextSections.push(section);
+        if (generatedResult.findings.some((finding) => finding.severity === 'critical')) {
+          await repository.updateJobStatus(job.id, 'reviewing'); setJob((current) => current ? { ...current, status: 'reviewing' } : current); setSections(nextSections); setReviews(await repository.listReviews(job.id)); setStep('draft'); return;
+        }
         const issues = await reviewSection(ai, job, savedPlan, section, nextSections.slice(0, -1));
         if (issues.length) {
           const persisted = await repository.saveReviews(job.id, issues);
@@ -133,6 +141,7 @@ export function LongformDraftView({ project, chapters, entities, repository, ins
         }
       }
       setSections(nextSections);
+      setReviews(await repository.listReviews(job.id));
       const completeIssues = activeProvider === 'codex-cli' ? await ai.reviewComplete({ project, chapters, entities, direction, preferences, job, plan: savedPlan, previousSections: nextSections, context }) : [];
       if (completeIssues.length) { const persisted = await repository.saveReviews(job.id, completeIssues); setReviews((current) => [...current, ...persisted]); }
       const finalBlocked = completeIssues.some((issue) => issue.severity === 'blocking');
@@ -152,8 +161,10 @@ export function LongformDraftView({ project, chapters, entities, repository, ins
       if (!beat) throw new Error('Der zugehörige Plan-Beat wurde nicht gefunden.');
       const generated = await ai.draftSection({ project, chapters, entities, direction, preferences, job, plan, section, previousSections: previous, context });
       const saved = await repository.saveSection({ ...section, content: generated.content, continuationSummary: generated.continuationSummary, continuityState: generated.continuityState, status: 'generated', providerId: 'codex-cli' });
+      const continuity = await runContinuityReview(sourceRepository, { project, chapter: chapters.at(-1), scene: chapters.at(-1)?.scenes.at(-1), currentText: generated.content, previousText: previous.at(-1)?.content, sourceKind: 'longform_section' });
       const issues = await reviewSection(ai, job, plan, saved, previous);
-      const persisted = issues.length ? await repository.saveReviews(job.id, issues) : [];
+      const continuityIssues = continuity.findings.length ? findingsToLongformReviews(continuity.findings, job.id, saved.id) : [];
+      const persisted = issues.length || continuityIssues.length ? await repository.saveReviews(job.id, [...issues, ...continuityIssues]) : [];
       setSections((current) => current.map((item) => item.id === saved.id ? saved : item));
       setReviews((current) => [...current.filter((item) => item.sectionId !== section.id), ...persisted]);
       if (!issues.some((issue) => issue.severity === 'blocking')) { await repository.updateJobStatus(job.id, 'draft_ready'); setJob((current) => current ? { ...current, status: 'draft_ready' } : current); }

@@ -9,7 +9,7 @@ interface Props {
   bookId: string;
   repository: StoryRepository;
   onClose: () => void;
-  onImported: (result: ManuscriptImportResult) => Promise<void>;
+  onImported: (result: ManuscriptImportResult, pageMarkersFound?: number) => Promise<void>;
 }
 
 export function ManuscriptImportModal({ projectId, bookId, repository, onClose, onImported }: Props) {
@@ -72,7 +72,7 @@ export function ManuscriptImportModal({ projectId, bookId, repository, onClose, 
     setStatus('importing'); setError('');
     try {
       const result = await repository.importManuscript({ projectId, bookId, chapters: preview.chapters.map(({ title, content }) => ({ title, content })) });
-      await onImported(result);
+      await onImported(result, preview.pageMarkersFound);
     } catch (reason) {
       setStatus('error'); setError(reason instanceof Error ? reason.message : 'Der Import konnte nicht gespeichert werden.');
     }

@@ -437,6 +437,17 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
     if has_continuity_graph == 0 {
         connection.execute("INSERT INTO schema_migrations (version) VALUES (14)", [])?;
     }
+    let has_incremental_review: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 15",
+        [],
+        |row| row.get(0),
+    )?;
+    connection.execute_batch(include_str!(
+        "../../../migrations/015_incremental_continuity_review.sql"
+    ))?;
+    if has_incremental_review == 0 {
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (15)", [])?;
+    }
     Ok(())
 }
 
@@ -592,7 +603,7 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            14
+            15
         );
         assert_eq!(
             connection
@@ -600,6 +611,25 @@ mod tests {
                 .unwrap(),
             3
         );
+        for table in [
+            "continuity_review_settings",
+            "continuity_review_runs",
+            "continuity_review_findings",
+            "plot_thread_lifecycle",
+            "plot_thread_lifecycle_proposals",
+        ] {
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                        [table],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap(),
+                1,
+                "missing table {table}"
+            );
+        }
         drop(connection);
         let _ = fs::remove_file(path);
     }
@@ -792,7 +822,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                14
+                15
             );
             // Running startup migrations again must not change the assignment
             // or fail on the ALTER TABLE statement.

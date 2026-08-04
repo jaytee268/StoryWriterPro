@@ -365,6 +365,154 @@ pub struct ManuscriptPosition {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ContinuityReviewSettings {
+    pub project_id: String,
+    pub word_threshold: i64,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContinuityReviewRun {
+    pub id: String,
+    pub project_id: String,
+    pub chapter_id: Option<String>,
+    pub scene_id: Option<String>,
+    pub source_kind: String,
+    pub content_hash: String,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub provider_id: String,
+    pub status: String,
+    pub created_at: String,
+    pub completed_at: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveContinuityReviewInput {
+    pub project_id: String,
+    pub chapter_id: Option<String>,
+    pub scene_id: Option<String>,
+    pub source_kind: String,
+    pub content_hash: String,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub provider_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContinuityReviewFinding {
+    pub id: String,
+    pub run_id: String,
+    pub project_id: String,
+    pub chapter_id: Option<String>,
+    pub scene_id: Option<String>,
+    pub finding_type: String,
+    pub severity: String,
+    pub subject_entity_id: Option<String>,
+    pub related_entity_ids: Vec<String>,
+    pub related_state_ids: Vec<String>,
+    pub related_rule_ids: Vec<String>,
+    pub objective_conflict: String,
+    pub lore_explanations: Vec<String>,
+    pub evidence_excerpt: String,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub reason: String,
+    pub review_status: String,
+    pub user_decision: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveContinuityFindingInput {
+    pub id: Option<String>,
+    pub run_id: String,
+    pub project_id: String,
+    pub chapter_id: Option<String>,
+    pub scene_id: Option<String>,
+    pub finding_type: String,
+    pub severity: String,
+    pub subject_entity_id: Option<String>,
+    #[serde(default)]
+    pub related_entity_ids: Vec<String>,
+    #[serde(default)]
+    pub related_state_ids: Vec<String>,
+    #[serde(default)]
+    pub related_rule_ids: Vec<String>,
+    pub objective_conflict: String,
+    #[serde(default)]
+    pub lore_explanations: Vec<String>,
+    #[serde(default)]
+    pub evidence_excerpt: String,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub reason: String,
+    pub review_status: Option<String>,
+    pub user_decision: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlotThreadLifecycle {
+    pub id: String,
+    pub project_id: String,
+    pub entity_id: String,
+    pub lifecycle_status: String,
+    pub last_source_reference_id: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavePlotThreadLifecycleInput {
+    pub id: Option<String>,
+    pub project_id: String,
+    pub entity_id: String,
+    pub lifecycle_status: String,
+    pub last_source_reference_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlotThreadLifecycleProposal {
+    pub id: String,
+    pub run_id: String,
+    pub project_id: String,
+    pub entity_id: String,
+    pub proposed_status: String,
+    pub evidence_excerpt: String,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub reason: String,
+    pub review_status: String,
+    pub reviewed_at: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavePlotThreadLifecycleProposalInput {
+    pub id: Option<String>,
+    pub run_id: String,
+    pub project_id: String,
+    pub entity_id: String,
+    pub proposed_status: String,
+    #[serde(default)]
+    pub evidence_excerpt: String,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub reason: String,
+    pub review_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BibleUpdateRun {
     pub id: String,
     pub project_id: String,
