@@ -3044,13 +3044,15 @@ fn continuity_finding_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ContinuityR
         objective_conflict: row.get(11)?,
         lore_explanations: json_strings(&row.get::<_, String>(12)?),
         evidence_excerpt: row.get(13)?,
-        start_offset: row.get(14)?,
-        end_offset: row.get(15)?,
-        reason: row.get(16)?,
-        review_status: row.get(17)?,
-        user_decision: row.get(18)?,
-        created_at: row.get(19)?,
-        updated_at: row.get(20)?,
+        counter_evidence_excerpts: json_strings(&row.get::<_, String>(14)?),
+        confidence: row.get(15)?,
+        start_offset: row.get(16)?,
+        end_offset: row.get(17)?,
+        reason: row.get(18)?,
+        review_status: row.get(19)?,
+        user_decision: row.get(20)?,
+        created_at: row.get(21)?,
+        updated_at: row.get(22)?,
     })
 }
 
@@ -3155,7 +3157,7 @@ pub fn list_continuity_review_findings(
     run_id: Option<String>,
 ) -> Result<Vec<ContinuityReviewFinding>, String> {
     let db = lock_db(&state)?;
-    let mut statement = db.prepare("SELECT id, run_id, project_id, chapter_id, scene_id, finding_type, severity, subject_entity_id, related_entity_ids_json, related_state_ids_json, related_rule_ids_json, objective_conflict, lore_explanations_json, evidence_excerpt, start_offset, end_offset, reason, review_status, user_decision, created_at, updated_at FROM continuity_review_findings WHERE project_id=?1 AND (?2 IS NULL OR run_id=?2) ORDER BY created_at DESC").map_err(|error| sql_error("Kontinuitätswarnungen konnten nicht geladen werden", error))?;
+    let mut statement = db.prepare("SELECT id, run_id, project_id, chapter_id, scene_id, finding_type, severity, subject_entity_id, related_entity_ids_json, related_state_ids_json, related_rule_ids_json, objective_conflict, lore_explanations_json, evidence_excerpt, counter_evidence_json, confidence, start_offset, end_offset, reason, review_status, user_decision, created_at, updated_at FROM continuity_review_findings WHERE project_id=?1 AND (?2 IS NULL OR run_id=?2) ORDER BY created_at DESC").map_err(|error| sql_error("Kontinuitätswarnungen konnten nicht geladen werden", error))?;
     let result = statement
         .query_map(params![project_id, run_id], continuity_finding_from_row)
         .map_err(|error| sql_error("Kontinuitätswarnungen konnten nicht geladen werden", error))?
@@ -3193,6 +3195,9 @@ pub fn save_continuity_review_findings(
         {
             return Err("Ungültiger Kontinuitätstyp oder Schweregrad.".into());
         }
+        if !(0.0..=1.0).contains(&input.confidence) {
+            return Err("Die Continuity-Sicherheit muss zwischen 0 und 1 liegen.".into());
+        }
         let status = input.review_status.unwrap_or_else(|| "open".into());
         if !continuity_review_status_valid(&status) {
             return Err("Ungültiger Status der Kontinuitätswarnung.".into());
@@ -3206,7 +3211,7 @@ pub fn save_continuity_review_findings(
         }
         let id = input.id.unwrap_or_else(new_id);
         let stamp = now();
-        tx.execute("INSERT INTO continuity_review_findings (id, run_id, project_id, chapter_id, scene_id, finding_type, severity, subject_entity_id, related_entity_ids_json, related_state_ids_json, related_rule_ids_json, objective_conflict, lore_explanations_json, evidence_excerpt, start_offset, end_offset, reason, review_status, user_decision, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,COALESCE((SELECT created_at FROM continuity_review_findings WHERE id=?1),?20),?20) ON CONFLICT(id) DO UPDATE SET objective_conflict=excluded.objective_conflict, lore_explanations_json=excluded.lore_explanations_json, review_status=excluded.review_status, user_decision=excluded.user_decision, updated_at=excluded.updated_at", params![id, run_id, input.project_id, input.chapter_id, input.scene_id, input.finding_type, input.severity, input.subject_entity_id, serde_json::to_string(&input.related_entity_ids).unwrap_or_else(|_| "[]".into()), serde_json::to_string(&input.related_state_ids).unwrap_or_else(|_| "[]".into()), serde_json::to_string(&input.related_rule_ids).unwrap_or_else(|_| "[]".into()), input.objective_conflict, serde_json::to_string(&input.lore_explanations).unwrap_or_else(|_| "[]".into()), input.evidence_excerpt, input.start_offset, input.end_offset, input.reason, status, input.user_decision, stamp]).map_err(|error| sql_error("Kontinuitätswarnung konnte nicht gespeichert werden", error))?;
+        tx.execute("INSERT INTO continuity_review_findings (id, run_id, project_id, chapter_id, scene_id, finding_type, severity, subject_entity_id, related_entity_ids_json, related_state_ids_json, related_rule_ids_json, objective_conflict, lore_explanations_json, evidence_excerpt, counter_evidence_json, confidence, start_offset, end_offset, reason, review_status, user_decision, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,COALESCE((SELECT created_at FROM continuity_review_findings WHERE id=?1),?22),?22) ON CONFLICT(id) DO UPDATE SET objective_conflict=excluded.objective_conflict, lore_explanations_json=excluded.lore_explanations_json, evidence_excerpt=excluded.evidence_excerpt, counter_evidence_json=excluded.counter_evidence_json, confidence=excluded.confidence, review_status=excluded.review_status, user_decision=excluded.user_decision, updated_at=excluded.updated_at", params![id, run_id, input.project_id, input.chapter_id, input.scene_id, input.finding_type, input.severity, input.subject_entity_id, serde_json::to_string(&input.related_entity_ids).unwrap_or_else(|_| "[]".into()), serde_json::to_string(&input.related_state_ids).unwrap_or_else(|_| "[]".into()), serde_json::to_string(&input.related_rule_ids).unwrap_or_else(|_| "[]".into()), input.objective_conflict, serde_json::to_string(&input.lore_explanations).unwrap_or_else(|_| "[]".into()), input.evidence_excerpt, serde_json::to_string(&input.counter_evidence_excerpts).unwrap_or_else(|_| "[]".into()), input.confidence, input.start_offset, input.end_offset, input.reason, status, input.user_decision, stamp]).map_err(|error| sql_error("Kontinuitätswarnung konnte nicht gespeichert werden", error))?;
     }
     tx.commit().map_err(|error| {
         sql_error(
@@ -3214,7 +3219,7 @@ pub fn save_continuity_review_findings(
             error,
         )
     })?;
-    let mut statement = db.prepare("SELECT id, run_id, project_id, chapter_id, scene_id, finding_type, severity, subject_entity_id, related_entity_ids_json, related_state_ids_json, related_rule_ids_json, objective_conflict, lore_explanations_json, evidence_excerpt, start_offset, end_offset, reason, review_status, user_decision, created_at, updated_at FROM continuity_review_findings WHERE run_id=?1 ORDER BY created_at").map_err(|error| sql_error("Kontinuitätswarnungen konnten nicht geladen werden", error))?;
+    let mut statement = db.prepare("SELECT id, run_id, project_id, chapter_id, scene_id, finding_type, severity, subject_entity_id, related_entity_ids_json, related_state_ids_json, related_rule_ids_json, objective_conflict, lore_explanations_json, evidence_excerpt, counter_evidence_json, confidence, start_offset, end_offset, reason, review_status, user_decision, created_at, updated_at FROM continuity_review_findings WHERE run_id=?1 ORDER BY created_at").map_err(|error| sql_error("Kontinuitätswarnungen konnten nicht geladen werden", error))?;
     let result = statement
         .query_map(params![run_id], continuity_finding_from_row)
         .map_err(|error| sql_error("Kontinuitätswarnungen konnten nicht geladen werden", error))?
@@ -3245,7 +3250,7 @@ pub fn review_continuity_finding(
         return Err("Diese Kontinuitätswarnung wurde bereits entschieden.".into());
     }
     db.execute("UPDATE continuity_review_findings SET review_status=?2, user_decision=?3, updated_at=?4 WHERE id=?1", params![id, review_status, user_decision, now()]).map_err(|error| sql_error("Entscheidung konnte nicht gespeichert werden", error))?;
-    db.query_row("SELECT id, run_id, project_id, chapter_id, scene_id, finding_type, severity, subject_entity_id, related_entity_ids_json, related_state_ids_json, related_rule_ids_json, objective_conflict, lore_explanations_json, evidence_excerpt, start_offset, end_offset, reason, review_status, user_decision, created_at, updated_at FROM continuity_review_findings WHERE id=?1", params![id], continuity_finding_from_row).map_err(|error| sql_error("Entscheidung konnte nicht geladen werden", error))
+    db.query_row("SELECT id, run_id, project_id, chapter_id, scene_id, finding_type, severity, subject_entity_id, related_entity_ids_json, related_state_ids_json, related_rule_ids_json, objective_conflict, lore_explanations_json, evidence_excerpt, counter_evidence_json, confidence, start_offset, end_offset, reason, review_status, user_decision, created_at, updated_at FROM continuity_review_findings WHERE id=?1", params![id], continuity_finding_from_row).map_err(|error| sql_error("Entscheidung konnte nicht geladen werden", error))
 }
 
 fn validate_plot_thread(db: &Connection, project_id: &str, entity_id: &str) -> Result<(), String> {
@@ -5805,7 +5810,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            15
+            16
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);

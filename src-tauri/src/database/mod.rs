@@ -448,6 +448,29 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
     if has_incremental_review == 0 {
         connection.execute("INSERT INTO schema_migrations (version) VALUES (15)", [])?;
     }
+    let has_ai_continuity_evidence: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 16",
+        [],
+        |row| row.get(0),
+    )?;
+    ensure_column(
+        connection,
+        "continuity_review_findings",
+        "counter_evidence_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_column(
+        connection,
+        "continuity_review_findings",
+        "confidence",
+        "REAL NOT NULL DEFAULT 0.5 CHECK(confidence BETWEEN 0 AND 1)",
+    )?;
+    connection.execute_batch(include_str!(
+        "../../../migrations/016_ai_continuity_evidence.sql"
+    ))?;
+    if has_ai_continuity_evidence == 0 {
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (16)", [])?;
+    }
     Ok(())
 }
 
@@ -603,7 +626,7 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            15
+            16
         );
         assert_eq!(
             connection
@@ -822,7 +845,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                15
+                16
             );
             // Running startup migrations again must not change the assignment
             // or fail on the ALTER TABLE statement.

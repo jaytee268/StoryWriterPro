@@ -419,6 +419,8 @@ pub struct ContinuityReviewFinding {
     pub objective_conflict: String,
     pub lore_explanations: Vec<String>,
     pub evidence_excerpt: String,
+    pub counter_evidence_excerpts: Vec<String>,
+    pub confidence: f64,
     pub start_offset: Option<i64>,
     pub end_offset: Option<i64>,
     pub reason: String,
@@ -450,11 +452,19 @@ pub struct SaveContinuityFindingInput {
     pub lore_explanations: Vec<String>,
     #[serde(default)]
     pub evidence_excerpt: String,
+    #[serde(default)]
+    pub counter_evidence_excerpts: Vec<String>,
+    #[serde(default = "default_continuity_confidence")]
+    pub confidence: f64,
     pub start_offset: Option<i64>,
     pub end_offset: Option<i64>,
     pub reason: String,
     pub review_status: Option<String>,
     pub user_decision: Option<String>,
+}
+
+fn default_continuity_confidence() -> f64 {
+    0.5
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Check, ChevronLeft, FileText, LockKeyhole, Plus, Save, X } from 'lucide-react';
-import type { Chapter, ChapterGenerationJob, ChapterGenerationPlan, ChapterGenerationReview, ChapterGenerationSection, NarrativeSummary, Project, ProjectContext, StoryDirection, StoryEntity, WritingPreferences } from '../../types/domain';
+import type { Chapter, ChapterGenerationJob, ChapterGenerationPlan, ChapterGenerationReview, ChapterGenerationSection, ContinuityStateLedgerEntry, NarrativeSummary, Project, ProjectContext, StoryDirection, StoryEntity, WritingPreferences } from '../../types/domain';
 import type { LongformRepository } from '../../services/longformRepository';
 import { buildPreflight, contextHashForLongform, parseLongformIntent, targetWords } from '../../services/longformWorkflow';
 import { createLongformAiProvider } from '../../services/longformAiService';
@@ -105,14 +105,14 @@ export function LongformDraftView({ project, chapters, entities, repository, ins
     return ai.reviewSection({ project, chapters, entities, direction, preferences: preferences!, job: currentJob, plan: currentPlan, section, previousSections, context });
   };
 
-  const generateSection = async (ai: ReturnType<typeof createLongformAiProvider>, currentJob: ChapterGenerationJob, currentPlan: ChapterGenerationPlan, beat: ChapterGenerationPlan['beats'][number], previousSections: ChapterGenerationSection[]) => {
+  const generateSection = async (ai: ReturnType<typeof createLongformAiProvider>, currentJob: ChapterGenerationJob, currentPlan: ChapterGenerationPlan, beat: ChapterGenerationPlan['beats'][number], previousSections: ChapterGenerationSection[], draftLedger: ContinuityStateLedgerEntry[]) => {
     const emptySection: ChapterGenerationSection = await repository.saveSection({ jobId: currentJob.id, planBeatId: beat.id, orderIndex: beat.orderIndex, targetWords: beat.targetWords, content: '', continuationSummary: '', continuityState: { currentLocation: '', currentStoryTime: '', presentCharacterIds: beat.participatingCharacterIds, characterStates: [], establishedFacts: [], knowledgeChanges: beat.knowledgeChanges, relationshipChanges: beat.relationshipChanges, movedObjects: [], injuries: [], cluesIntroduced: beat.cluesUsed, promisesCreated: [], unresolvedActions: [], lastParagraphSummary: '' }, status: 'pending', providerId: activeProvider });
-    if (activeProvider !== 'codex-cli') return { section: emptySection, findings: [] as Awaited<ReturnType<typeof runContinuityReview>>['findings'] };
-    const generated = await ai.draftSection({ project, chapters, entities, direction, preferences: preferences!, job: currentJob, plan: currentPlan, section: emptySection, previousSections, context });
+    if (activeProvider !== 'codex-cli') return { section: emptySection, findings: [] as Awaited<ReturnType<typeof runContinuityReview>>['findings'], draftLedger };
+    const generated = await ai.draftSection({ project, chapters, entities, direction, preferences: preferences!, job: currentJob, plan: currentPlan, section: emptySection, previousSections, draftLedger, context });
     const saved = await repository.saveSection({ ...emptySection, content: generated.content, continuationSummary: generated.continuationSummary, continuityState: generated.continuityState, status: 'generated', providerId: 'codex-cli' });
-    const continuity = await runContinuityReview(sourceRepository, { project, chapter: chapters.at(-1), scene: chapters.at(-1)?.scenes.at(-1), currentText: generated.content, previousText: previousSections.at(-1)?.content, sourceKind: 'longform_section' });
+    const continuity = await runContinuityReview(sourceRepository, { project, chapter: chapters.at(-1), scene: chapters.at(-1)?.scenes.at(-1), currentText: generated.content, previousText: previousSections.at(-1)?.content, sourceKind: 'longform_section', draftLedger });
     if (continuity.findings.length) await repository.saveReviews(currentJob.id, findingsToLongformReviews(continuity.findings, currentJob.id, saved.id));
-    return { section: saved, findings: continuity.findings };
+    return { section: saved, findings: continuity.findings, draftLedger: [...draftLedger, ...continuity.stateProposals] };
   };
 
   const confirmPlan = async () => {
@@ -123,10 +123,12 @@ export function LongformDraftView({ project, chapters, entities, repository, ins
       setPlan(savedPlan);
       if (!ai) throw new Error('Der Longform-Anbieter ist noch nicht bereit.');
       const nextSections: ChapterGenerationSection[] = [];
+      let draftLedger: ContinuityStateLedgerEntry[] = [];
       for (const beat of savedPlan.beats) {
         const existing = sections.find((section) => section.orderIndex === beat.orderIndex && section.content.trim());
-        const generatedResult = existing ? { section: existing, findings: [] as Awaited<ReturnType<typeof runContinuityReview>>['findings'] } : await generateSection(ai, job, savedPlan, beat, nextSections);
+        const generatedResult = existing ? { section: existing, findings: [] as Awaited<ReturnType<typeof runContinuityReview>>['findings'], draftLedger } : await generateSection(ai, job, savedPlan, beat, nextSections, draftLedger);
         const section = generatedResult.section;
+        draftLedger = generatedResult.draftLedger;
         nextSections.push(section);
         if (generatedResult.findings.some((finding) => finding.severity === 'critical')) {
           await repository.updateJobStatus(job.id, 'reviewing'); setJob((current) => current ? { ...current, status: 'reviewing' } : current); setSections(nextSections); setReviews(await repository.listReviews(job.id)); setStep('draft'); return;
@@ -159,9 +161,9 @@ export function LongformDraftView({ project, chapters, entities, repository, ins
       if (!ai) throw new Error('Der Longform-Anbieter ist noch nicht bereit.');
       const beat = plan.beats.find((item) => item.orderIndex === section.orderIndex);
       if (!beat) throw new Error('Der zugehörige Plan-Beat wurde nicht gefunden.');
-      const generated = await ai.draftSection({ project, chapters, entities, direction, preferences, job, plan, section, previousSections: previous, context });
+      const generated = await ai.draftSection({ project, chapters, entities, direction, preferences, job, plan, section, previousSections: previous, draftLedger: [], context });
       const saved = await repository.saveSection({ ...section, content: generated.content, continuationSummary: generated.continuationSummary, continuityState: generated.continuityState, status: 'generated', providerId: 'codex-cli' });
-      const continuity = await runContinuityReview(sourceRepository, { project, chapter: chapters.at(-1), scene: chapters.at(-1)?.scenes.at(-1), currentText: generated.content, previousText: previous.at(-1)?.content, sourceKind: 'longform_section' });
+      const continuity = await runContinuityReview(sourceRepository, { project, chapter: chapters.at(-1), scene: chapters.at(-1)?.scenes.at(-1), currentText: generated.content, previousText: previous.at(-1)?.content, sourceKind: 'longform_section', draftLedger: [] });
       const issues = await reviewSection(ai, job, plan, saved, previous);
       const continuityIssues = continuity.findings.length ? findingsToLongformReviews(continuity.findings, job.id, saved.id) : [];
       const persisted = issues.length || continuityIssues.length ? await repository.saveReviews(job.id, [...issues, ...continuityIssues]) : [];
@@ -175,8 +177,13 @@ export function LongformDraftView({ project, chapters, entities, repository, ins
   const updateSection = async (section: ChapterGenerationSection, content: string) => {
     const saved = await repository.saveSection({ ...section, content, status: 'generated' });
     await repository.deleteReviewsForSection(section.jobId, section.id);
-    setReviews((current) => current.filter((review) => review.sectionId !== section.id));
-    setSections((current) => current.map((item) => item.id === saved.id ? saved : item));
+    const laterSections = sections.filter((item) => item.orderIndex > section.orderIndex);
+    await Promise.all(laterSections.map((item) => repository.saveSection({ ...item, status: 'regenerate_requested' })));
+    const continuity = activeProvider === 'codex-cli' ? await runContinuityReview(sourceRepository, { project, chapter: chapters.at(-1), scene: chapters.at(-1)?.scenes.at(-1), currentText: content, previousText: sections.filter((item) => item.orderIndex < section.orderIndex).at(-1)?.content, sourceKind: 'longform_section', draftLedger: [] }) : undefined;
+    const continuityReviews = continuity?.findings.length ? findingsToLongformReviews(continuity.findings, section.jobId, section.id) : [];
+    const persisted = continuityReviews.length ? await repository.saveReviews(section.jobId, continuityReviews) : [];
+    setReviews((current) => [...current.filter((review) => review.sectionId !== section.id), ...persisted]);
+    setSections((current) => current.map((item) => item.id === saved.id ? saved : item).map((item) => laterSections.some((later) => later.id === item.id) ? { ...item, status: 'regenerate_requested' } : item));
   };
 
   const accept = async () => {

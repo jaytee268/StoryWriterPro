@@ -2,14 +2,14 @@ import { useRef, useState } from 'react';
 import { Check, Merge, Scissors, Upload, X } from 'lucide-react';
 import type { ManuscriptImportResult } from '../../types/domain';
 import type { StoryRepository } from '../../services/storyRepository';
-import { mergeImportChapters, parseManuscriptFile, splitImportChapter, type ManuscriptImportChapterPreview, type ManuscriptImportPreview } from '../../services/manuscriptImport';
+import { mergeImportChapters, parseManuscriptFile, splitContinuityUnits, splitImportChapter, type ManuscriptImportChapterPreview, type ManuscriptImportPreview, type ContinuityPassageUnit } from '../../services/manuscriptImport';
 
 interface Props {
   projectId: string;
   bookId: string;
   repository: StoryRepository;
   onClose: () => void;
-  onImported: (result: ManuscriptImportResult, pageMarkersFound?: number) => Promise<void>;
+  onImported: (result: ManuscriptImportResult, pageMarkersFound?: number, unitsByChapter?: ContinuityPassageUnit[][]) => Promise<void>;
 }
 
 export function ManuscriptImportModal({ projectId, bookId, repository, onClose, onImported }: Props) {
@@ -72,7 +72,7 @@ export function ManuscriptImportModal({ projectId, bookId, repository, onClose, 
     setStatus('importing'); setError('');
     try {
       const result = await repository.importManuscript({ projectId, bookId, chapters: preview.chapters.map(({ title, content }) => ({ title, content })) });
-      await onImported(result, preview.pageMarkersFound);
+      await onImported(result, preview.pageMarkersFound, preview.chapters.map((chapter) => splitContinuityUnits(chapter.content, chapter.pageMarkers)));
     } catch (reason) {
       setStatus('error'); setError(reason instanceof Error ? reason.message : 'Der Import konnte nicht gespeichert werden.');
     }

@@ -8,7 +8,11 @@ export interface ManuscriptImportChapterPreview {
   wordCount: number;
   explicitNumber?: number;
   sourceHeading?: string;
+  pageMarkers: ManuscriptPageMarker[];
 }
+
+export interface ManuscriptPageMarker { page: number; label: string; sourceOffset: number; textOffset: number; }
+export interface ContinuityPassageUnit { text: string; startOffset: number; endOffset: number; page?: number; }
 
 export interface ManuscriptImportIssue {
   severity: 'warning' | 'error';
@@ -72,6 +76,8 @@ function wordCount(text: string): number {
   return text.trim() ? text.trim().split(/\s+/u).length : 0;
 }
 
+function pageNumber(line: string): number { return Number(line.match(/(?:seite|page)\s+(\d+)/i)?.[1] ?? 0); }
+
 function nearestTitle(fileName: string): string {
   const base = fileName.replace(/\.[^.]+$/, '').trim();
   return base || 'Importiertes Manuskript';
@@ -105,10 +111,14 @@ export function parseManuscriptText(text: string, fileName = 'Manuskript.txt', f
   const chapters: ManuscriptImportChapterPreview[] = [];
   let current: ManuscriptImportChapterPreview | undefined;
   const fallbackText: string[] = [];
+  const fallbackPageMarkers: ManuscriptPageMarker[] = [];
 
+  let sourceOffset = 0;
   const pushCurrent = () => {
     if (!current) return;
-    current.content = current.content.replace(/\n{3,}/g, '\n\n').trim();
+    const leading = Array.from(current.content).length - Array.from(current.content.trimStart()).length;
+    current.content = current.content.trim();
+    current.pageMarkers = current.pageMarkers.map((marker) => ({ ...marker, textOffset: Math.max(0, marker.textOffset - leading) }));
     current.wordCount = wordCount(current.content);
     chapters.push(current);
   };
@@ -117,18 +127,25 @@ export function parseManuscriptText(text: string, fileName = 'Manuskript.txt', f
     const heading = chapterHeading(line);
     if (heading) {
       pushCurrent();
-      current = { id: crypto.randomUUID(), title: heading.title, content: '', orderIndex: chapters.length + 1, wordCount: 0, explicitNumber: heading.explicitNumber, sourceHeading: line.trim() };
+      current = { id: crypto.randomUUID(), title: heading.title, content: '', orderIndex: chapters.length + 1, wordCount: 0, explicitNumber: heading.explicitNumber, sourceHeading: line.trim(), pageMarkers: [] };
+      sourceOffset += Array.from(line).length + 1;
       return;
     }
-    if (pageMarkerPattern.test(line) && removePageMarkers) return;
+    if (pageMarkerPattern.test(line)) {
+      if (current) current.pageMarkers.push({ page: pageNumber(line), label: line.trim(), sourceOffset, textOffset: Array.from(current.content).length });
+      else fallbackPageMarkers.push({ page: pageNumber(line), label: line.trim(), sourceOffset, textOffset: Array.from(fallbackText.join('\n')).length });
+      if (removePageMarkers) { sourceOffset += Array.from(line).length + 1; return; }
+    }
     if (current) current.content += `${line}\n`;
     else fallbackText.push(line);
+    sourceOffset += Array.from(line).length + 1;
   });
   pushCurrent();
 
   if (!chapters.length && fallbackText.join('\n').trim()) {
     const content = fallbackText.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-    chapters.push({ id: crypto.randomUUID(), title: nearestTitle(fileName), content, orderIndex: 1, wordCount: wordCount(content) });
+    const leading = Array.from(fallbackText.join('\n')).length - Array.from(fallbackText.join('\n').trimStart()).length;
+    chapters.push({ id: crypto.randomUUID(), title: nearestTitle(fileName), content, orderIndex: 1, wordCount: wordCount(content), pageMarkers: fallbackPageMarkers.map((marker) => ({ ...marker, textOffset: Math.max(0, marker.textOffset - leading) })) });
   }
   chapters.forEach((chapter, index) => { chapter.orderIndex = index + 1; });
   const numbers = chapters.map((chapter) => chapter.explicitNumber).filter((number): number is number => number !== undefined);
@@ -137,6 +154,38 @@ export function parseManuscriptText(text: string, fileName = 'Manuskript.txt', f
     ? Array.from({ length: Math.max(...numbers) - Math.min(...numbers) + 1 }, (_, index) => Math.min(...numbers) + index).filter((number) => !numbers.includes(number))
     : [];
   return { fileName, format, chapters, issues: chapterIssues(chapters, pageMarkersFound), duplicateChapterNumbers, missingChapterNumbers, pageMarkersFound };
+}
+
+export function splitContinuityUnits(text: string, pageMarkers: ManuscriptPageMarker[] = [], targetWords = 300): ContinuityPassageUnit[] {
+  const normalized = text.trim();
+  const characters = Array.from(normalized);
+  if (!normalized) return [];
+  if (pageMarkers.length) {
+    const markers = pageMarkers.filter((marker) => marker.textOffset < characters.length).sort((a, b) => a.textOffset - b.textOffset);
+    return markers.map((marker, index) => { const startOffset = marker.textOffset; const endOffset = index + 1 < markers.length ? markers[index + 1].textOffset : characters.length; return { text: characters.slice(startOffset, endOffset).join('').trim(), startOffset, endOffset, page: marker.page }; }).filter((unit) => unit.text.length > 0);
+  }
+  const units: ContinuityPassageUnit[] = [];
+  let cursor = 0;
+  while (cursor < characters.length) {
+    const remaining = characters.slice(cursor).join('');
+    if (wordCount(remaining) <= targetWords) { units.push({ text: remaining.trim(), startOffset: cursor, endOffset: characters.length }); break; }
+    const rough = Math.min(remaining.length, Math.max(1, Math.floor(remaining.length * targetWords / wordCount(remaining))));
+    const lowerBound = cursor + Math.floor(rough * 0.65);
+    let endOffset = -1;
+    for (let index = Math.min(characters.length, cursor + rough); index > lowerBound; index -= 1) {
+      if (characters[index - 2] === '\n' && characters[index - 1] === '\n') { endOffset = index - 2; break; }
+    }
+    if (endOffset < 0) {
+      for (let index = Math.min(characters.length, cursor + rough); index > cursor; index -= 1) {
+        if (/\s/u.test(characters[index - 1] ?? '')) { endOffset = index - 1; break; }
+      }
+    }
+    endOffset = endOffset > cursor ? endOffset : Math.min(characters.length, cursor + rough);
+    units.push({ text: characters.slice(cursor, endOffset).join('').trim(), startOffset: cursor, endOffset });
+    cursor = endOffset;
+    while (/\s/u.test(characters[cursor] ?? '')) cursor += 1;
+  }
+  return units.filter((unit) => unit.text.length > 0);
 }
 
 function readUint32(view: DataView, offset: number): number { return view.getUint32(offset, true); }
@@ -222,12 +271,12 @@ export function splitImportChapter(chapter: ManuscriptImportChapterPreview, offs
   const firstContent = chapter.content.slice(0, boundary).trim();
   const secondContent = chapter.content.slice(boundary).trim();
   if (!firstContent || !secondContent) throw new Error('An dieser Stelle kann das Kapitel nicht sinnvoll geteilt werden.');
-  const first = { ...chapter, id: crypto.randomUUID(), title: `${chapter.title} – Teil 1`, content: firstContent, wordCount: wordCount(firstContent), explicitNumber: undefined };
-  const second = { ...chapter, id: crypto.randomUUID(), title: `${chapter.title} – Teil 2`, content: secondContent, wordCount: wordCount(secondContent), explicitNumber: undefined };
+  const first = { ...chapter, id: crypto.randomUUID(), title: `${chapter.title} – Teil 1`, content: firstContent, wordCount: wordCount(firstContent), explicitNumber: undefined, pageMarkers: [] };
+  const second = { ...chapter, id: crypto.randomUUID(), title: `${chapter.title} – Teil 2`, content: secondContent, wordCount: wordCount(secondContent), explicitNumber: undefined, pageMarkers: [] };
   return [first, second];
 }
 
 export function mergeImportChapters(first: ManuscriptImportChapterPreview, second: ManuscriptImportChapterPreview): ManuscriptImportChapterPreview {
   const content = `${first.content.trim()}\n\n${second.content.trim()}`.trim();
-  return { ...first, id: crypto.randomUUID(), content, wordCount: wordCount(content), explicitNumber: first.explicitNumber };
+  return { ...first, id: crypto.randomUUID(), content, wordCount: wordCount(content), explicitNumber: first.explicitNumber, pageMarkers: [...first.pageMarkers, ...second.pageMarkers.map((marker) => ({ ...marker, textOffset: marker.textOffset + first.content.length + 2 }))] };
 }

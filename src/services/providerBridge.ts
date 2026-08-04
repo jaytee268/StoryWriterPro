@@ -12,6 +12,7 @@ const responses: Record<AiTaskType, string> = {
   deep_research: 'Die Analyse wurde als lokaler, fortsetzbarer Job vorbereitet.',
   timeline_validation: 'Keine harten Zeitkonflikte in den geladenen Beispieldaten gefunden.',
   character_analysis: 'Mareks Reaktion passt zum bestätigten Charakterbogen; seine Lüge markiert eine neue Eskalationsstufe.',
+  continuity_passage: 'Die semantische Continuity-Prüfung wird über den aktiven AI-Provider ausgeführt; lokale Heuristiken markieren nur Kandidaten.',
 };
 
 export class MockProvider implements AiProvider {

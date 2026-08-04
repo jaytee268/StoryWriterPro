@@ -87,6 +87,7 @@ pub enum CodexTaskKind {
     DraftChapterSection,
     ReviewChapterSection,
     ReviewCompleteChapter,
+    AnalyzeContinuityPassage,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -346,6 +347,7 @@ const BIBLE_SCHEMA: &str = r#"{
   }
 }"#;
 const CHAT_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["answer","usedEntityIds","usedSourceIds","uncertainty","warnings"],"properties":{"answer":{"type":"string","minLength":1,"maxLength":6000},"usedEntityIds":{"type":"array","maxItems":100,"items":{"type":"string"}},"usedSourceIds":{"type":"array","maxItems":8,"items":{"type":"string"}},"uncertainty":{"enum":["low","medium","high"]},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
+const CONTINUITY_SCHEMA: &str = r##"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["observedActions","proposedStateChanges","objectiveContradictions","missingExplanations","matchedLoreRules","newRuleProposals","plotThreadChanges","confidence","evidence","warnings"],"properties":{"observedActions":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["summary","evidenceExcerpt","entityIds","startOffset","endOffset"],"properties":{"summary":{"type":"string","maxLength":2000},"evidenceExcerpt":{"type":"string","maxLength":1500},"entityIds":{"type":"array","items":{"type":"string"}},"startOffset":{"type":["integer","null"],"minimum":0},"endOffset":{"type":["integer","null"],"minimum":0}}}},"proposedStateChanges":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["entityId","relatedEntityId","stateKind","previousState","newState","confidence","evidenceExcerpt","startOffset","endOffset","reason"],"properties":{"entityId":{"type":"string"},"relatedEntityId":{"type":["string","null"]},"stateKind":{"enum":["item_existence","item_availability","ownership","location","physical_condition","injury","property","knowledge","relationship","promise","goal","open_action"]},"previousState":{"type":"string","maxLength":1000},"newState":{"type":"string","minLength":1,"maxLength":1000},"confidence":{"type":"number","minimum":0,"maximum":1},"evidenceExcerpt":{"type":"string","maxLength":1500},"startOffset":{"type":["integer","null"],"minimum":0},"endOffset":{"type":["integer","null"],"minimum":0},"reason":{"type":"string","maxLength":1500}}}},"objectiveContradictions":{"type":"array","maxItems":100,"items":{"$ref":"#/$defs/finding"}},"missingExplanations":{"type":"array","maxItems":100,"items":{"$ref":"#/$defs/finding"}},"matchedLoreRules":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["ruleId","rationale","confidence"],"properties":{"ruleId":{"type":"string"},"rationale":{"type":"string","maxLength":1500},"confidence":{"type":"number","minimum":0,"maximum":1}}}},"newRuleProposals":{"type":"array","maxItems":30,"items":{"type":"object","additionalProperties":false,"required":["projectId","targetRuleId","title","statement","scope","prerequisites","effects","exceptions","connectedLoreIds","sourceReferenceIds","evidenceExcerpt","chapterId","sceneId","startOffset","endOffset","confidence","reason"],"properties":{"projectId":{"type":"string"},"targetRuleId":{"type":["string","null"]},"title":{"type":"string","maxLength":300},"statement":{"type":"string","maxLength":4000},"scope":{"enum":["project","book","arc"]},"prerequisites":{"type":"array","items":{"type":"string"}},"effects":{"type":"array","items":{"type":"string"}},"exceptions":{"type":"array","items":{"type":"string"}},"connectedLoreIds":{"type":"array","items":{"type":"string"}},"sourceReferenceIds":{"type":"array","items":{"type":"string"}},"evidenceExcerpt":{"type":"string","maxLength":1500},"chapterId":{"type":["string","null"]},"sceneId":{"type":["string","null"]},"startOffset":{"type":["integer","null"],"minimum":0},"endOffset":{"type":["integer","null"],"minimum":0},"confidence":{"type":"number","minimum":0,"maximum":1},"reason":{"type":"string","maxLength":1500}}}},"plotThreadChanges":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["entityId","proposedStatus","evidenceExcerpt","startOffset","endOffset","reason","confidence"],"properties":{"entityId":{"type":"string"},"proposedStatus":{"enum":["open","closure_candidate","partially_resolved","reopened","abandoned"]},"evidenceExcerpt":{"type":"string","maxLength":1500},"startOffset":{"type":["integer","null"],"minimum":0},"endOffset":{"type":["integer","null"],"minimum":0},"reason":{"type":"string","maxLength":1500},"confidence":{"type":"number","minimum":0,"maximum":1}}}},"confidence":{"type":"number","minimum":0,"maximum":1},"evidence":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["id","label","chapterId","sceneId","entityId","excerpt","startOffset","endOffset"],"properties":{"id":{"type":"string"},"label":{"type":"string"},"chapterId":{"type":["string","null"]},"sceneId":{"type":["string","null"]},"entityId":{"type":["string","null"]},"excerpt":{"type":["string","null"]},"startOffset":{"type":["integer","null"],"minimum":0},"endOffset":{"type":["integer","null"],"minimum":0}}}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}},"$defs":{"finding":{"type":"object","additionalProperties":false,"required":["findingType","subjectEntityId","relatedEntityIds","relatedStateIds","objectiveConflict","evidenceExcerpt","counterEvidenceExcerpts","confidence","startOffset","endOffset","reason"],"properties":{"findingType":{"enum":["critical_contradiction","probable_contradiction","missing_explanation","lore_compatible_anomaly","possible_intentional_exception"]},"subjectEntityId":{"type":["string","null"]},"relatedEntityIds":{"type":"array","items":{"type":"string"}},"relatedStateIds":{"type":"array","items":{"type":"string"}},"objectiveConflict":{"type":"string","maxLength":3000},"evidenceExcerpt":{"type":"string","maxLength":1500},"counterEvidenceExcerpts":{"type":"array","items":{"type":"string","maxLength":1500}},"confidence":{"type":"number","minimum":0,"maximum":1},"startOffset":{"type":["integer","null"],"minimum":0},"endOffset":{"type":["integer","null"],"minimum":0},"reason":{"type":"string","maxLength":1500}}}}}"##;
 const CHARACTER_MEMORY_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["proposals","warnings"],"properties":{"proposals":{"type":"array","maxItems":100,"items":{"type":"object","required":["proposalKind","subjectCharacterId","relatedCharacterId","targetEntityId","payload","classification","confidence","evidenceExcerpt","startOffset","endOffset","reason"],"properties":{"proposalKind":{"enum":["voice_pattern","experience","dialogue_memory","relationship_memory","knowledge_change","profile_observation","character_relation"]},"subjectCharacterId":{"type":["string","null"]},"relatedCharacterId":{"type":["string","null"]},"targetEntityId":{"type":["string","null"]},"payload":{"type":"object"},"classification":{"enum":["observable","interpretation","author_decision_required","possible_contradiction"]},"confidence":{"type":"number","minimum":0,"maximum":1},"evidenceExcerpt":{"type":"string","maxLength":1000},"startOffset":{"type":["integer","null"],"minimum":0},"endOffset":{"type":["integer","null"],"minimum":0},"reason":{"type":"string","maxLength":1000}}}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
 const STYLE_ANALYSIS_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["observations","overallSummary","warnings"],"properties":{"observations":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["observationType","observationText","recommendation","confidence","evidence"],"properties":{"observationType":{"type":"string"},"observationText":{"type":"string","maxLength":4000},"recommendation":{"type":"string","maxLength":2000},"confidence":{"type":"number","minimum":0,"maximum":1},"evidence":{"type":"array","maxItems":10,"items":{"type":"string"}}}}},"overallSummary":{"type":"string","maxLength":6000},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
 const SUMMARY_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["summary","importantEvents","openThreads","characterChanges","knowledgeChanges","relationshipEffects","warnings"],"properties":{"summary":{"type":"string","maxLength":8000},"importantEvents":{"type":"array","items":{"type":"string","maxLength":1000}},"openThreads":{"type":"array","items":{"type":"string","maxLength":1000}},"characterChanges":{"type":"array","items":{"type":"string","maxLength":1000}},"knowledgeChanges":{"type":"array","items":{"type":"string","maxLength":1000}},"relationshipEffects":{"type":"array","items":{"type":"string","maxLength":1000}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
@@ -373,6 +375,7 @@ fn schema_for_task(kind: &CodexTaskKind) -> &'static str {
         CodexTaskKind::PlanChapterDraft => CHAPTER_PLAN_SCHEMA_STRICT,
         CodexTaskKind::DraftChapterSection => CHAPTER_SECTION_SCHEMA_STRICT,
         CodexTaskKind::ReviewChapterSection | CodexTaskKind::ReviewCompleteChapter => REVIEW_SCHEMA,
+        CodexTaskKind::AnalyzeContinuityPassage => CONTINUITY_SCHEMA,
         _ => CHAT_SCHEMA,
     }
 }
@@ -387,6 +390,7 @@ fn prompt_for(kind: &CodexTaskKind) -> (&'static str, &'static str) {
         CodexTaskKind::PlanChapterDraft => ("storymemory-plan-v1", "Erstelle ausschließlich einen überprüfbaren Kapitelplan. Erzeuge noch keinen Manuskripttext und mache Annahmen sichtbar."),
         CodexTaskKind::DraftChapterSection => ("storymemory-section-v1", "Erzeuge nur den angeforderten Abschnitt aus dem bestätigten Plan und Kontext. Verändere keine Dateien."),
         CodexTaskKind::ReviewChapterSection | CodexTaskKind::ReviewCompleteChapter => ("storymemory-review-v1", "Prüfe den Entwurf ausschließlich auf strukturierte Issues. Verändere den Text nicht."),
+        CodexTaskKind::AnalyzeContinuityPassage => ("storymemory-continuity-v1", "Analysiere ausschließlich request.json als projektspezifischen Continuity-Pass. Semantische Paraphrasen müssen gleich behandelt werden; verwende keine Schlüsselwortregeln als Entscheidung. Nutze nur bestätigte Story-Bible-Einträge und bestätigte Projektregeln als Kanon. Liefere Beobachtungen, Zustandsänderungsvorschläge, objektive Konflikte, Erklärungslücken, passende bestätigte Regeln, unbestätigte neue Regelvorschläge und Plot-Thread-Kandidaten. Nimm niemals Kanonänderungen oder Ledger-Zustände automatisch vor. Schlage für Handlungsstränge höchstens closure_candidate, partially_resolved, reopened, open oder abandoned vor; resolved ist ausschließlich eine Nutzerentscheidung. Laktoseintoleranz, medizinische Ausnahmen und produktspezifische Ausnahmen sind mögliche Erklärungen, keine automatischen harten Fehler. Liefere ausschließlich JSON nach output-schema.json. Offsets sind Unicode-Zeichenpositionen im passage.text."),
     }
 }
 
@@ -570,6 +574,7 @@ fn create_snapshot(input: &RunCodexTaskInput) -> Result<CodexSnapshotGuard, Code
                 CodexTaskKind::ExtractCharacterMemoryPatch => {
                     CHARACTER_MEMORY_SCHEMA_STRICT.as_bytes()
                 }
+                CodexTaskKind::AnalyzeContinuityPassage => CONTINUITY_SCHEMA.as_bytes(),
                 _ => schema_for_task(&input.task_kind).as_bytes(),
             },
         )?;
@@ -727,6 +732,10 @@ fn result_matches_task(value: &Value, task: &CodexTaskKind) -> bool {
         }
         CodexTaskKind::ReviewChapterSection | CodexTaskKind::ReviewCompleteChapter => {
             object.contains_key("issues")
+        }
+        CodexTaskKind::AnalyzeContinuityPassage => {
+            object.contains_key("objectiveContradictions")
+                && object.contains_key("proposedStateChanges")
         }
     }
 }
@@ -1143,6 +1152,170 @@ pub fn validate_longform_result(result: &Value) -> Result<Value, CodexError> {
     Ok(result.clone())
 }
 
+fn validate_continuity_result(result: &Value, request: &Value) -> Result<Value, CodexError> {
+    let object = result.as_object().ok_or_else(|| {
+        CodexError::new(
+            "CODEX_SCHEMA_VALIDATION_FAILED",
+            "Continuity-Ergebnis ist kein Objekt.",
+        )
+    })?;
+    for field in [
+        "observedActions",
+        "proposedStateChanges",
+        "objectiveContradictions",
+        "missingExplanations",
+        "matchedLoreRules",
+        "newRuleProposals",
+        "plotThreadChanges",
+        "evidence",
+        "warnings",
+    ] {
+        if !object.get(field).is_some_and(Value::is_array) {
+            return Err(CodexError::new(
+                "CODEX_SCHEMA_VALIDATION_FAILED",
+                format!("Continuity-Ergebnis benötigt {field}."),
+            ));
+        }
+    }
+    let entities: std::collections::HashSet<&str> = request
+        .get("confirmedStoryBible")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("id").and_then(Value::as_str))
+        .collect();
+    let rules: std::collections::HashSet<&str> = request
+        .get("confirmedRules")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("id").and_then(Value::as_str))
+        .collect();
+    let states: std::collections::HashSet<&str> = request
+        .get("continuityStatesBeforePosition")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("id").and_then(Value::as_str))
+        .collect();
+    for change in object
+        .get("proposedStateChanges")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let entity_id = valid_string(change, "entityId", 200)?;
+        if !entities.contains(entity_id) {
+            return Err(CodexError::new(
+                "CODEX_INVALID_REFERENCE",
+                "Zustandsvorschlag verweist auf keine bestätigte Entität.",
+            ));
+        }
+        let confidence = change
+            .get("confidence")
+            .and_then(Value::as_f64)
+            .ok_or_else(|| {
+                CodexError::new(
+                    "CODEX_SCHEMA_VALIDATION_FAILED",
+                    "Zustandsvorschlag benötigt confidence.",
+                )
+            })?;
+        if !(0.0..=1.0).contains(&confidence) {
+            return Err(CodexError::new(
+                "CODEX_SCHEMA_VALIDATION_FAILED",
+                "confidence muss zwischen 0 und 1 liegen.",
+            ));
+        }
+    }
+    for collection in ["objectiveContradictions", "missingExplanations"] {
+        for finding in object
+            .get(collection)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            for id in finding
+                .get("relatedEntityIds")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                if !entities.contains(id) {
+                    return Err(CodexError::new(
+                        "CODEX_INVALID_REFERENCE",
+                        "Continuity-Finding verweist auf eine unbekannte Entität.",
+                    ));
+                }
+            }
+            for id in finding
+                .get("relatedStateIds")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                if !states.contains(id) {
+                    return Err(CodexError::new(
+                        "CODEX_INVALID_REFERENCE",
+                        "Continuity-Finding verweist auf einen unbekannten Zustand.",
+                    ));
+                }
+            }
+            let confidence = finding
+                .get("confidence")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| {
+                    CodexError::new(
+                        "CODEX_SCHEMA_VALIDATION_FAILED",
+                        "Continuity-Finding benötigt confidence.",
+                    )
+                })?;
+            if !(0.0..=1.0).contains(&confidence) {
+                return Err(CodexError::new(
+                    "CODEX_SCHEMA_VALIDATION_FAILED",
+                    "confidence muss zwischen 0 und 1 liegen.",
+                ));
+            }
+        }
+    }
+    for rule in object
+        .get("matchedLoreRules")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("ruleId").and_then(Value::as_str))
+    {
+        if !rules.contains(rule) {
+            return Err(CodexError::new(
+                "CODEX_INVALID_REFERENCE",
+                "Nur bestätigte Projektregeln dürfen als Erklärung verwendet werden.",
+            ));
+        }
+    }
+    for change in object
+        .get("plotThreadChanges")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if change.get("proposedStatus").and_then(Value::as_str) == Some("resolved") {
+            return Err(CodexError::new(
+                "CODEX_SCHEMA_VALIDATION_FAILED",
+                "Die AI darf keinen Handlungsstrang als resolved setzen.",
+            ));
+        }
+        let entity_id = valid_string(change, "entityId", 200)?;
+        if !entities.contains(entity_id) {
+            return Err(CodexError::new(
+                "CODEX_INVALID_REFERENCE",
+                "Plot-Thread-Vorschlag verweist auf keine bestätigte Entität.",
+            ));
+        }
+    }
+    Ok(result.clone())
+}
+
 fn validate_longform_result_for_task(
     result: &Value,
     kind: &CodexTaskKind,
@@ -1182,6 +1355,17 @@ fn validate_longform_result_for_task(
             "usedSourceIds",
         ],
         CodexTaskKind::ReviewChapterSection | CodexTaskKind::ReviewCompleteChapter => &["issues"],
+        CodexTaskKind::AnalyzeContinuityPassage => &[
+            "observedActions",
+            "proposedStateChanges",
+            "objectiveContradictions",
+            "missingExplanations",
+            "matchedLoreRules",
+            "newRuleProposals",
+            "plotThreadChanges",
+            "confidence",
+            "evidence",
+        ],
         _ => &[],
     };
     for field in required {
@@ -1533,6 +1717,9 @@ pub fn run_task(
             validate_character_memory_result(&raw, &input.request_json)?
         }
         CodexTaskKind::AnswerWithProjectContext => validate_chat_result(&raw, &input.request_json)?,
+        CodexTaskKind::AnalyzeContinuityPassage => {
+            validate_continuity_result(&raw, &input.request_json)?
+        }
         CodexTaskKind::AnalyzeProjectStyle
         | CodexTaskKind::SummarizeScene
         | CodexTaskKind::SummarizeChapter
@@ -1838,6 +2025,9 @@ mod tests {
             CodexTaskKind::ReviewChapterSection | CodexTaskKind::ReviewCompleteChapter => {
                 json!({"issues":[],"warnings":[]})
             }
+            CodexTaskKind::AnalyzeContinuityPassage => {
+                json!({"observedActions":[],"proposedStateChanges":[],"objectiveContradictions":[],"missingExplanations":[],"matchedLoreRules":[],"newRuleProposals":[],"plotThreadChanges":[],"confidence":0.0,"evidence":[],"warnings":[]})
+            }
         }
     }
 
@@ -1855,6 +2045,7 @@ mod tests {
             CodexTaskKind::DraftChapterSection,
             CodexTaskKind::ReviewChapterSection,
             CodexTaskKind::ReviewCompleteChapter,
+            CodexTaskKind::AnalyzeContinuityPassage,
         ];
         for kind in kinds {
             let result = synthetic_task_result(kind.clone());

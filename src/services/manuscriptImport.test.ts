@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractDocxText, parseManuscriptFile, parseManuscriptText } from './manuscriptImport';
+import { extractDocxText, parseManuscriptFile, parseManuscriptText, splitContinuityUnits } from './manuscriptImport';
 
 function storedZip(entries: Record<string, string>): ArrayBuffer {
   const encoder = new TextEncoder();
@@ -58,6 +58,8 @@ describe('manuscript import preview', () => {
     const kept = parseManuscriptText(text, 'buch.txt', 'txt', { removePageMarkers: false });
     expect(removed.chapters).toHaveLength(2);
     expect(removed.pageMarkersFound).toBe(3);
+    expect(removed.chapters[0].pageMarkers.map((marker) => marker.page)).toEqual([1, 2]);
+    expect(removed.chapters[0].pageMarkers[1].textOffset).toBeGreaterThan(removed.chapters[0].pageMarkers[0].textOffset);
     expect(removed.chapters[0].content).not.toContain('Seite 1');
     expect(kept.chapters[0].content).toContain('Seite 1');
   });
@@ -71,5 +73,16 @@ describe('manuscript import preview', () => {
     expect(preview.format).toBe('docx');
     expect(preview.chapters[0].title).toBe('Kapitel 1');
     expect(preview.chapters[0].content).toContain('DOCX-Inhalt');
+  });
+
+  it('macht Seitenmarker und wortbasierte Einheiten zu internen Prüfeinheiten', () => {
+    const preview = parseManuscriptText('Kapitel 1\nSeite 1\nErster Abschnitt.\nSeite 2\nZweiter Abschnitt.');
+    const units = splitContinuityUnits(preview.chapters[0].content, preview.chapters[0].pageMarkers);
+    expect(units.map((unit) => unit.page)).toEqual([1, 2]);
+    expect(units[0].startOffset).toBe(0);
+    expect(units[1].startOffset).toBeGreaterThan(units[0].startOffset);
+    const wordUnits = splitContinuityUnits(Array.from({ length: 700 }, (_, index) => `Wort${index}`).join(' '));
+    expect(wordUnits.length).toBeGreaterThan(1);
+    expect(wordUnits.every((unit) => unit.text.split(/\s+/u).length <= 350 || unit === wordUnits.at(-1))).toBe(true);
   });
 });
