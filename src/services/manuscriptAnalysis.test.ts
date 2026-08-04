@@ -101,6 +101,16 @@ describe('sequenzielle, fortsetzbare Manuskript-Continuity', () => {
     expect(units[0]?.endOffset).toBe(8);
   });
 
+  it('ordnet ein synthetisches 54-Seiten-Manuskript ohne Offset- oder Speicherverlust', () => {
+    const chapter = { id: 'chapter-54', bookId: 'book-1', title: '54 Seiten', orderIndex: 0, scenes: [{ id: 'scene-54', chapterId: 'chapter-54', title: 'Text', orderIndex: 0, content: '', pov: '', location: '', storyTime: '', status: 'draft' as const, goal: '', notes: '' }] };
+    const pageUnits = Array.from({ length: 54 }, (_, index) => ({ text: `Seite ${index + 1} 😀`, startOffset: index * 10, endOffset: index * 10 + Array.from(`Seite ${index + 1} 😀`).length, page: index + 1 }));
+    const units = createManuscriptAnalysisUnits([chapter], [pageUnits], [{ id: 'scene-54', chapterId: chapter.id }]);
+    expect(units).toHaveLength(54);
+    expect(units[0]).toMatchObject({ orderIndex: 0, pageNumber: 1, startOffset: 0 });
+    expect(units.at(-1)).toMatchObject({ orderIndex: 53, pageNumber: 54 });
+    expect(units.every((unit) => unit.startOffset < unit.endOffset && unit.contentHash)).toBe(true);
+  });
+
   it('enthält im Importworkflow keine verschluckten catch(() => undefined)-Fehler', () => {
     const app = Object.values(import.meta.glob('../App.tsx', { eager: true, query: '?raw', import: 'default' }) as Record<string, string>)[0] ?? '';
     expect(app).not.toContain('catch(() => undefined)');

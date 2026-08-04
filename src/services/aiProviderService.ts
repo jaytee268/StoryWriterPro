@@ -175,7 +175,7 @@ export class CodexCliProvider implements StoryAiProvider {
     if (this.activeTaskId) throw new Error('Es läuft bereits eine Codex-Analyse.');
     const id = taskId(phase); this.activeTaskId = id;
     try {
-      const result = await desktopInvoke<{ result: unknown }>('run_codex_task', { input: { taskId: id, taskKind, requestJson: { phase, ...input, chapters: input.chapters.map((chapter) => ({ ...chapter, text: chapter.text.slice(0, 40000) })) }, timeoutSeconds: timeoutSeconds || settings.bibleUpdateTimeoutSeconds } });
+      const result = await desktopInvoke<{ result: unknown }>('run_codex_task', { input: { taskId: id, taskKind, requestJson: { phase, coordinateSystem: 'unicode_codepoints', ...input }, timeoutSeconds: timeoutSeconds || settings.bibleUpdateTimeoutSeconds } });
       return schema.parse(result.result);
     } finally { if (this.activeTaskId === id) this.activeTaskId = undefined; }
   }

@@ -7,6 +7,7 @@ import { runContinuityReview } from './continuityReview';
 import { DeterministicProjectContextBuilder } from './contextBuilder';
 import { validateManuscriptStructure, localStructureHints } from './manuscriptStructure';
 import { matchPriorProvisionalEntity, provisionalEntityId } from './provisionalGraph';
+import { buildHierarchicalPhaseContext, truncateUnicode } from './analysisBudget';
 
 const activeJobs = new Map<string, Promise<void>>();
 const PHASES: ManuscriptAnalysisPhase[] = ['structure', 'passage_continuity', 'bible_extraction', 'character_memory', 'scene_or_chapter_synthesis', 'narrative_summaries', 'plot_thread_synthesis', 'book_end_state', 'global_countercheck', 'user_review', 'completed'];
@@ -410,13 +411,35 @@ export class ManuscriptAnalysisController {
 
   private async runChapterSynthesis(job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, chapters: Chapter[], provider: Provider, timeout: number): Promise<void> {
     const progress = job.phaseProgress.scene_or_chapter_synthesis ?? this.emptyProgress('scene_or_chapter_synthesis', chapters.length, provider.id); const start = progress.lastSuccessfulUnitId ? Math.max(0, chapters.findIndex((chapter) => chapter.id === progress.lastSuccessfulUnitId) + 1) : 0;
-    for (let index = start; index < chapters.length; index += 1) { if (!await this.checkControl(job)) return; const chapter = chapters[index]; const text = chapterText(chapter); const result = await provider.summarize('chapter', chapter.id, `Führe eine strukturierte Kapitel-Synthese durch. Bewerte wichtige Ereignisse, Wissen, Beziehungen, offene Threads und Endzustände.\n\n${text}`, timeout); const summary = await this.repository.saveNarrativeSummary(synthesisToSummary(result, workspace.project.id, 'chapter', chapter.id, text)); await this.repository.saveManuscriptAnalysisArtifacts(this.jobId, [{ jobId: this.jobId, projectId: workspace.project.id, phase: 'scene_or_chapter_synthesis' as const, artifactType: 'narrative_summary' as const, artifactId: summary.id, reviewStatus: 'pending' as const, explicitlySkipped: false }]); progress.completedUnits += 1; progress.lastSuccessfulUnitId = chapter.id; progress.actualProvider = provider.id; progress.updatedAt = new Date().toISOString(); await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'running', currentPhase: 'scene_or_chapter_synthesis', phaseProgress: { ...(await this.repository.getManuscriptAnalysisJob(job.id)).phaseProgress, scene_or_chapter_synthesis: progress } }); }
+    for (let index = start; index < chapters.length; index += 1) { if (!await this.checkControl(job)) return; const chapter = chapters[index]; const text = chapterText(chapter); const bounded = truncateUnicode(text, 12000); const providerText = bounded.truncated ? `${bounded.value}\n\n[WARNUNG: Kapiteltext für die Kapitel-Synthese gekürzt; Quellenpositionen bleiben auf dem vollständigen Kapiteltext definiert.]` : bounded.value; const result = await provider.summarize('chapter', chapter.id, `Führe eine strukturierte Kapitel-Synthese durch. Bewerte wichtige Ereignisse, Wissen, Beziehungen, offene Threads und Endzustände.\n\n${providerText}`, timeout); const summary = await this.repository.saveNarrativeSummary(synthesisToSummary(result, workspace.project.id, 'chapter', chapter.id, text)); await this.repository.saveManuscriptAnalysisArtifacts(this.jobId, [{ jobId: this.jobId, projectId: workspace.project.id, phase: 'scene_or_chapter_synthesis' as const, artifactType: 'narrative_summary' as const, artifactId: summary.id, reviewStatus: 'pending' as const, explicitlySkipped: false }]); progress.completedUnits += 1; progress.lastSuccessfulUnitId = chapter.id; progress.actualProvider = provider.id; progress.updatedAt = new Date().toISOString(); await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'running', currentPhase: 'scene_or_chapter_synthesis', phaseProgress: { ...(await this.repository.getManuscriptAnalysisJob(job.id)).phaseProgress, scene_or_chapter_synthesis: progress } }); }
   }
 
   private async phaseInput(job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>): Promise<ManuscriptPhaseInput> {
     const chapters = [...workspace.chapters].sort((a, b) => a.orderIndex - b.orderIndex);
-    const [chapterSummaries, findings, threads, rules, ledger] = await Promise.all([this.repository.listNarrativeSummaries(workspace.project.id, 'chapter'), this.repository.listContinuityReviewFindings(workspace.project.id), this.repository.listPlotThreadLifecycleProposals(workspace.project.id), this.repository.listProjectRules(workspace.project.id), this.repository.listContinuityStateLedger(workspace.project.id)]);
-    return { projectId: workspace.project.id, bookId: job.bookId, chapters: chapters.map((chapter) => ({ id: chapter.id, title: chapter.title, orderIndex: chapter.orderIndex, text: chapterText(chapter) })), chapterSummaries, confirmedEntities: workspace.entities.filter((entity) => entity.status === 'confirmed' && entity.authorConfirmed), confirmedRules: rules.filter((rule) => rule.status === 'confirmed' && rule.authorConfirmed), confirmedStates: ledger.filter((entry) => entry.status === 'confirmed' && entry.authorConfirmed), proposedFindings: findings.filter((finding) => finding.reviewStatus === 'open'), proposedThreads: threads.filter((thread) => thread.reviewStatus === 'pending'), contentHash: contentHash(chapters.map(chapterText).join('\n\n')) };
+    const [chapterSummaries, findings, threads, rules, ledger, sources, timelineEvents, units, draftLedger] = await Promise.all([
+      this.repository.listNarrativeSummaries(workspace.project.id, 'chapter'),
+      this.repository.listContinuityReviewFindings(workspace.project.id),
+      this.repository.listPlotThreadLifecycleProposals(workspace.project.id),
+      this.repository.listProjectRules(workspace.project.id),
+      this.repository.listContinuityStateLedger(workspace.project.id),
+      this.repository.listSourceReferences(workspace.project.id),
+      this.repository.listTimelineEvents(workspace.project.id),
+      this.repository.listManuscriptAnalysisUnits(job.id),
+      this.repository.listManuscriptAnalysisDraftLedger(job.id),
+    ]);
+    const hierarchical = buildHierarchicalPhaseContext({
+      chapters,
+      chapterSummaries,
+      sourceReferences: sources,
+      timelineEvents,
+      draftLedger: draftLedger.filter((entry) => units.some((unit) => unit.id === entry.unitId)),
+      confirmedEntities: workspace.entities.filter((entity) => entity.status === 'confirmed' && entity.authorConfirmed),
+      confirmedRules: rules.filter((rule) => rule.status === 'confirmed' && rule.authorConfirmed),
+      confirmedStates: ledger.filter((entry) => entry.status === 'confirmed' && entry.authorConfirmed),
+      proposedFindings: findings.filter((finding) => finding.reviewStatus === 'open'),
+      proposedThreads: threads.filter((thread) => thread.reviewStatus === 'pending'),
+    });
+    return { projectId: workspace.project.id, bookId: job.bookId, ...hierarchical, contextLevel: 'hierarchical', contentHash: contentHash(chapters.map(chapterText).join('\n\n')) };
   }
 
   private async saveBookPhase(job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, phase: ManuscriptAnalysisPhase, summary: { summary: string; importantEvents: string[]; openThreads: string[]; characterChanges: string[] }, provider: Provider): Promise<string> {

@@ -2645,4 +2645,63 @@ mod tests {
         let draft = run_task(state, draft_input, settings).expect("synthetic draft");
         assert_eq!(draft.status, "completed");
     }
+
+    #[test]
+    fn live_complete_import_e2e_is_opt_in_and_uses_only_synthetic_project() {
+        if env::var("STORYMEMORY_RUN_COMPLETE_IMPORT_E2E")
+            .ok()
+            .as_deref()
+            != Some("1")
+        {
+            eprintln!(
+                "SKIP complete manuscript import Codex E2E: STORYMEMORY_RUN_COMPLETE_IMPORT_E2E != 1"
+            );
+            return;
+        }
+        let capabilities = codex_status(None);
+        if !capabilities.installed
+            || !capabilities.compatible
+            || capabilities.authentication != CodexAuthenticationState::Authenticated
+        {
+            eprintln!(
+                "SKIP complete manuscript import Codex E2E: {}",
+                capabilities.detail
+            );
+            return;
+        }
+        let settings = AiProviderSettings {
+            active_provider: "codex-cli".into(),
+            codex_binary_path: capabilities.binary_path.clone(),
+            codex_privacy_acknowledged_at: Some("2026-08-03T00:00:00Z".into()),
+            ..AiProviderSettings::default()
+        };
+        let state = Arc::new(CodexRuntimeState::default());
+        let task_kinds = [
+            CodexTaskKind::AnalyzeLoreDraft,
+            CodexTaskKind::BuildLoreSheet,
+            CodexTaskKind::AnalyzeManuscriptStructure,
+            CodexTaskKind::ResolveManuscriptEntityMentions,
+            CodexTaskKind::AnalyzeContinuityPassage,
+            CodexTaskKind::AnalyzeNarrativeSummaries,
+            CodexTaskKind::SynthesizePlotThreads,
+            CodexTaskKind::AnalyzeBookEndState,
+            CodexTaskKind::GlobalCountercheck,
+        ];
+        for (index, task_kind) in task_kinds.into_iter().enumerate() {
+            let mut input = synthetic_input(&format!(
+                "live-complete-import-{}-{index}",
+                std::process::id()
+            ));
+            input.task_kind = task_kind.clone();
+            input.request_json["chapter"]["content"] =
+                json!("😀 Zettel wird fortgetragen. Malik wartet.");
+            input.request_json["loreNotes"] =
+                json!("Ein System hat Voraussetzungen, Grenzen und eine mögliche Ausnahme.");
+            let result = run_task(state.clone(), input, settings.clone()).unwrap_or_else(|error| {
+                panic!("synthetic complete import task {task_kind:?}: {error}")
+            });
+            assert_eq!(result.status, "completed");
+            assert!(result.turn_completed);
+        }
+    }
 }
