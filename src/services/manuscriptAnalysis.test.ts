@@ -166,9 +166,9 @@ describe('sequenzielle, fortsetzbare Manuskript-Continuity', () => {
     const seenContinuity: ContinuityAnalysisInput[] = [];
     const provider = fakeProvider(async (input) => { calls.push(`continuity:${input.passage.text}`); seenContinuity.push(input); return emptyAnalysis(); });
     Object.assign(provider, {
-      resolveManuscriptEntityMentions: vi.fn(async (input) => { calls.push(`mentions:${input.passageText}`); expect(input.previousProvisionalEntities.some((item: { canonicalName: string }) => item.canonicalName === 'Später genannt')).toBe(false); return { entities: [], mentions: [], relations: [], events: [], mergeProposals: [], warnings: [] }; }),
-      extractBiblePatch: vi.fn(async (input) => { calls.push(`bible:${input.scene.content}`); expect(input.chapter.scenes).toHaveLength(1); expect(input.scene.content).toBe(input.chapter.scenes[0]?.content); return { proposals: [], warnings: [] }; }),
-      extractCharacterMemoryPatch: vi.fn(async (input) => { calls.push(`memory:${input.scene.content}`); if (input.scene.content.startsWith('Zettel')) expect(input.scene.content).not.toContain('Malik wartet.'); return { proposals: [], warnings: [] }; }),
+      resolveManuscriptEntityMentions: vi.fn(async (input) => { calls.push(`mentions:${input.passageText}`); expect(input.previousProvisionalEntities.some((item: { canonicalName: string }) => item.canonicalName === 'Später genannt')).toBe(false); const first = input.passageText.startsWith('Zettel'); return { entities: first ? [{ temporaryId: 'nina', entityType: 'character' as const, canonicalName: 'Nina', aliases: ['Nini'], description: 'Alias zuerst', confidence: 0.8 }] : [{ temporaryId: 'nina-full', entityType: 'character' as const, canonicalName: 'Nina Sommer', aliases: ['Nini'], description: 'Voller Name später', confidence: 0.9 }], mentions: first ? [{ mentionText: 'Nini', startOffset: 0, endOffset: 4, temporaryEntityId: 'nina', alternativeTemporaryIds: [], confidence: 0.8, resolutionReason: 'Alias', excerpt: 'Nini' }] : [{ mentionText: 'Nina', startOffset: 0, endOffset: 4, temporaryEntityId: 'nina-full', alternativeTemporaryIds: [], confidence: 0.9, resolutionReason: 'Voller Name', excerpt: 'Nina' }], relations: [], events: [], mergeProposals: [], warnings: [] }; }),
+      extractBiblePatch: vi.fn(async (input: { scene: { content: string }; chapter: { scenes: Array<{ content: string }> }; provisionalEntities?: Array<{ canonicalName: string }> }) => { calls.push(`bible:${input.scene.content}`); expect(input.chapter.scenes).toHaveLength(1); expect(input.scene.content).toBe(input.chapter.scenes[0]?.content); if (input.scene.content.startsWith('Malik')) expect(input.provisionalEntities?.some((item: { canonicalName: string }) => item.canonicalName.startsWith('Nina'))).toBe(true); return { proposals: [], warnings: [] }; }),
+      extractCharacterMemoryPatch: vi.fn(async (input: { scene: { content: string }; provisionalEntities?: Array<{ canonicalName: string }> }) => { calls.push(`memory:${input.scene.content}`); if (input.scene.content.startsWith('Zettel')) expect(input.scene.content).not.toContain('Malik wartet.'); if (input.scene.content.startsWith('Malik')) expect(input.provisionalEntities?.some((item: { canonicalName: string }) => item.canonicalName.startsWith('Nina'))).toBe(true); return { proposals: [], warnings: [] }; }),
     });
     await new ManuscriptAnalysisController(repository, job.id, provider).start();
     expect(calls.slice(0, 8)).toEqual([
@@ -177,6 +177,7 @@ describe('sequenzielle, fortsetzbare Manuskript-Continuity', () => {
     ]);
     expect(seenContinuity.every((input) => input.followingContext === '')).toBe(true);
     expect(seenContinuity[0]?.confirmedStoryBible.some((item) => item.id === entity.id)).toBe(true);
+    expect(seenContinuity[1]?.provisionalEntities?.some((item) => item.canonicalName.startsWith('Nina'))).toBe(true);
   });
 
   it('nimmt bei einer späteren Einheit nur bestätigte und frühere Zustände in den Request', async () => {
@@ -193,6 +194,26 @@ describe('sequenzielle, fortsetzbare Manuskript-Continuity', () => {
     expect(seen[0]?.relevantSources.some((source) => source.entityId === future.id)).toBe(false);
   });
 
+  it('materialisiert eine provisorische Entität atomar in Bible, Memories, Draft, Timeline und Graph', async () => {
+    const repository = new BrowserDemoRepository();
+    const { job, workspace } = await makeJob(repository, 'materialize-provisional');
+    const unit = (await repository.listManuscriptAnalysisUnits(job.id))[0]!;
+    const provisional = await repository.saveProvisionalEntity({ id: 'provisional-nina', jobId: job.id, projectId: job.projectId, entityType: 'character', canonicalName: 'Nina Sommer', aliases: ['Nini'], description: 'Alias und voller Name', confidence: 0.9, reviewStatus: 'proposed' });
+    const source = await repository.createSourceReference({ projectId: job.projectId, chapterId: unit.chapterId, sceneId: unit.sceneId, excerpt: unit.content, startOffset: unit.startOffset, endOffset: unit.endOffset });
+    await repository.replaceManuscriptAnalysisDraftLedger(unit.id, [{ jobId: job.id, unitId: unit.id, projectId: job.projectId, entityId: provisional.id, stateKind: 'knowledge', previousState: 'unbekannt', newState: 'bekannt', chapterId: unit.chapterId, sceneId: unit.sceneId, sourceExcerpt: unit.content, sourceReferenceId: source.id, confidence: 0.8 }]);
+    await repository.saveProvisionalMentions([{ jobId: job.id, projectId: job.projectId, passageUnitId: unit.id, chapterId: unit.chapterId, sceneId: unit.sceneId, startOffset: 0, endOffset: 4, excerpt: 'Nini', mentionText: 'Nini', resolvedProvisionalEntityId: provisional.id, alternativeEntityIds: [], confidence: 0.8, resolutionReason: 'Alias' }]);
+    await repository.saveProvisionalRelation({ jobId: job.id, projectId: job.projectId, sourceProvisionalEntityId: provisional.id, targetProvisionalEntityId: job.projectId, relationType: 'connected_to', label: 'Test', confidence: 0.6, reviewStatus: 'proposed' });
+    await repository.saveStoryGraphEdge({ projectId: job.projectId, sourceEntityId: provisional.id, targetEntityId: workspace.entities[0]!.id, relationType: 'connected_to', label: 'Test', confidence: 0.6, status: 'proposed', authorConfirmed: false, origin: 'manuscript_analysis', sourceReferenceIds: [source.id] });
+    await repository.saveTimelineEvent({ projectId: job.projectId, bookId: job.bookId, chapterId: unit.chapterId, sceneId: unit.sceneId, passageUnitId: unit.id, title: 'Nina erscheint', summary: 'Alias wird eingeführt.', storyTimeText: '', temporalOrder: 1, timeCertainty: 'unknown', participatingEntityIds: [provisional.id], causeEventIds: [], consequenceEventIds: [], knowledgeChanges: [provisional.id], stateChanges: [], relatedPlotThreadIds: [], sourceReferenceIds: [source.id], confidence: 0.7, status: 'proposed', authorConfirmed: false, origin: 'manuscript_analysis' });
+    const canonical = await repository.materializeProvisionalEntity({ projectId: job.projectId, jobId: job.id, provisionalEntityId: provisional.id, decision: 'accept' });
+    expect(canonical.status).toBe('confirmed');
+    expect((await repository.listProvisionalEntities(job.id)).find((item) => item.id === provisional.id)?.reviewStatus).toBe('accepted');
+    expect((await repository.listSourceReferences(job.projectId)).find((item) => item.id === source.id)?.entityId).toBeUndefined();
+    expect((await repository.listManuscriptAnalysisDraftLedger(job.id))[0]?.entityId).toBe(canonical.id);
+    expect((await repository.listTimelineEvents(job.projectId))[0]?.participatingEntityIds).toEqual([canonical.id]);
+    expect((await repository.listStoryGraphEdges(job.projectId))[0]?.sourceEntityId).toBe(canonical.id);
+  });
+
   it('setzt bei einer früheren Textänderung die aktuelle und alle späteren Einheiten zurück', async () => {
     const repository = new BrowserDemoRepository();
     const { job } = await makeJob(repository, 'invalidate-later');
@@ -201,12 +222,19 @@ describe('sequenzielle, fortsetzbare Manuskript-Continuity', () => {
     const controller = new ManuscriptAnalysisController(repository, job.id, provider);
     await controller.start();
     expect(initial).toHaveLength(2);
+    const unitsBeforeEdit = await repository.listManuscriptAnalysisUnits(job.id);
+    const laterProvisional = await repository.saveProvisionalEntity({ id: 'later-provisional', jobId: job.id, projectId: job.projectId, entityType: 'character', canonicalName: 'Spätere Entität', aliases: [], description: '', confidence: 0.6, reviewStatus: 'proposed' });
+    await repository.saveProvisionalMentions([{ jobId: job.id, projectId: job.projectId, passageUnitId: unitsBeforeEdit[1]!.id, chapterId: unitsBeforeEdit[1]!.chapterId, sceneId: unitsBeforeEdit[1]!.sceneId, startOffset: unitsBeforeEdit[1]!.startOffset, endOffset: unitsBeforeEdit[1]!.endOffset, excerpt: unitsBeforeEdit[1]!.content, mentionText: 'Spätere Entität', resolvedProvisionalEntityId: laterProvisional.id, alternativeEntityIds: [], confidence: 0.6, resolutionReason: 'später' }]);
+    await repository.saveStoryGraphEdge({ id: `story-graph-${job.id}-${unitsBeforeEdit[1]!.id}-0`, projectId: job.projectId, sourceEntityId: laterProvisional.id, targetEntityId: (await repository.loadWorkspace()).entities[0]!.id, relationType: 'connected_to', label: '', confidence: 0.5, status: 'proposed', authorConfirmed: false, origin: 'manuscript_analysis', sourceReferenceIds: [] });
     const workspace = await repository.loadWorkspace();
     const scene = workspace.chapters[0]!.scenes[0]!;
     await repository.updateScene({ ...scene, content: 'Zettel wird fortgetragen!\n\nMalik wartet.' });
     const rerun: string[] = [];
     const rerunProvider = fakeProvider(async (input) => { rerun.push(input.passage.text); return emptyAnalysis(); });
     await new ManuscriptAnalysisController(repository, job.id, rerunProvider).start();
+    expect(await repository.listProvisionalEntityMentions(job.id)).toEqual([]);
+    expect((await repository.listProvisionalEntities(job.id)).find((item) => item.id === laterProvisional.id)?.reviewStatus).toBe('uncertain');
+    expect(await repository.listStoryGraphEdges(job.projectId)).toEqual([]);
     expect(rerun).toEqual(['Zettel wird fortgetragen!', 'Malik wartet.']);
     expect((await repository.listManuscriptAnalysisUnits(job.id)).every((unit) => unit.status === 'completed')).toBe(true);
   });

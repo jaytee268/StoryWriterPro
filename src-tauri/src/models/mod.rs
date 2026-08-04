@@ -920,6 +920,15 @@ pub struct SaveProvisionalEntityInput {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MaterializeProvisionalEntityInput {
+    pub project_id: String,
+    pub job_id: String,
+    pub provisional_entity_id: String,
+    pub existing_entity_id: Option<String>,
+    pub decision: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SaveProvisionalMentionInput {
     pub id: Option<String>,
     pub job_id: String,

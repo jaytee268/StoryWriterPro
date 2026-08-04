@@ -1,4 +1,4 @@
-import type { Chapter, ContinuityStateLedgerEntry, CreateManuscriptAnalysisJobInput, ManuscriptAnalysisDraftLedgerEntry, ManuscriptAnalysisJob, ManuscriptAnalysisPhase, ManuscriptAnalysisPhaseProgress, ManuscriptAnalysisUnit, ManuscriptSynthesisResult, NarrativeSummaryAnalysisResult, ManuscriptPhaseInput, PlotThreadSynthesisResult, BookEndStateResult, GlobalCountercheckResult, ManuscriptAnalysisArtifactType, SaveContinuityFindingInput, StoryEntity } from '../types/domain';
+import type { Chapter, ContinuityStateLedgerEntry, CreateManuscriptAnalysisJobInput, ManuscriptAnalysisDraftLedgerEntry, ManuscriptAnalysisJob, ManuscriptAnalysisPhase, ManuscriptAnalysisPhaseProgress, ManuscriptAnalysisUnit, ManuscriptSynthesisResult, NarrativeSummaryAnalysisResult, ManuscriptPhaseInput, PlotThreadSynthesisResult, BookEndStateResult, GlobalCountercheckResult, ManuscriptAnalysisArtifactType, SaveContinuityFindingInput, StoryEntity, ProvisionalEntity } from '../types/domain';
 import type { StoryRepository } from './storyRepository';
 import { contentHash } from '../utils/aiText';
 import { editorContentToPlainText } from '../utils/editorContent';
@@ -121,6 +121,13 @@ export class ManuscriptAnalysisController {
 
   private emptyProgress(_phase: ManuscriptAnalysisPhase, totalUnits: number, providerId: string): ManuscriptAnalysisPhaseProgress { return { status: 'pending', totalUnits, completedUnits: 0, failedUnits: 0, requestedProvider: providerId, updatedAt: new Date().toISOString() }; }
 
+  private async markIntegratedPassagePhase(job: ManuscriptAnalysisJob, phase: ManuscriptAnalysisPhase, units: ManuscriptAnalysisUnit[], provider: Provider): Promise<void> {
+    const current = await this.repository.getManuscriptAnalysisJob(job.id);
+    const progress = current.phaseProgress[phase] ?? this.emptyProgress(phase, units.length, provider.id);
+    progress.status = 'completed'; progress.totalUnits = units.length; progress.completedUnits = units.length; progress.failedUnits = 0; progress.requestedProvider = provider.id; progress.actualProvider = provider.id; progress.lastSuccessfulUnitId = units.at(-1)?.id; progress.updatedAt = new Date().toISOString();
+    await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'running', currentPhase: phase, phaseProgress: { ...current.phaseProgress, [phase]: progress } });
+  }
+
   private async savePhase(job: ManuscriptAnalysisJob, phase: ManuscriptAnalysisPhase, patch: Partial<ManuscriptAnalysisPhaseProgress>, status: ManuscriptAnalysisJob['status'], errorMessage?: string): Promise<ManuscriptAnalysisJob> {
     const current = job.phaseProgress[phase] ?? this.emptyProgress(phase, job.totalUnits, this.currentProvider?.id ?? job.providerId);
     const next = { ...job.phaseProgress, [phase]: { ...current, ...patch, updatedAt: new Date().toISOString() } };
@@ -141,6 +148,7 @@ export class ManuscriptAnalysisController {
   }
 
   private async invalidateFrom(units: ManuscriptAnalysisUnit[], orderIndex: number): Promise<void> {
+    await this.repository.invalidateManuscriptAnalysisFrom(this.jobId, orderIndex);
     const later = units.filter((unit) => unit.orderIndex >= orderIndex);
     for (const unit of later) {
       await this.repository.updateManuscriptAnalysisUnit({ id: unit.id, status: 'stale', continuityRunId: undefined, errorMessage: 'Durch eine frühere Textänderung veraltet.', errorCode: 'STALE_CONTEXT' });
@@ -197,8 +205,7 @@ export class ManuscriptAnalysisController {
         job = await this.savePhase(job, phase, { status: 'running', requestedProvider: active.provider.id, errorCode: undefined, errorMessage: undefined }, 'running');
         if (phase === 'structure') await this.runStructure(job, workspace, chapters, units, active.provider, active.settings.bibleUpdateTimeoutSeconds);
         else if (phase === 'passage_continuity') await this.runContinuity(job, workspace, units, active.provider, active.settings.bibleUpdateTimeoutSeconds);
-        else if (phase === 'bible_extraction') await this.runBible(job, workspace, units, active.provider, active.settings.bibleUpdateTimeoutSeconds);
-        else if (phase === 'character_memory') await this.runCharacterMemory(job, workspace, units, active.provider, active.settings.bibleUpdateTimeoutSeconds);
+        else if (phase === 'bible_extraction' || phase === 'character_memory') await this.markIntegratedPassagePhase(job, phase, units, active.provider);
         else if (phase === 'scene_or_chapter_synthesis') await this.runChapterSynthesis(job, workspace, chapters, active.provider, active.settings.bibleUpdateTimeoutSeconds);
         else if (phase === 'narrative_summaries') await this.runNarrativeSummaries(job, workspace, active.provider, active.settings.bibleUpdateTimeoutSeconds);
         else if (phase === 'plot_thread_synthesis') await this.runPlotThreadSynthesis(job, workspace, active.provider, active.settings.bibleUpdateTimeoutSeconds);
@@ -280,8 +287,9 @@ export class ManuscriptAnalysisController {
         const previous = units[index - 1];
         const previousContent = (await this.repository.listManuscriptAnalysisUnits(this.jobId)).find((candidate) => candidate.id === previous?.id)?.content ?? previous?.content;
         await this.resolveProvisionalEntities(workspace, job, unit, currentContent, previousContent?.slice(-2000) ?? '', provider);
-        await this.runBibleUnit(job, workspace, unit, provider, timeout);
-        await this.runCharacterMemoryUnit(job, workspace, unit, provider, timeout);
+        const priorProvisional = await this.listPriorProvisionalEntities(job.id, unit.orderIndex);
+        await this.runBibleUnit(job, workspace, unit, provider, timeout, priorProvisional);
+        await this.runCharacterMemoryUnit(job, workspace, unit, provider, timeout, priorProvisional);
         const afterPassage = await this.repository.getManuscriptAnalysisJob(this.jobId);
         const bibleProgress = afterPassage.phaseProgress.bible_extraction ?? this.emptyProgress('bible_extraction', units.length, provider.id);
         const memoryProgress = afterPassage.phaseProgress.character_memory ?? this.emptyProgress('character_memory', units.length, provider.id);
@@ -294,7 +302,7 @@ export class ManuscriptAnalysisController {
         const rulesBefore = new Set((await this.repository.listProjectRuleProposals(workspace.project.id)).map((proposal) => proposal.id));
         const chronologicalScene = passageScene(scene, currentContent);
         const chronologicalChapter = passageChapter(chapter, scene, currentContent);
-        const result = await runContinuityReview(this.repository, { project: workspace.project, chapter: chronologicalChapter, scene: chronologicalScene, currentText: currentContent, previousText: previousContent?.slice(-2000), chronological: true, sourceKind: unit.pageNumber === undefined ? 'word_threshold' : 'page_marker', startOffset: unit.startOffset, endOffset: unit.endOffset, draftLedger, provider, persistStateProposals: false, isCancelled: () => this.cancelled, forceAnalysis: true });
+        const result = await runContinuityReview(this.repository, { project: workspace.project, chapter: chronologicalChapter, scene: chronologicalScene, currentText: currentContent, previousText: previousContent?.slice(-2000), chronological: true, sourceKind: unit.pageNumber === undefined ? 'word_threshold' : 'page_marker', startOffset: unit.startOffset, endOffset: unit.endOffset, draftLedger, provisionalEntities: priorProvisional, provisionalAliases: priorProvisional.flatMap((entity) => entity.aliases.map((alias) => ({ id: `${entity.id}:${alias}`, provisionalEntityId: entity.id, alias, confidence: entity.confidence, reviewStatus: 'proposed' as const, createdAt: entity.createdAt }))), provider, persistStateProposals: false, isCancelled: () => this.cancelled, forceAnalysis: true });
         const draftEntries = await Promise.all(result.draftStateChanges.map(async (change) => ({ jobId: this.jobId, unitId: unit.id, projectId: workspace.project.id, entityId: change.entityId, relatedEntityId: change.relatedEntityId, stateKind: change.stateKind, previousState: change.previousState, newState: change.newState, chapterId: unit.chapterId, sceneId: unit.sceneId, startOffset: change.startOffset ?? unit.startOffset, endOffset: change.endOffset ?? unit.endOffset, sourceExcerpt: change.evidenceExcerpt, sourceReferenceId: change.sourceReferenceId ?? (await this.repository.createSourceReference({ projectId: workspace.project.id, entityId: change.entityId, chapterId: unit.chapterId, sceneId: unit.sceneId, excerpt: change.evidenceExcerpt, startOffset: change.startOffset ?? unit.startOffset, endOffset: change.endOffset ?? unit.endOffset })).id, confidence: change.confidence, status: 'proposed' as const })));
         const savedDraftEntries = await this.repository.replaceManuscriptAnalysisDraftLedger(unit.id, draftEntries);
         await this.repository.saveManuscriptAnalysisArtifacts(this.jobId, savedDraftEntries.map((entry) => ({ jobId: this.jobId, projectId: workspace.project.id, phase: 'passage_continuity' as const, unitId: unit.id, artifactType: 'import_draft_state' as const, artifactId: entry.id, reviewStatus: 'pending' as const, explicitlySkipped: false })));
@@ -312,7 +320,7 @@ export class ManuscriptAnalysisController {
     }
   }
 
-  private async runBibleUnit(_job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, unit: ManuscriptAnalysisUnit, provider: Provider, timeout: number): Promise<void> {
+  private async runBibleUnit(_job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, unit: ManuscriptAnalysisUnit, provider: Provider, timeout: number, provisionalEntities: ProvisionalEntity[]): Promise<void> {
     const chapter = workspace.chapters.find((item) => item.id === unit.chapterId);
     const scene = chapter?.scenes.find((item) => item.id === unit.sceneId);
     if (!chapter || !scene) throw new Error('Kapitel oder Szene der Bible-Einheit wurde nicht gefunden.');
@@ -323,13 +331,13 @@ export class ManuscriptAnalysisController {
     const sources = await this.repository.listSourceReferences(workspace.project.id);
     const availableEntities = entitiesAtOrBefore(workspace.entities, sources, workspace.chapters, unit);
     const run = await this.repository.createBibleUpdateRun({ projectId: workspace.project.id, sceneId: scene.id, sceneUpdatedAt: scene.updatedAt ?? '', contentHash: contentHash(currentContent), extractorId: provider.id, analyzedContent: currentContent });
-    const result = await provider.extractBiblePatch({ project: workspace.project, chapter: currentChapter, scene: currentScene, existingEntities: availableEntities, relevantSources: sources.filter((source) => sourceIsAtOrBefore(source, workspace.chapters, unit)), previousAnalyzedContent: '', changedRange: { start: 0, end: Array.from(currentContent).length } }, timeout);
+    const result = await provider.extractBiblePatch({ project: workspace.project, chapter: currentChapter, scene: currentScene, existingEntities: availableEntities, provisionalEntities, provisionalAliases: provisionalEntities.flatMap((entity) => entity.aliases.map((alias) => ({ id: `${entity.id}:${alias}`, provisionalEntityId: entity.id, alias, confidence: entity.confidence, reviewStatus: 'proposed' as const, createdAt: entity.createdAt }))), relevantSources: sources.filter((source) => sourceIsAtOrBefore(source, workspace.chapters, unit)), previousAnalyzedContent: '', changedRange: { start: 0, end: Array.from(currentContent).length } }, timeout);
     const savedProposals = await this.repository.saveBibleProposals(run.id, result.proposals, workspace.project.id, scene.id);
     await this.repository.saveManuscriptAnalysisArtifacts(this.jobId, savedProposals.map((proposal) => ({ jobId: this.jobId, projectId: workspace.project.id, phase: 'bible_extraction' as const, unitId: unit.id, artifactType: 'bible_proposal' as const, artifactId: proposal.id, reviewStatus: 'pending' as const, explicitlySkipped: false })));
     await this.repository.updateManuscriptAnalysisUnit({ id: unit.id, status: 'running', actualProvider: provider.id, outputHash: contentHash(JSON.stringify(result)) });
   }
 
-  private async runCharacterMemoryUnit(_job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, unit: ManuscriptAnalysisUnit, provider: Provider, timeout: number): Promise<void> {
+  private async runCharacterMemoryUnit(_job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, unit: ManuscriptAnalysisUnit, provider: Provider, timeout: number, provisionalEntities: ProvisionalEntity[]): Promise<void> {
     const chapter = workspace.chapters.find((item) => item.id === unit.chapterId);
     const scene = chapter?.scenes.find((item) => item.id === unit.sceneId);
     if (!chapter || !scene) throw new Error('Kapitel oder Szene der Character-Memory-Einheit wurde nicht gefunden.');
@@ -343,7 +351,7 @@ export class ManuscriptAnalysisController {
     const sources = await this.repository.listSourceReferences(workspace.project.id);
     const availableEntities = entitiesAtOrBefore(workspace.entities, sources, workspace.chapters, unit);
     const characters = availableEntities.filter((entity) => entity.type === 'character');
-    const result = await provider.extractCharacterMemoryPatch({ project: workspace.project, chapter: currentChapter, scene: currentScene, characters, existingEntities: availableEntities, context, changedRange: { start: 0, end: Array.from(currentContent).length } }, timeout);
+    const result = await provider.extractCharacterMemoryPatch({ project: workspace.project, chapter: currentChapter, scene: currentScene, characters, existingEntities: availableEntities, provisionalEntities, provisionalAliases: provisionalEntities.flatMap((entity) => entity.aliases.map((alias) => ({ id: `${entity.id}:${alias}`, provisionalEntityId: entity.id, alias, confidence: entity.confidence, reviewStatus: 'proposed' as const, createdAt: entity.createdAt }))), context, changedRange: { start: 0, end: Array.from(currentContent).length } }, timeout);
     const savedProposals = await this.repository.saveCharacterMemoryProposals(run.id, result.proposals);
     await this.repository.saveManuscriptAnalysisArtifacts(this.jobId, savedProposals.map((proposal) => ({ jobId: this.jobId, projectId: workspace.project.id, phase: 'character_memory' as const, unitId: unit.id, artifactType: 'character_memory_proposal' as const, artifactId: proposal.id, reviewStatus: 'pending' as const, explicitlySkipped: false })));
     await this.repository.updateManuscriptAnalysisUnit({ id: unit.id, status: 'running', actualProvider: provider.id, outputHash: contentHash(JSON.stringify(result)) });
@@ -388,26 +396,15 @@ export class ManuscriptAnalysisController {
     void previousMentions;
   }
 
-  private async runBible(job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, units: ManuscriptAnalysisUnit[], provider: Provider, timeout: number): Promise<void> {
-    const progress = job.phaseProgress.bible_extraction ?? this.emptyProgress('bible_extraction', units.length, provider.id);
-    const start = progress.lastSuccessfulUnitId ? Math.max(0, units.findIndex((unit) => unit.id === progress.lastSuccessfulUnitId) + 1) : 0;
-    const sources = await this.repository.listSourceReferences(workspace.project.id);
-    for (let index = start; index < units.length; index += 1) {
-      if (!await this.checkControl(job)) return; const unit = units[index]; const chapter = workspace.chapters.find((item) => item.id === unit.chapterId); const scene = chapter?.scenes.find((item) => item.id === unit.sceneId); if (!chapter || !scene) throw new Error('Kapitel oder Szene der Bible-Einheit wurde nicht gefunden.');
-      await this.repository.updateManuscriptAnalysisUnit({ id: unit.id, status: unit.status, requestedProvider: provider.id, promptVersion: PROMPT_VERSION, inputHash: unit.contentHash, errorMessage: undefined, errorCode: undefined });
-      const run = await this.repository.createBibleUpdateRun({ projectId: workspace.project.id, sceneId: scene.id, sceneUpdatedAt: scene.updatedAt ?? '', contentHash: unit.contentHash, extractorId: provider.id, analyzedContent: unit.content });
-      const currentContent = Array.from(editorContentToPlainText(scene.content)).slice(unit.startOffset, unit.endOffset).join('');
-      const currentScene = passageScene(scene, currentContent);
-      const currentChapter = passageChapter(chapter, scene, currentContent);
-      const availableEntities = entitiesAtOrBefore(workspace.entities, sources, workspace.chapters, unit);
-      const result = await provider.extractBiblePatch({ project: workspace.project, chapter: currentChapter, scene: currentScene, existingEntities: availableEntities, relevantSources: sources.filter((source) => sourceIsAtOrBefore(source, workspace.chapters, unit)), previousAnalyzedContent: '', changedRange: { start: 0, end: Array.from(currentContent).length } }, timeout);
-      const savedProposals = await this.repository.saveBibleProposals(run.id, result.proposals, workspace.project.id, scene.id); await this.repository.saveManuscriptAnalysisArtifacts(this.jobId, savedProposals.map((proposal) => ({ jobId: this.jobId, projectId: workspace.project.id, phase: 'bible_extraction' as const, unitId: unit.id, artifactType: 'bible_proposal' as const, artifactId: proposal.id, reviewStatus: 'pending' as const, explicitlySkipped: false }))); await this.repository.updateManuscriptAnalysisUnit({ id: unit.id, status: unit.status, actualProvider: provider.id, outputHash: contentHash(JSON.stringify(result)) }); progress.completedUnits += 1; progress.lastSuccessfulUnitId = unit.id; progress.actualProvider = provider.id; progress.updatedAt = new Date().toISOString(); await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'running', currentPhase: 'bible_extraction', phaseProgress: { ...(await this.repository.getManuscriptAnalysisJob(job.id)).phaseProgress, bible_extraction: progress } });
+  private async listPriorProvisionalEntities(jobId: string, orderIndex: number): Promise<ProvisionalEntity[]> {
+    const [entities, mentions, units] = await Promise.all([this.repository.listProvisionalEntities(jobId), this.repository.listProvisionalEntityMentions(jobId), this.repository.listManuscriptAnalysisUnits(jobId)]);
+    const orderByUnit = new Map(units.map((unit) => [unit.id, unit.orderIndex]));
+    const firstOrder = new Map<string, number>();
+    for (const mention of mentions) {
+      const order = orderByUnit.get(mention.passageUnitId);
+      if (order !== undefined && order < orderIndex && mention.resolvedProvisionalEntityId && (!firstOrder.has(mention.resolvedProvisionalEntityId) || order < firstOrder.get(mention.resolvedProvisionalEntityId)!)) firstOrder.set(mention.resolvedProvisionalEntityId, order);
     }
-  }
-
-  private async runCharacterMemory(job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, units: ManuscriptAnalysisUnit[], provider: Provider, timeout: number): Promise<void> {
-    const progress = job.phaseProgress.character_memory ?? this.emptyProgress('character_memory', units.length, provider.id); const start = progress.lastSuccessfulUnitId ? Math.max(0, units.findIndex((unit) => unit.id === progress.lastSuccessfulUnitId) + 1) : 0; const contextBuilder = new DeterministicProjectContextBuilder(this.repository);
-    for (let index = start; index < units.length; index += 1) { if (!await this.checkControl(job)) return; const unit = units[index]; const chapter = workspace.chapters.find((item) => item.id === unit.chapterId); const scene = chapter?.scenes.find((item) => item.id === unit.sceneId); if (!chapter || !scene) throw new Error('Kapitel oder Szene der Character-Memory-Einheit wurde nicht gefunden.'); const currentContent = Array.from(editorContentToPlainText(scene.content)).slice(unit.startOffset, unit.endOffset).join(''); await this.repository.updateManuscriptAnalysisUnit({ id: unit.id, status: unit.status, requestedProvider: provider.id, promptVersion: PROMPT_VERSION, inputHash: unit.contentHash, errorMessage: undefined, errorCode: undefined }); const currentScene = passageScene(scene, currentContent); const currentChapter = passageChapter(chapter, scene, currentContent); const context = await contextBuilder.build({ projectId: workspace.project.id, currentChapterId: chapter.id, currentSceneId: scene.id, userQuestion: currentContent, includeProposedSummaries: true, passageText: currentContent, passageStartOffset: unit.startOffset, passageEndOffset: unit.endOffset }); const run = await this.repository.createCharacterMemoryUpdateRun({ projectId: workspace.project.id, sceneId: scene.id, contentHash: unit.contentHash, extractorId: provider.id, analyzedContent: currentContent }); const sources = await this.repository.listSourceReferences(workspace.project.id); const availableEntities = entitiesAtOrBefore(workspace.entities, sources, workspace.chapters, unit); const characters = availableEntities.filter((entity) => entity.type === 'character'); const result = await provider.extractCharacterMemoryPatch({ project: workspace.project, chapter: currentChapter, scene: currentScene, characters, existingEntities: availableEntities, context, changedRange: { start: 0, end: Array.from(currentContent).length } }, timeout); const savedProposals = await this.repository.saveCharacterMemoryProposals(run.id, result.proposals); await this.repository.saveManuscriptAnalysisArtifacts(this.jobId, savedProposals.map((proposal) => ({ jobId: this.jobId, projectId: workspace.project.id, phase: 'character_memory' as const, unitId: unit.id, artifactType: 'character_memory_proposal' as const, artifactId: proposal.id, reviewStatus: 'pending' as const, explicitlySkipped: false }))); await this.repository.updateManuscriptAnalysisUnit({ id: unit.id, status: unit.status, actualProvider: provider.id, outputHash: contentHash(JSON.stringify(result)) }); progress.completedUnits += 1; progress.lastSuccessfulUnitId = unit.id; progress.actualProvider = provider.id; progress.updatedAt = new Date().toISOString(); await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'running', currentPhase: 'character_memory', phaseProgress: { ...(await this.repository.getManuscriptAnalysisJob(job.id)).phaseProgress, character_memory: progress } }); }
+    return entities.filter((entity) => (firstOrder.get(entity.id) ?? Number.MAX_SAFE_INTEGER) < orderIndex).sort((a, b) => (firstOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (firstOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER)).slice(0, 160);
   }
 
   private async runChapterSynthesis(job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, chapters: Chapter[], provider: Provider, timeout: number): Promise<void> {

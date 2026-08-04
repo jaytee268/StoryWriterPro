@@ -36,13 +36,14 @@ use crate::{
         ManuscriptAnalysisDraftLedgerEntry, ManuscriptAnalysisJob, ManuscriptAnalysisPageMarker,
         ManuscriptAnalysisPhaseResult, ManuscriptAnalysisReviewAudit, ManuscriptAnalysisUnit,
         ManuscriptImportInput, ManuscriptImportResult, ManuscriptPosition,
-        ManuscriptStructureProposal, ManuscriptStructureRun, MindmapLayout, NarrativeSummary,
-        PersistentTimelineEvent, PlotThreadLifecycle, PlotThreadLifecycleProposal, Project,
-        ProjectOnboardingState, ProjectRule, ProjectRuleProposal, ProjectSourceDocument,
-        ProjectStyle, ProjectStyleAnalysisRun, ProjectStyleObservation, ProviderStatus,
-        ProvisionalEntity, ProvisionalEntityMention, ProvisionalEvent, ProvisionalMergeProposal,
-        ProvisionalRelation, ReconcileContinuityTextCorrectionInput, RelationshipMemory,
-        RestoreSceneVersionInput, ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput,
+        ManuscriptStructureProposal, ManuscriptStructureRun, MaterializeProvisionalEntityInput,
+        MindmapLayout, NarrativeSummary, PersistentTimelineEvent, PlotThreadLifecycle,
+        PlotThreadLifecycleProposal, Project, ProjectOnboardingState, ProjectRule,
+        ProjectRuleProposal, ProjectSourceDocument, ProjectStyle, ProjectStyleAnalysisRun,
+        ProjectStyleObservation, ProviderStatus, ProvisionalEntity, ProvisionalEntityMention,
+        ProvisionalEvent, ProvisionalMergeProposal, ProvisionalRelation,
+        ReconcileContinuityTextCorrectionInput, RelationshipMemory, RestoreSceneVersionInput,
+        ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput,
         SaveChapterGenerationDraftLedgerInput, SaveChapterGenerationPlanInput,
         SaveChapterGenerationReviewInput, SaveChapterGenerationSectionInput,
         SaveCharacterDialogueMemoryInput, SaveCharacterExperienceInput,
@@ -5093,6 +5094,149 @@ pub fn save_provisional_entity(
     let stamp = now();
     db.execute("INSERT INTO provisional_entities(id,job_id,project_id,entity_type,canonical_name,aliases_json,description,first_source_reference_id,last_source_reference_id,confidence,review_status,existing_entity_id,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,COALESCE(?11,'proposed'),?12,?13,?13) ON CONFLICT(id) DO UPDATE SET canonical_name=excluded.canonical_name,aliases_json=excluded.aliases_json,description=excluded.description,confidence=excluded.confidence,review_status=excluded.review_status,existing_entity_id=excluded.existing_entity_id,last_source_reference_id=excluded.last_source_reference_id,updated_at=excluded.updated_at", params![id,input.job_id,input.project_id,input.entity_type,input.canonical_name.trim(),aliases,input.description,input.first_source_reference_id,input.last_source_reference_id,input.confidence,input.review_status,input.existing_entity_id,stamp]).map_err(|e| sql_error("Provisorische Entität konnte nicht gespeichert werden", e))?;
     db.query_row("SELECT id,job_id,project_id,entity_type,canonical_name,aliases_json,description,first_source_reference_id,last_source_reference_id,confidence,review_status,existing_entity_id,created_at,updated_at FROM provisional_entities WHERE id=?1", params![id], provisional_entity_from_row).map_err(|e| sql_error("Provisorische Entität konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn materialize_provisional_entity(
+    state: State<'_, DbState>,
+    input: MaterializeProvisionalEntityInput,
+) -> Result<StoryEntity, String> {
+    if input.decision != "accept" && input.decision != "merge" {
+        return Err("Ungültige Materialisierungsentscheidung.".into());
+    }
+    let db = lock_db(&state)?;
+    let transaction = db
+        .unchecked_transaction()
+        .map_err(|e| sql_error("Materialisierung konnte nicht gestartet werden", e))?;
+    let job_project: String = transaction
+        .query_row(
+            "SELECT project_id FROM manuscript_analysis_jobs WHERE id=?1",
+            params![input.job_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| sql_error("Analysejob konnte nicht geprüft werden", e))?;
+    if job_project != input.project_id {
+        return Err("Analysejob gehört nicht zum Projekt.".into());
+    }
+    let provisional: (String, String, String, String, f64, Option<String>) = transaction.query_row("SELECT entity_type,canonical_name,aliases_json,description,confidence,existing_entity_id FROM provisional_entities WHERE id=?1 AND job_id=?2 AND project_id=?3", params![input.provisional_entity_id, input.job_id, input.project_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))).map_err(|e| sql_error("Provisorische Entität konnte nicht geladen werden", e))?;
+    let target_id = input.existing_entity_id.clone().or(provisional.5.clone());
+    let canonical_id = if let Some(existing_id) = target_id.clone() {
+        let valid: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM story_entities WHERE id=?1 AND project_id=?2)",
+                params![existing_id, input.project_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| sql_error("Zielentität konnte nicht geprüft werden", e))?;
+        if !valid || input.decision != "merge" {
+            return Err("Die ausgewählte bestehende Entität ist ungültig.".into());
+        }
+        existing_id
+    } else {
+        if input.decision != "accept" {
+            return Err("Für einen Merge muss eine bestehende Entität ausgewählt werden.".into());
+        }
+        let id = new_id();
+        let entity_type = if provisional.0 == "world_rule_candidate" {
+            "world_rule"
+        } else if provisional.0 == "author_note" {
+            "author_note"
+        } else {
+            provisional.0.as_str()
+        };
+        transaction.execute("INSERT INTO story_entities (id,project_id,name,entity_type,description,status,confidence,source,chapter,scene,author_confirmed,updated_at,origin,tags_json) VALUES (?1,?2,?3,?4,?5,'confirmed',?6,'manuscript_analysis','','',1,?7,'edited',?8)", params![id, input.project_id, provisional.1, entity_type, provisional.3, provisional.4.clamp(0.0, 1.0), now(), provisional.2]).map_err(|e| sql_error("Kanonische Entität konnte nicht erstellt werden", e))?;
+        id
+    };
+    let old_id = &input.provisional_entity_id;
+    transaction
+        .execute(
+            "UPDATE story_source_references SET entity_id=?2 WHERE entity_id=?1 AND project_id=?3",
+            params![old_id, canonical_id, input.project_id],
+        )
+        .map_err(|e| sql_error("Quellen konnten nicht umgehängt werden", e))?;
+    transaction.execute("UPDATE provisional_entity_mentions SET resolved_provisional_entity_id=?2, alternative_entity_ids_json=REPLACE(alternative_entity_ids_json,?1,?2) WHERE job_id=?3 AND project_id=?4", params![old_id, canonical_id, input.job_id, input.project_id]).map_err(|e| sql_error("Entitätserwähnungen konnten nicht umgehängt werden", e))?;
+    transaction.execute("UPDATE provisional_relations SET source_provisional_entity_id=CASE WHEN source_provisional_entity_id=?1 THEN ?2 ELSE source_provisional_entity_id END, target_provisional_entity_id=CASE WHEN target_provisional_entity_id=?1 THEN ?2 ELSE target_provisional_entity_id END WHERE job_id=?3 AND project_id=?4", params![old_id, canonical_id, input.job_id, input.project_id]).map_err(|e| sql_error("Beziehungen konnten nicht umgehängt werden", e))?;
+    for (table, column) in [
+        ("provisional_events", "participant_entity_ids_json"),
+        (
+            "manuscript_timeline_events",
+            "participating_entity_ids_json",
+        ),
+    ] {
+        transaction
+            .execute(
+                &format!("UPDATE {table} SET {column}=REPLACE({column},?1,?2) WHERE project_id=?3"),
+                params![old_id, canonical_id, input.project_id],
+            )
+            .map_err(|e| sql_error("Ereignisbeteiligte konnten nicht umgehängt werden", e))?;
+    }
+    transaction.execute("UPDATE story_graph_edges SET source_entity_id=CASE WHEN source_entity_id=?1 THEN ?2 ELSE source_entity_id END, target_entity_id=CASE WHEN target_entity_id=?1 THEN ?2 ELSE target_entity_id END, source_reference_ids_json=REPLACE(source_reference_ids_json,?1,?2) WHERE project_id=?3", params![old_id, canonical_id, input.project_id]).map_err(|e| sql_error("Graph-Kanten konnten nicht umgehängt werden", e))?;
+    transaction.execute("UPDATE character_memory_proposals SET subject_character_id=CASE WHEN subject_character_id=?1 THEN ?2 ELSE subject_character_id END, related_character_id=CASE WHEN related_character_id=?1 THEN ?2 ELSE related_character_id END, target_entity_id=CASE WHEN target_entity_id=?1 THEN ?2 ELSE target_entity_id END, payload_json=REPLACE(payload_json,?1,?2) WHERE project_id=?3", params![old_id, canonical_id, input.project_id]).map_err(|e| sql_error("Character-Memory-Verweise konnten nicht umgehängt werden", e))?;
+    transaction.execute("UPDATE manuscript_analysis_draft_ledger SET entity_id=CASE WHEN entity_id=?1 THEN ?2 ELSE entity_id END, related_entity_id=CASE WHEN related_entity_id=?1 THEN ?2 ELSE related_entity_id END WHERE job_id=?3 AND project_id=?4", params![old_id, canonical_id, input.job_id, input.project_id]).map_err(|e| sql_error("Draft-Zustände konnten nicht umgehängt werden", e))?;
+    transaction.execute("UPDATE provisional_entities SET existing_entity_id=?2, review_status=?3, updated_at=?4 WHERE id=?1 AND job_id=?5 AND project_id=?6", params![old_id, canonical_id, if target_id.is_some() { "merged" } else { "accepted" }, now(), input.job_id, input.project_id]).map_err(|e| sql_error("Materialisierungsstatus konnte nicht gespeichert werden", e))?;
+    transaction
+        .commit()
+        .map_err(|e| sql_error("Materialisierung konnte nicht abgeschlossen werden", e))?;
+    db.query_row(entity_query(), params![canonical_id], entity_from_row)
+        .map_err(|e| sql_error("Materialisierte Entität konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn invalidate_manuscript_analysis_from(
+    state: State<'_, DbState>,
+    job_id: String,
+    order_index: i64,
+) -> Result<(), String> {
+    let db = lock_db(&state)?;
+    let transaction = db
+        .unchecked_transaction()
+        .map_err(|e| sql_error("Invalidierung konnte nicht gestartet werden", e))?;
+    let project_id: String = transaction
+        .query_row(
+            "SELECT project_id FROM manuscript_analysis_jobs WHERE id=?1",
+            params![job_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| sql_error("Analysejob konnte nicht geprüft werden", e))?;
+    let later_units: Vec<String> = transaction
+        .prepare("SELECT id FROM manuscript_analysis_units WHERE job_id=?1 AND order_index>=?2")
+        .map_err(|e| sql_error("Spätere Analyse-Units konnten nicht geladen werden", e))?
+        .query_map(params![job_id, order_index], |row| row.get(0))
+        .map_err(|e| sql_error("Spätere Analyse-Units konnten nicht gelesen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Spätere Analyse-Units konnten nicht gelesen werden", e))?;
+    transaction.execute("DELETE FROM bible_proposals WHERE id IN (SELECT artifact_id FROM manuscript_analysis_artifacts WHERE job_id=?1 AND unit_id IN (SELECT id FROM manuscript_analysis_units WHERE job_id=?1 AND order_index>=?2) AND artifact_type='bible_proposal')", params![job_id, order_index]).map_err(|e| sql_error("Bible-Vorschläge konnten nicht invalidiert werden", e))?;
+    transaction.execute("DELETE FROM character_memory_proposals WHERE id IN (SELECT artifact_id FROM manuscript_analysis_artifacts WHERE job_id=?1 AND unit_id IN (SELECT id FROM manuscript_analysis_units WHERE job_id=?1 AND order_index>=?2) AND artifact_type='character_memory_proposal')", params![job_id, order_index]).map_err(|e| sql_error("Character-Memory-Vorschläge konnten nicht invalidiert werden", e))?;
+    transaction.execute("DELETE FROM continuity_review_findings WHERE id IN (SELECT artifact_id FROM manuscript_analysis_artifacts WHERE job_id=?1 AND unit_id IN (SELECT id FROM manuscript_analysis_units WHERE job_id=?1 AND order_index>=?2) AND artifact_type='continuity_finding')", params![job_id, order_index]).map_err(|e| sql_error("Findings konnten nicht invalidiert werden", e))?;
+    transaction.execute("DELETE FROM manuscript_analysis_draft_ledger WHERE job_id=?1 AND unit_id IN (SELECT id FROM manuscript_analysis_units WHERE job_id=?1 AND order_index>=?2)", params![job_id, order_index]).map_err(|e| sql_error("Draft-Zustände konnten nicht invalidiert werden", e))?;
+    transaction.execute("DELETE FROM provisional_entity_mentions WHERE job_id=?1 AND passage_unit_id IN (SELECT id FROM manuscript_analysis_units WHERE job_id=?1 AND order_index>=?2)", params![job_id, order_index]).map_err(|e| sql_error("Entitätserwähnungen konnten nicht invalidiert werden", e))?;
+    transaction.execute("DELETE FROM provisional_events WHERE job_id=?1 AND passage_unit_id IN (SELECT id FROM manuscript_analysis_units WHERE job_id=?1 AND order_index>=?2)", params![job_id, order_index]).map_err(|e| sql_error("Provisorische Ereignisse konnten nicht invalidiert werden", e))?;
+    transaction.execute("DELETE FROM manuscript_timeline_events WHERE project_id=?1 AND passage_unit_id IN (SELECT id FROM manuscript_analysis_units WHERE job_id=?2 AND order_index>=?3)", params![project_id, job_id, order_index]).map_err(|e| sql_error("Timeline-Ereignisse konnten nicht invalidiert werden", e))?;
+    for unit_id in later_units {
+        let pattern = format!("%{job_id}-{unit_id}-%");
+        transaction
+            .execute(
+                "DELETE FROM provisional_relations WHERE job_id=?1 AND id LIKE ?2",
+                params![job_id, pattern],
+            )
+            .map_err(|e| {
+                sql_error(
+                    "Provisorische Beziehungen konnten nicht invalidiert werden",
+                    e,
+                )
+            })?;
+        transaction
+            .execute(
+                "DELETE FROM story_graph_edges WHERE project_id=?1 AND id LIKE ?2",
+                params![project_id, pattern],
+            )
+            .map_err(|e| sql_error("Graph-Kanten konnten nicht invalidiert werden", e))?;
+    }
+    transaction.execute("DELETE FROM manuscript_analysis_artifacts WHERE job_id=?1 AND unit_id IN (SELECT id FROM manuscript_analysis_units WHERE job_id=?1 AND order_index>=?2)", params![job_id, order_index]).map_err(|e| sql_error("Analyseartefakte konnten nicht invalidiert werden", e))?;
+    transaction.execute("UPDATE manuscript_analysis_units SET status='stale',continuity_run_id=NULL,error_code='STALE_CONTEXT',error_message='Durch eine frühere Textänderung veraltet.',completed_at=NULL,updated_at=?3 WHERE job_id=?1 AND order_index>=?2", params![job_id, order_index, now()]).map_err(|e| sql_error("Analyse-Units konnten nicht invalidiert werden", e))?;
+    transaction
+        .commit()
+        .map_err(|e| sql_error("Invalidierung konnte nicht abgeschlossen werden", e))
 }
 
 #[tauri::command]

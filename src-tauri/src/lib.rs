@@ -154,6 +154,8 @@ pub fn run() {
             commands::apply_manuscript_structure,
             commands::list_provisional_entities,
             commands::save_provisional_entity,
+            commands::materialize_provisional_entity,
+            commands::invalidate_manuscript_analysis_from,
             commands::list_provisional_entity_mentions,
             commands::save_provisional_mentions,
             commands::list_provisional_merge_proposals,
