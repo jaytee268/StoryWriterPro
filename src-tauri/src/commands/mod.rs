@@ -15,8 +15,9 @@ use crate::{
         validate_proposal_action, validate_proposal_classification, validate_relation_type,
         validate_relationship_memory_type, validate_review_status, validate_rule_proposal_status,
         validate_scene_status, validate_scene_version_reason, validate_style_reference_category,
-        validate_truthfulness, AddCharacterMemoryEvidenceInput, BibleProposal, BibleProposalInput,
-        BibleUpdateRun, Book, Chapter, ChapterGenerationJob, ChapterGenerationPlan,
+        validate_truthfulness, AcceptChapterGenerationJobInput, AddCharacterMemoryEvidenceInput,
+        BibleProposal, BibleProposalInput, BibleUpdateRun, Book, Chapter,
+        ChapterGenerationDraftLedgerEntry, ChapterGenerationJob, ChapterGenerationPlan,
         ChapterGenerationReview, ChapterGenerationSection, ChapterPlanBeat,
         CharacterDialogueMemory, CharacterExperience, CharacterKnowledgeState,
         CharacterMemoryEvidence, CharacterMemoryProposal, CharacterMemoryProposalDraft,
@@ -33,13 +34,13 @@ use crate::{
         NarrativeSummary, PlotThreadLifecycle, PlotThreadLifecycleProposal, Project, ProjectRule,
         ProjectRuleProposal, ProjectStyle, ProjectStyleAnalysisRun, ProjectStyleObservation,
         ProviderStatus, RelationshipMemory, RestoreSceneVersionInput, ReviewBibleProposalInput,
-        ReviewCharacterMemoryProposalInput, SaveChapterGenerationPlanInput,
-        SaveChapterGenerationReviewInput, SaveChapterGenerationSectionInput,
-        SaveCharacterDialogueMemoryInput, SaveCharacterExperienceInput,
-        SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput, SaveCharacterSceneStateInput,
-        SaveCharacterVoicePatternInput, SaveContinuityFindingInput, SaveContinuityReviewInput,
-        SaveContinuityReviewRunStatusInput, SaveContinuityStateInput, SaveLoreMetadataInput,
-        SaveManuscriptAnalysisDraftLedgerInput, SaveNarrativeSummaryInput,
+        ReviewCharacterMemoryProposalInput, SaveChapterGenerationDraftLedgerInput,
+        SaveChapterGenerationPlanInput, SaveChapterGenerationReviewInput,
+        SaveChapterGenerationSectionInput, SaveCharacterDialogueMemoryInput,
+        SaveCharacterExperienceInput, SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput,
+        SaveCharacterSceneStateInput, SaveCharacterVoicePatternInput, SaveContinuityFindingInput,
+        SaveContinuityReviewInput, SaveContinuityReviewRunStatusInput, SaveContinuityStateInput,
+        SaveLoreMetadataInput, SaveManuscriptAnalysisDraftLedgerInput, SaveNarrativeSummaryInput,
         SavePlotThreadLifecycleInput, SavePlotThreadLifecycleProposalInput, SaveProjectRuleInput,
         SaveProjectRuleProposalInput, SaveProjectStyleInput, SaveProjectStyleObservationInput,
         SaveRelationshipMemoryInput, SaveStoryDirectionInput, SaveWritingPreferencesInput, Scene,
@@ -5311,8 +5312,11 @@ fn section_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ChapterGenerationSecti
         })?,
         status: row.get(9)?,
         provider_id: row.get(10)?,
-        created_at: row.get(11)?,
-        updated_at: row.get(12)?,
+        content_hash: row.get(11)?,
+        draft_context_hash: row.get(12)?,
+        draft_state: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
     })
 }
 
@@ -5322,7 +5326,7 @@ pub fn list_chapter_generation_sections(
     job_id: String,
 ) -> Result<Vec<ChapterGenerationSection>, String> {
     let db = lock_db(&state)?;
-    let mut s=db.prepare("SELECT id,job_id,plan_beat_id,order_index,target_words,actual_words,content,continuation_summary,continuity_state_json,status,provider_id,created_at,updated_at FROM chapter_generation_sections WHERE job_id=?1 ORDER BY order_index").map_err(|e|sql_error("Kapitelabschnitte konnten nicht geladen werden",e))?;
+    let mut s=db.prepare("SELECT id,job_id,plan_beat_id,order_index,target_words,actual_words,content,continuation_summary,continuity_state_json,status,provider_id,content_hash,draft_context_hash,draft_state,created_at,updated_at FROM chapter_generation_sections WHERE job_id=?1 ORDER BY order_index").map_err(|e|sql_error("Kapitelabschnitte konnten nicht geladen werden",e))?;
     let rows = s
         .query_map(params![job_id], section_from_row)
         .map_err(|e| sql_error("Kapitelabschnitte konnten nicht geladen werden", e))?
@@ -5346,8 +5350,19 @@ pub fn save_chapter_generation_section(
     let actual = input.content.split_whitespace().count() as i64;
     let state_json = serde_json::to_string(&input.continuity_state)
         .map_err(|e| sql_error("Continuity State konnte nicht serialisiert werden", e))?;
-    db.execute("INSERT INTO chapter_generation_sections(id,job_id,plan_beat_id,order_index,target_words,actual_words,content,continuation_summary,continuity_state_json,status,provider_id,created_at,updated_at) VALUES(COALESCE((SELECT id FROM chapter_generation_sections WHERE job_id=?1 AND order_index=?2),?3),?1,?4,?2,?5,?6,?7,?8,?9,?10,?11,COALESCE((SELECT created_at FROM chapter_generation_sections WHERE job_id=?1 AND order_index=?2),?12),?12) ON CONFLICT(job_id,order_index) DO UPDATE SET plan_beat_id=excluded.plan_beat_id,target_words=excluded.target_words,actual_words=excluded.actual_words,content=excluded.content,continuation_summary=excluded.continuation_summary,continuity_state_json=excluded.continuity_state_json,status=excluded.status,provider_id=excluded.provider_id,updated_at=excluded.updated_at",params![input.job_id,input.order_index,id,input.plan_beat_id,input.target_words,actual,input.content,input.continuation_summary,state_json,input.status,input.provider_id,stamp]).map_err(|e|sql_error("Kapitelabschnitt konnte nicht gespeichert werden",e))?;
-    db.query_row("SELECT id,job_id,plan_beat_id,order_index,target_words,actual_words,content,continuation_summary,continuity_state_json,status,provider_id,created_at,updated_at FROM chapter_generation_sections WHERE job_id=?1 AND order_index=?2",params![input.job_id,input.order_index],section_from_row).map_err(|e|sql_error("Gespeicherter Kapitelabschnitt konnte nicht geladen werden",e))
+    let content_hash = input
+        .content_hash
+        .unwrap_or_else(|| canonical_content_hash(&input.content));
+    let draft_context_hash = input.draft_context_hash.unwrap_or_default();
+    let draft_state = input.draft_state.unwrap_or_else(|| "valid".into());
+    if !matches!(
+        draft_state.as_str(),
+        "valid" | "stale" | "regenerate_requested"
+    ) {
+        return Err("Ungültiger Draft-Abschnittsstatus.".into());
+    }
+    db.execute("INSERT INTO chapter_generation_sections(id,job_id,plan_beat_id,order_index,target_words,actual_words,content,continuation_summary,continuity_state_json,status,provider_id,content_hash,draft_context_hash,draft_state,created_at,updated_at) VALUES(COALESCE((SELECT id FROM chapter_generation_sections WHERE job_id=?1 AND order_index=?2),?3),?1,?4,?2,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,COALESCE((SELECT created_at FROM chapter_generation_sections WHERE job_id=?1 AND order_index=?2),?15),?15) ON CONFLICT(job_id,order_index) DO UPDATE SET plan_beat_id=excluded.plan_beat_id,target_words=excluded.target_words,actual_words=excluded.actual_words,content=excluded.content,continuation_summary=excluded.continuation_summary,continuity_state_json=excluded.continuity_state_json,status=excluded.status,provider_id=excluded.provider_id,content_hash=excluded.content_hash,draft_context_hash=excluded.draft_context_hash,draft_state=excluded.draft_state,updated_at=excluded.updated_at",params![input.job_id,input.order_index,id,input.plan_beat_id,input.target_words,actual,input.content,input.continuation_summary,state_json,input.status,input.provider_id,content_hash,draft_context_hash,draft_state,stamp]).map_err(|e|sql_error("Kapitelabschnitt konnte nicht gespeichert werden",e))?;
+    db.query_row("SELECT id,job_id,plan_beat_id,order_index,target_words,actual_words,content,continuation_summary,continuity_state_json,status,provider_id,content_hash,draft_context_hash,draft_state,created_at,updated_at FROM chapter_generation_sections WHERE job_id=?1 AND order_index=?2",params![input.job_id,input.order_index],section_from_row).map_err(|e|sql_error("Gespeicherter Kapitelabschnitt konnte nicht geladen werden",e))
 }
 
 fn review_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ChapterGenerationReview> {
@@ -5355,17 +5370,18 @@ fn review_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ChapterGenerationReview
         id: row.get(0)?,
         job_id: row.get(1)?,
         section_id: row.get(2)?,
-        review_scope: row.get(3)?,
-        issue_type: row.get(4)?,
-        severity: row.get(5)?,
-        title: row.get(6)?,
-        description: row.get(7)?,
-        related_entity_ids: json_array(row.get(8)?).unwrap_or_default(),
-        related_source_ids: json_array(row.get(9)?).unwrap_or_default(),
-        suggested_action: row.get(10)?,
-        status: row.get(11)?,
-        created_at: row.get(12)?,
-        updated_at: row.get(13)?,
+        continuity_run_id: row.get(3)?,
+        review_scope: row.get(4)?,
+        issue_type: row.get(5)?,
+        severity: row.get(6)?,
+        title: row.get(7)?,
+        description: row.get(8)?,
+        related_entity_ids: json_array(row.get(9)?).unwrap_or_default(),
+        related_source_ids: json_array(row.get(10)?).unwrap_or_default(),
+        suggested_action: row.get(11)?,
+        status: row.get(12)?,
+        created_at: row.get(13)?,
+        updated_at: row.get(14)?,
     })
 }
 
@@ -5375,7 +5391,7 @@ pub fn list_chapter_generation_reviews(
     job_id: String,
 ) -> Result<Vec<ChapterGenerationReview>, String> {
     let db = lock_db(&state)?;
-    let mut s=db.prepare("SELECT id,job_id,section_id,review_scope,issue_type,severity,title,description,related_entity_ids_json,related_source_ids_json,suggested_action,status,created_at,updated_at FROM chapter_generation_reviews WHERE job_id=?1 ORDER BY created_at").map_err(|e|sql_error("Kapitelprüfungen konnten nicht geladen werden",e))?;
+    let mut s=db.prepare("SELECT id,job_id,section_id,continuity_run_id,review_scope,issue_type,severity,title,description,related_entity_ids_json,related_source_ids_json,suggested_action,status,created_at,updated_at FROM chapter_generation_reviews WHERE job_id=?1 ORDER BY created_at").map_err(|e|sql_error("Kapitelprüfungen konnten nicht geladen werden",e))?;
     let rows = s
         .query_map(params![job_id], review_from_row)
         .map_err(|e| sql_error("Kapitelprüfungen konnten nicht geladen werden", e))?
@@ -5403,16 +5419,40 @@ pub fn save_chapter_generation_reviews(
         {
             return Err("Ungültige Kapitelprüfung.".into());
         }
+        if let Some(section_id) = &review.section_id {
+            let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM chapter_generation_sections WHERE id=?1 AND job_id=?2)", params![section_id, job_id], |row| row.get(0)).map_err(|e| sql_error("Prüfungsabschnitt konnte nicht geprüft werden", e))?;
+            if !valid {
+                return Err("Die Prüfung gehört nicht zum Schreibauftrag.".into());
+            }
+        }
+        if let Some(run_id) = &review.continuity_run_id {
+            let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM continuity_review_runs WHERE id=?1 AND project_id=(SELECT project_id FROM chapter_generation_jobs WHERE id=?2))", params![run_id, job_id], |row| row.get(0)).map_err(|e| sql_error("Continuity-Run konnte nicht geprüft werden", e))?;
+            if !valid {
+                return Err("Der Continuity-Run gehört nicht zum Projekt.".into());
+            }
+        }
+        for entity_id in &review.related_entity_ids {
+            let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM story_entities WHERE id=?1 AND project_id=(SELECT project_id FROM chapter_generation_jobs WHERE id=?2))", params![entity_id, job_id], |row| row.get(0)).map_err(|e| sql_error("Prüfungsentität konnte nicht geprüft werden", e))?;
+            if !valid {
+                return Err("Eine Prüfungsentität gehört nicht zum Projekt.".into());
+            }
+        }
+        for source_id in &review.related_source_ids {
+            let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=(SELECT project_id FROM chapter_generation_jobs WHERE id=?2))", params![source_id, job_id], |row| row.get(0)).map_err(|e| sql_error("Prüfungsquelle konnte nicht geprüft werden", e))?;
+            if !valid {
+                return Err("Eine Prüfungsquelle gehört nicht zum Projekt.".into());
+            }
+        }
         let id = new_id();
         let related_entities = serde_json::to_string(&review.related_entity_ids)
             .map_err(|e| sql_error("Prüfungsbezug konnte nicht serialisiert werden", e))?;
         let related_sources = serde_json::to_string(&review.related_source_ids)
             .map_err(|e| sql_error("Prüfungsquellen konnten nicht serialisiert werden", e))?;
-        tx.execute("INSERT INTO chapter_generation_reviews(id,job_id,section_id,review_scope,issue_type,severity,title,description,related_entity_ids_json,related_source_ids_json,suggested_action,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13)", params![id, job_id, review.section_id, review.review_scope, review.issue_type, review.severity, review.title, review.description, related_entities, related_sources, review.suggested_action, review.status, now()]).map_err(|e| sql_error("Kapitelprüfung konnte nicht gespeichert werden", e))?;
+        tx.execute("INSERT INTO chapter_generation_reviews(id,job_id,section_id,continuity_run_id,review_scope,issue_type,severity,title,description,related_entity_ids_json,related_source_ids_json,suggested_action,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?14)", params![id, job_id, review.section_id, review.continuity_run_id, review.review_scope, review.issue_type, review.severity, review.title, review.description, related_entities, related_sources, review.suggested_action, review.status, now()]).map_err(|e| sql_error("Kapitelprüfung konnte nicht gespeichert werden", e))?;
     }
     tx.commit()
         .map_err(|e| sql_error("Kapitelprüfung konnte nicht abgeschlossen werden", e))?;
-    let mut stmt = db.prepare("SELECT id,job_id,section_id,review_scope,issue_type,severity,title,description,related_entity_ids_json,related_source_ids_json,suggested_action,status,created_at,updated_at FROM chapter_generation_reviews WHERE job_id=?1 ORDER BY created_at").map_err(|e| sql_error("Kapitelprüfungen konnten nicht geladen werden", e))?;
+    let mut stmt = db.prepare("SELECT id,job_id,section_id,continuity_run_id,review_scope,issue_type,severity,title,description,related_entity_ids_json,related_source_ids_json,suggested_action,status,created_at,updated_at FROM chapter_generation_reviews WHERE job_id=?1 ORDER BY created_at").map_err(|e| sql_error("Kapitelprüfungen konnten nicht geladen werden", e))?;
     let result = stmt
         .query_map(params![job_id], review_from_row)
         .map_err(|e| sql_error("Kapitelprüfungen konnten nicht geladen werden", e))?
@@ -5454,36 +5494,64 @@ pub fn update_chapter_generation_review_status(
         params![status, now(), id],
     )
     .map_err(|e| sql_error("Prüfstatus konnte nicht aktualisiert werden", e))?;
-    db.query_row("SELECT id,job_id,section_id,review_scope,issue_type,severity,title,description,related_entity_ids_json,related_source_ids_json,suggested_action,status,created_at,updated_at FROM chapter_generation_reviews WHERE id=?1", params![id], review_from_row).map_err(|e| sql_error("Kapitelprüfung konnte nicht geladen werden", e))
+    db.query_row("SELECT id,job_id,section_id,continuity_run_id,review_scope,issue_type,severity,title,description,related_entity_ids_json,related_source_ids_json,suggested_action,status,created_at,updated_at FROM chapter_generation_reviews WHERE id=?1", params![id], review_from_row).map_err(|e| sql_error("Kapitelprüfung konnte nicht geladen werden", e))
 }
 
 #[tauri::command]
 pub fn accept_chapter_generation_job(
     state: State<'_, DbState>,
-    job_id: String,
+    input: AcceptChapterGenerationJobInput,
 ) -> Result<ChapterGenerationJob, String> {
     let db = lock_db(&state)?;
-    let job = load_job(&db, &job_id)?;
+    accept_chapter_generation_job_in_db(&db, input)
+}
+
+fn accept_chapter_generation_job_in_db(
+    db: &Connection,
+    input: AcceptChapterGenerationJobInput,
+) -> Result<ChapterGenerationJob, String> {
+    let job = load_job(db, &input.job_id)?;
     if job.status != "draft_ready" {
         return Err("Der Entwurf ist noch nicht zur Übernahme bereit.".into());
     }
+    if input.current_context_hash != job.content_context_hash && !job.context_override_accepted {
+        return Err("Der Projektkontext hat sich seit Beginn des Entwurfs verändert.".into());
+    }
     let plan = db
-        .query_row(plan_select(), params![job_id], plan_from_row)
+        .query_row(plan_select(), params![input.job_id], plan_from_row)
         .map_err(|e| sql_error("Kapitelplan fehlt", e))?;
-    let sections = list_chapter_generation_sections_from_db(&db, &job.id)?;
-    if sections.is_empty() {
+    let sections = list_chapter_generation_sections_from_db(db, &job.id)?;
+    if sections.is_empty() || sections.len() != plan.beats.len() {
         return Err("Der Entwurf enthält noch keine Abschnitte.".into());
     }
     if plan.review_status != "accepted"
-        || sections
-            .iter()
-            .any(|section| section.content.trim().is_empty())
+        || sections.iter().any(|section| {
+            section.content.trim().is_empty()
+                || matches!(
+                    section.status.as_str(),
+                    "pending" | "regenerate_requested" | "failed"
+                )
+                || matches!(
+                    section.draft_state.as_str(),
+                    "stale" | "regenerate_requested"
+                )
+                || (!section.content_hash.is_empty()
+                    && canonical_content_hash(&section.content) != section.content_hash)
+        })
     {
         return Err("Plan und alle Abschnitte müssen vor der Übernahme bestätigt sein.".into());
     }
-    let blocking: i64 = db.query_row("SELECT COUNT(*) FROM chapter_generation_reviews WHERE job_id=?1 AND severity='blocking' AND status='open'", params![job_id], |row| row.get(0)).map_err(|e| sql_error("Kapitelprüfungen konnten nicht geprüft werden", e))?;
+    let draft_mismatch: i64 = db.query_row("SELECT COUNT(*) FROM chapter_generation_draft_ledger d JOIN chapter_generation_sections s ON s.id=d.section_id WHERE d.job_id=?1 AND d.status='proposed' AND d.content_hash<>s.content_hash", params![input.job_id], |row| row.get(0)).map_err(|e| sql_error("Draft-Ledger konnte nicht geprüft werden", e))?;
+    if draft_mismatch > 0 {
+        return Err("Der Draft-Ledger passt nicht mehr zum aktuellen Abschnittstext.".into());
+    }
+    let blocking: i64 = db.query_row("SELECT COUNT(*) FROM chapter_generation_reviews WHERE job_id=?1 AND severity='blocking' AND status='open'", params![input.job_id], |row| row.get(0)).map_err(|e| sql_error("Kapitelprüfungen konnten nicht geprüft werden", e))?;
     if blocking > 0 {
         return Err("Offene blockierende Kapitelprüfung verhindert die Übernahme.".into());
+    }
+    let critical: i64 = db.query_row("SELECT COUNT(*) FROM continuity_review_findings WHERE severity='critical' AND review_status='open' AND run_id IN (SELECT continuity_run_id FROM chapter_generation_reviews WHERE job_id=?1 AND continuity_run_id IS NOT NULL)", params![input.job_id], |row| row.get(0)).map_err(|e| sql_error("Continuity-Findings konnten nicht geprüft werden", e))?;
+    if critical > 0 {
+        return Err("Offene kritische Continuity-Findings verhindern die Übernahme.".into());
     }
     let tx = db
         .unchecked_transaction()
@@ -5545,18 +5613,61 @@ pub fn accept_chapter_generation_job(
             updated_at: now(),
         };
         insert_scene_version_in_transaction(&tx, &scene, &now(), "manual")?;
+        let mut draft_statement = tx.prepare("SELECT id,entity_id,related_entity_id,state_kind,previous_state,new_state,source_excerpt,source_start_offset,source_end_offset,content_hash,confidence FROM chapter_generation_draft_ledger WHERE job_id=?1 AND section_id=?2 AND status='proposed' ORDER BY created_at").map_err(|e| sql_error("Draft-Zustände konnten nicht geladen werden", e))?;
+        let drafts = draft_statement
+            .query_map(params![job.id, section.id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, Option<i64>>(7)?,
+                    row.get::<_, Option<i64>>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, f64>(10)?,
+                ))
+            })
+            .map_err(|e| sql_error("Draft-Zustände konnten nicht geladen werden", e))?
+            .collect::<SqlResult<Vec<_>>>()
+            .map_err(|e| sql_error("Draft-Zustände konnten nicht geladen werden", e))?;
+        drop(draft_statement);
+        for (
+            draft_id,
+            entity_id,
+            related_entity_id,
+            state_kind,
+            previous_state,
+            new_state,
+            excerpt,
+            start_offset,
+            end_offset,
+            draft_hash,
+            confidence,
+        ) in drafts
+        {
+            if draft_hash != section.content_hash {
+                return Err("Ein Draft-Zustand gehört nicht zum aktuellen Abschnittstext.".into());
+            }
+            let source_id = new_id();
+            tx.execute("INSERT INTO story_source_references(id,project_id,entity_id,chapter_id,scene_id,excerpt,start_offset,end_offset) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)", params![source_id, job.project_id, entity_id, chapter_id, scene_id, excerpt, start_offset, end_offset]).map_err(|e| sql_error("Draft-Quelle konnte nicht gespeichert werden", e))?;
+            tx.execute("INSERT INTO continuity_state_ledger(id,project_id,entity_id,related_entity_id,state_kind,previous_state,new_state,reason,evidence_excerpt,chapter_id,scene_id,start_offset,end_offset,source_reference_id,status,confidence,author_confirmed) VALUES(?1,?2,?3,?4,?5,?6,?7,'Longform-Draft: Nutzerreview erforderlich',?8,?9,?10,?11,?12,?13,'proposed',?14,0)", params![new_id(), job.project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, excerpt, chapter_id, scene_id, start_offset, end_offset, source_id, confidence]).map_err(|e| sql_error("Draft-Zustand konnte nicht als Vorschlag gespeichert werden", e))?;
+            tx.execute("UPDATE chapter_generation_draft_ledger SET status='accepted_for_manuscript_review',source_reference_id=?1,updated_at=?2 WHERE id=?3 AND job_id=?4", params![source_id, now(), draft_id, job.id]).map_err(|e| sql_error("Draft-Zustand konnte nicht markiert werden", e))?;
+        }
     }
     tx.execute("UPDATE chapter_generation_jobs SET status='accepted',completed_at=?1,updated_at=?1 WHERE id=?2",params![now(),job.id]).map_err(|e|sql_error("Schreibauftrag konnte nicht abgeschlossen werden",e))?;
     tx.commit()
         .map_err(|e| sql_error("Kapitelübernahme konnte nicht abgeschlossen werden", e))?;
-    load_job(&db, &job.id)
+    load_job(db, &job.id)
 }
 
 fn list_chapter_generation_sections_from_db(
     db: &Connection,
     job_id: &str,
 ) -> Result<Vec<ChapterGenerationSection>, String> {
-    let mut s=db.prepare("SELECT id,job_id,plan_beat_id,order_index,target_words,actual_words,content,continuation_summary,continuity_state_json,status,provider_id,created_at,updated_at FROM chapter_generation_sections WHERE job_id=?1 ORDER BY order_index").map_err(|e|sql_error("Kapitelabschnitte konnten nicht geladen werden",e))?;
+    let mut s=db.prepare("SELECT id,job_id,plan_beat_id,order_index,target_words,actual_words,content,continuation_summary,continuity_state_json,status,provider_id,content_hash,draft_context_hash,draft_state,created_at,updated_at FROM chapter_generation_sections WHERE job_id=?1 ORDER BY order_index").map_err(|e|sql_error("Kapitelabschnitte konnten nicht geladen werden",e))?;
     let rows = s
         .query_map(params![job_id], section_from_row)
         .map_err(|e| sql_error("Kapitelabschnitte konnten nicht geladen werden", e))?
@@ -5565,13 +5676,153 @@ fn list_chapter_generation_sections_from_db(
     Ok(rows)
 }
 
+fn draft_ledger_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ChapterGenerationDraftLedgerEntry> {
+    Ok(ChapterGenerationDraftLedgerEntry {
+        id: row.get(0)?,
+        job_id: row.get(1)?,
+        section_id: row.get(2)?,
+        project_id: row.get(3)?,
+        entity_id: row.get(4)?,
+        related_entity_id: row.get(5)?,
+        state_kind: row.get(6)?,
+        previous_state: row.get(7)?,
+        new_state: row.get(8)?,
+        source_excerpt: row.get(9)?,
+        source_start_offset: row.get(10)?,
+        source_end_offset: row.get(11)?,
+        content_hash: row.get(12)?,
+        confidence: row.get(13)?,
+        status: row.get(14)?,
+        source_reference_id: row.get(15)?,
+        created_at: row.get(16)?,
+        updated_at: row.get(17)?,
+    })
+}
+
+fn draft_ledger_select() -> &'static str {
+    "SELECT id,job_id,section_id,project_id,entity_id,related_entity_id,state_kind,previous_state,new_state,source_excerpt,source_start_offset,source_end_offset,content_hash,confidence,status,source_reference_id,created_at,updated_at FROM chapter_generation_draft_ledger"
+}
+
+#[tauri::command]
+pub fn list_chapter_generation_draft_ledger(
+    state: State<'_, DbState>,
+    job_id: String,
+) -> Result<Vec<ChapterGenerationDraftLedgerEntry>, String> {
+    let db = lock_db(&state)?;
+    let job = load_job(&db, &job_id)?;
+    let mut statement = db
+        .prepare(&format!(
+            "{} WHERE job_id=?1 ORDER BY created_at",
+            draft_ledger_select()
+        ))
+        .map_err(|e| sql_error("Draft-Ledger konnte nicht geladen werden", e))?;
+    let result = statement
+        .query_map(params![job.id], draft_ledger_from_row)
+        .map_err(|e| sql_error("Draft-Ledger konnte nicht geladen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Draft-Ledger konnte nicht geladen werden", e));
+    result
+}
+
+#[tauri::command]
+pub fn replace_chapter_generation_draft_ledger(
+    state: State<'_, DbState>,
+    section_id: String,
+    entries: Vec<SaveChapterGenerationDraftLedgerInput>,
+) -> Result<Vec<ChapterGenerationDraftLedgerEntry>, String> {
+    let db = lock_db(&state)?;
+    let (job_id, project_id): (String, String) = db
+        .query_row("SELECT s.job_id,j.project_id FROM chapter_generation_sections s JOIN chapter_generation_jobs j ON j.id=s.job_id WHERE s.id=?1", params![section_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|e| sql_error("Draft-Abschnitt konnte nicht geprüft werden", e))?;
+    let tx = db
+        .unchecked_transaction()
+        .map_err(|e| sql_error("Draft-Ledger konnte nicht gestartet werden", e))?;
+    tx.execute(
+        "DELETE FROM chapter_generation_draft_ledger WHERE section_id=?1",
+        params![section_id],
+    )
+    .map_err(|e| sql_error("Draft-Ledger konnte nicht ersetzt werden", e))?;
+    for input in entries {
+        if input.job_id != job_id
+            || input.project_id != project_id
+            || input.section_id != section_id
+            || input.new_state.trim().is_empty()
+            || !(0.0..=1.0).contains(&input.confidence)
+            || !matches!(
+                input.status.as_deref().unwrap_or("proposed"),
+                "proposed" | "superseded" | "rejected" | "accepted_for_manuscript_review"
+            )
+        {
+            return Err("Ungültiger oder fremder Draft-Ledger-Eintrag.".into());
+        }
+        let entity_valid: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM story_entities WHERE id=?1 AND project_id=?2)",
+                params![input.entity_id, project_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| sql_error("Draft-Entität konnte nicht geprüft werden", e))?;
+        if !entity_valid {
+            return Err("Die Draft-Entität gehört nicht zum Projekt.".into());
+        }
+        if let Some(related) = &input.related_entity_id {
+            let valid: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM story_entities WHERE id=?1 AND project_id=?2)",
+                    params![related, project_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| sql_error("Draft-Bezug konnte nicht geprüft werden", e))?;
+            if !valid {
+                return Err("Die Draft-Bezugsentität gehört nicht zum Projekt.".into());
+            }
+        }
+        if let Some(source) = &input.source_reference_id {
+            let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2)", params![source, project_id], |row| row.get(0)).map_err(|e| sql_error("Draft-Quelle konnte nicht geprüft werden", e))?;
+            if !valid {
+                return Err("Die Draft-Quelle gehört nicht zum Projekt.".into());
+            }
+        }
+        let id = input.id.unwrap_or_else(new_id);
+        let stamp = now();
+        let status = input.status.unwrap_or_else(|| "proposed".into());
+        tx.execute("INSERT INTO chapter_generation_draft_ledger(id,job_id,section_id,project_id,entity_id,related_entity_id,state_kind,previous_state,new_state,source_excerpt,source_start_offset,source_end_offset,content_hash,confidence,status,source_reference_id,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?17)", params![id, job_id, section_id, project_id, input.entity_id, input.related_entity_id, input.state_kind, input.previous_state, input.new_state, input.source_excerpt, input.source_start_offset, input.source_end_offset, input.content_hash, input.confidence, status, input.source_reference_id, stamp]).map_err(|e| sql_error("Draft-Ledger konnte nicht gespeichert werden", e))?;
+    }
+    tx.commit()
+        .map_err(|e| sql_error("Draft-Ledger konnte nicht abgeschlossen werden", e))?;
+    let mut statement = db
+        .prepare(&format!(
+            "{} WHERE section_id=?1 ORDER BY created_at",
+            draft_ledger_select()
+        ))
+        .map_err(|e| sql_error("Draft-Ledger konnte nicht geladen werden", e))?;
+    let result = statement
+        .query_map(params![section_id], draft_ledger_from_row)
+        .map_err(|e| sql_error("Draft-Ledger konnte nicht geladen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Draft-Ledger konnte nicht geladen werden", e));
+    result
+}
+
+#[tauri::command]
+pub fn supersede_chapter_generation_draft_ledger_from(
+    state: State<'_, DbState>,
+    job_id: String,
+    order_index: i64,
+) -> Result<(), String> {
+    let db = lock_db(&state)?;
+    let _ = load_job(&db, &job_id)?;
+    db.execute("UPDATE chapter_generation_draft_ledger SET status='superseded',updated_at=?1 WHERE job_id=?2 AND status='proposed' AND section_id IN (SELECT id FROM chapter_generation_sections WHERE job_id=?2 AND order_index>=?3)", params![now(), job_id, order_index]).map_err(|e| sql_error("Draft-Ledger konnte nicht invalidiert werden", e))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::database::{
         database_path_for_test, has_column, initialize_connection, seed_if_empty,
     };
-    use crate::models::ManuscriptImportChapterInput;
+    use crate::models::{DraftContinuityState, ManuscriptImportChapterInput};
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},
@@ -6213,10 +6464,61 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            18
+            19
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn backend_rejects_stale_longform_section_before_acceptance() {
+        let (path, db) = connection("longform-stale");
+        db.execute("INSERT INTO chapter_generation_jobs(id,project_id,target_book_id,target_words,user_instruction,status,active_provider,content_context_hash) VALUES('job-stale','project-zugestellt','book-1',100,'Schreib','draft_ready','fake','context')", []).unwrap();
+        let beat = ChapterPlanBeat {
+            id: "beat-stale".into(),
+            order_index: 0,
+            title: "Abschnitt".into(),
+            purpose: String::new(),
+            location: None,
+            pov_character_id: None,
+            participating_character_ids: vec![],
+            starting_state: String::new(),
+            event: String::new(),
+            conflict: String::new(),
+            new_information: vec![],
+            knowledge_changes: vec![],
+            relationship_changes: vec![],
+            clues_used: vec![],
+            lore_entity_ids: vec![],
+            ending_hook: String::new(),
+            target_words: 100,
+        };
+        db.execute("INSERT INTO chapter_generation_plans(id,job_id,chapter_title,chapter_goal,chapter_summary,plan_json,review_status) VALUES('plan-stale','job-stale','Kapitel','Ziel','',?1,'accepted')", params![serde_json::to_string(&vec![beat]).unwrap()]).unwrap();
+        let state = DraftContinuityState {
+            current_location: String::new(),
+            current_story_time: String::new(),
+            present_character_ids: vec![],
+            character_states: vec![],
+            established_facts: vec![],
+            knowledge_changes: vec![],
+            relationship_changes: vec![],
+            moved_objects: vec![],
+            injuries: vec![],
+            clues_introduced: vec![],
+            promises_created: vec![],
+            unresolved_actions: vec![],
+            last_paragraph_summary: String::new(),
+        };
+        db.execute("INSERT INTO chapter_generation_sections(id,job_id,plan_beat_id,order_index,target_words,actual_words,content,continuation_summary,continuity_state_json,status,content_hash,draft_context_hash,draft_state) VALUES('section-stale','job-stale','beat-stale',0,100,1,'Text','',?1,'generated',?2,'','stale')", params![serde_json::to_string(&state).unwrap(), canonical_content_hash("Text")]).unwrap();
+        let result = accept_chapter_generation_job_in_db(
+            &db,
+            AcceptChapterGenerationJobInput {
+                job_id: "job-stale".into(),
+                current_context_hash: "context".into(),
+            },
+        );
+        assert!(result.unwrap_err().contains("Plan und alle Abschnitte"));
         let _ = fs::remove_file(path);
     }
 

@@ -1965,6 +1965,9 @@ pub struct ChapterGenerationSection {
     pub continuity_state: DraftContinuityState,
     pub status: String,
     pub provider_id: Option<String>,
+    pub content_hash: String,
+    pub draft_context_hash: String,
+    pub draft_state: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -1981,6 +1984,9 @@ pub struct SaveChapterGenerationSectionInput {
     pub continuity_state: DraftContinuityState,
     pub status: String,
     pub provider_id: Option<String>,
+    pub content_hash: Option<String>,
+    pub draft_context_hash: Option<String>,
+    pub draft_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1989,6 +1995,7 @@ pub struct ChapterGenerationReview {
     pub id: String,
     pub job_id: String,
     pub section_id: Option<String>,
+    pub continuity_run_id: Option<String>,
     pub review_scope: String,
     pub issue_type: String,
     pub severity: String,
@@ -2005,7 +2012,10 @@ pub struct ChapterGenerationReview {
 #[serde(rename_all = "camelCase")]
 pub struct SaveChapterGenerationReviewInput {
     pub job_id: String,
+    #[serde(default)]
     pub section_id: Option<String>,
+    #[serde(default)]
+    pub continuity_run_id: Option<String>,
     pub review_scope: String,
     pub issue_type: String,
     pub severity: String,
@@ -2022,6 +2032,57 @@ pub struct SaveChapterGenerationReviewInput {
 }
 fn default_review_status() -> String {
     "open".into()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcceptChapterGenerationJobInput {
+    pub job_id: String,
+    pub current_context_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterGenerationDraftLedgerEntry {
+    pub id: String,
+    pub job_id: String,
+    pub section_id: String,
+    pub project_id: String,
+    pub entity_id: String,
+    pub related_entity_id: Option<String>,
+    pub state_kind: String,
+    pub previous_state: String,
+    pub new_state: String,
+    pub source_excerpt: String,
+    pub source_start_offset: Option<i64>,
+    pub source_end_offset: Option<i64>,
+    pub content_hash: String,
+    pub confidence: f64,
+    pub status: String,
+    pub source_reference_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveChapterGenerationDraftLedgerInput {
+    pub id: Option<String>,
+    pub job_id: String,
+    pub section_id: String,
+    pub project_id: String,
+    pub entity_id: String,
+    pub related_entity_id: Option<String>,
+    pub state_kind: String,
+    pub previous_state: String,
+    pub new_state: String,
+    pub source_excerpt: String,
+    pub source_start_offset: Option<i64>,
+    pub source_end_offset: Option<i64>,
+    pub content_hash: String,
+    pub confidence: f64,
+    pub status: Option<String>,
+    pub source_reference_id: Option<String>,
 }
 
 pub fn validate_scene_status(value: &str) -> Result<(), String> {

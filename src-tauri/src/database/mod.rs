@@ -493,6 +493,41 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
         ))?;
         connection.execute("INSERT INTO schema_migrations (version) VALUES (18)", [])?;
     }
+    let has_longform_draft_continuity = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 19",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    ensure_column(
+        connection,
+        "chapter_generation_sections",
+        "content_hash",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        connection,
+        "chapter_generation_sections",
+        "draft_context_hash",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        connection,
+        "chapter_generation_sections",
+        "draft_state",
+        "TEXT NOT NULL DEFAULT 'valid'",
+    )?;
+    ensure_column(
+        connection,
+        "chapter_generation_reviews",
+        "continuity_run_id",
+        "TEXT REFERENCES continuity_review_runs(id) ON DELETE SET NULL",
+    )?;
+    connection.execute_batch(include_str!(
+        "../../../migrations/019_longform_draft_continuity_state.sql"
+    ))?;
+    if has_longform_draft_continuity == 0 {
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (19)", [])?;
+    }
     Ok(())
 }
 
@@ -648,7 +683,7 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            18
+            19
         );
         assert_eq!(
             connection
@@ -723,6 +758,7 @@ mod tests {
             "chapter_generation_plans",
             "chapter_generation_sections",
             "chapter_generation_reviews",
+            "chapter_generation_draft_ledger",
         ] {
             assert!(connection
                 .query_row(
@@ -740,6 +776,9 @@ mod tests {
             ("chapter_generation_jobs", "context_override_accepted"),
             ("character_knowledge_states", "effective_from_scene_id"),
             ("character_knowledge_history", "effective_until_scene_id"),
+            ("chapter_generation_sections", "content_hash"),
+            ("chapter_generation_sections", "draft_state"),
+            ("chapter_generation_reviews", "continuity_run_id"),
         ] {
             assert!(has_column(&connection, table, column).unwrap());
         }
@@ -896,7 +935,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                18
+                19
             );
             // Running startup migrations again must not change the assignment
             // or fail on the ALTER TABLE statement.
