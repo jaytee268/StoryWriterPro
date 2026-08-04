@@ -2051,9 +2051,17 @@ mod tests {
                 "sceneId": "synthetic-scene",
                 "project": {"id":"synthetic-project","title":"Synthetischer Test","author":"Test"},
                 "chapter": {"id":"synthetic-chapter","title":"Kapitel 1"},
-                "scene": {"id":"synthetic-scene","title":"Testszene","content":"Synthetischer Test ohne auswertbare Story-Bible-Fakten.","pov":"","location":"","storyTime":"","goal":"","notes":"Synthetischer Test"},
-                "existingEntities": [],
-                "relevantSources": []
+                "scene": {"id":"synthetic-scene","title":"Testszene","content":"😀 Zettel wartet.","pov":"char-1","location":"Zimmer","storyTime":"Abend","goal":"Beobachten","notes":"Synthetischer Test"},
+                "existingEntities": [{"id":"entity-1","type":"object","name":"Zettel"},{"id":"char-1","type":"character","name":"Malik"},{"id":"thread-1","type":"plot_thread","name":"Wer nahm den Zettel?"}],
+                "characters": [{"id":"char-1","name":"Malik"}],
+                "relevantSources": [{"id":"source-1","chapterId":"synthetic-chapter","sceneId":"synthetic-scene","excerpt":"😀 Zettel","startOffset":0,"endOffset":8}],
+                "projectContext": {"relevantEntities":[{"id":"entity-1"}],"relevantSources":[{"id":"source-1"}]},
+                "passage": {"text":"😀 Zettel","chapterId":"synthetic-chapter","sceneId":"synthetic-scene","passageStartOffset":0,"passageEndOffset":8,"coordinateSystem":"unicode_codepoints"},
+                "confirmedStoryBible": [{"id":"entity-1"},{"id":"char-1"},{"id":"thread-1"}],
+                "confirmedRules": [{"id":"rule-1"}],
+                "confirmedLore": [{"entityId":"entity-1"}],
+                "continuityStatesBeforePosition": [{"id":"state-1"}],
+                "draftLedger": [{"id":"draft-state-1"}]
             }),
             timeout_seconds: 90,
         }
@@ -2286,31 +2294,34 @@ mod tests {
 
     fn synthetic_task_result(kind: CodexTaskKind) -> Value {
         match kind {
-            CodexTaskKind::ExtractBiblePatch | CodexTaskKind::ExtractCharacterMemoryPatch => {
-                json!({"proposals":[],"warnings":[]})
+            CodexTaskKind::ExtractBiblePatch => {
+                json!({"proposals":[{"targetEntityId":"entity-1","proposalAction":"update_entity","entityType":"object","candidateName":"Zettel","candidateDescription":"Ein beschrifteter Zettel.","candidateStatus":"proposed","confidence":0.91,"classification":"observable_fact","evidenceExcerpt":"😀 Zettel","startOffset":0,"endOffset":8,"reason":"Die Passage benennt den Gegenstand."}],"warnings":[]})
+            }
+            CodexTaskKind::ExtractCharacterMemoryPatch => {
+                json!({"proposals":[{"proposalKind":"knowledge_change","subjectCharacterId":"char-1","relatedCharacterId":null,"targetEntityId":"entity-1","payload":{"factEntityId":"entity-1","knowledgeState":"suspects","certainty":0.62,"notes":"Malik vermutet etwas über den Zettel."},"classification":"interpretation","confidence":0.72,"evidenceExcerpt":"😀 Zettel","startOffset":0,"endOffset":8,"reason":"Der Kontext legt eine Vermutung nahe."}],"warnings":[]})
             }
             CodexTaskKind::AnswerWithProjectContext => {
-                json!({"answer":"ok","usedEntityIds":[],"usedSourceIds":[],"uncertainty":"low","warnings":[]})
+                json!({"answer":"Der Zettel ist die relevante Entität.","usedEntityIds":["entity-1"],"usedSourceIds":["source-1"],"uncertainty":"medium","warnings":[]})
             }
             CodexTaskKind::AnalyzeProjectStyle => {
-                json!({"observations":[],"overallSummary":"ok","warnings":[]})
+                json!({"observations":[{"observationType":"sentence_length","observationText":"Kurze, klare Sätze.","recommendation":"Beibehalten.","confidence":0.8,"evidence":["😀 Zettel wartet."]}],"overallSummary":"Knapp und beobachtend.","warnings":[]})
             }
             CodexTaskKind::SummarizeScene
             | CodexTaskKind::SummarizeChapter
             | CodexTaskKind::SummarizeBook => {
-                json!({"summary":"ok","importantEvents":[],"openThreads":[],"characterChanges":[],"knowledgeChanges":[],"relationshipEffects":[],"warnings":[]})
+                json!({"summary":"Malik beobachtet den Zettel.","importantEvents":["Der Zettel wird eingeführt."],"openThreads":["Wer nahm den Zettel?"],"characterChanges":["Malik bleibt aufmerksam."],"knowledgeChanges":["Malik vermutet einen Zusammenhang."],"relationshipEffects":[],"warnings":[]})
             }
             CodexTaskKind::PlanChapterDraft => {
-                json!({"chapterTitle":"Kapitel","chapterGoal":"Ziel","povCharacterId":null,"startingState":"start","endingState":"end","chapterSummary":"summary","endingConnection":"hook","newInformation":[],"withheldInformation":[],"assumptions":[],"beats":[],"warnings":[]})
+                json!({"chapterTitle":"Kapitel","chapterGoal":"Den Zettel einordnen.","povCharacterId":"char-1","startingState":"Der Zettel liegt bereit.","endingState":"Malik fasst eine Spur.","chapterSummary":"Malik untersucht einen Zettel.","endingConnection":"Eine neue Spur öffnet sich.","newInformation":["Der Zettel ist wichtig."],"withheldInformation":["Wer ihn hinterließ."],"assumptions":[{"type":"continuity","text":"Der Zettel bleibt erhalten."}],"beats":[{"id":"beat-1","orderIndex":0,"title":"Beobachtung","purpose":"Spur einführen.","participatingCharacterIds":["char-1"],"startingState":"Ruhe","event":"Malik findet den Zettel.","conflict":"Er versteht ihn nicht.","newInformation":["Eine Spur erscheint."],"knowledgeChanges":[{"characterId":"char-1","factEntityId":"entity-1","nextState":"suspects","reason":"Der Text ist auffällig."}],"relationshipChanges":[],"cluesUsed":["entity-1"],"loreEntityIds":["entity-1"],"endingHook":"Eine Frage bleibt.","targetWords":120}],"warnings":[]})
             }
             CodexTaskKind::DraftChapterSection => {
-                json!({"content":"Text","continuationSummary":"weiter","continuityState":{},"usedEntityIds":[],"usedMemoryIds":[],"usedSourceIds":[],"warnings":[]})
+                json!({"content":"Malik hob den Zettel auf.","continuationSummary":"Der Zettel bleibt bei Malik.","continuityState":{"currentLocation":"Zimmer","currentStoryTime":"Abend","presentCharacterIds":["char-1"],"characterStates":[{"characterId":"char-1","state":"aufmerksam","change":"beobachtet"}],"establishedFacts":["Der Zettel existiert."],"knowledgeChanges":[{"characterId":"char-1","factEntityId":"entity-1","nextState":"suspects","reason":"Er liest die Notiz."}],"relationshipChanges":[],"movedObjects":[{"objectId":"entity-1","location":"Maliks Hand","state":"gehalten"}],"injuries":[],"cluesIntroduced":["entity-1"],"promisesCreated":[],"unresolvedActions":["Herkunft des Zettels klären"],"lastParagraphSummary":"Malik hält den Zettel."},"usedEntityIds":["entity-1","char-1"],"usedMemoryIds":[],"usedSourceIds":["source-1"],"warnings":[]})
             }
             CodexTaskKind::ReviewChapterSection | CodexTaskKind::ReviewCompleteChapter => {
-                json!({"issues":[],"warnings":[]})
+                json!({"issues":[{"reviewScope":"section","issueType":"continuity","severity":"warning","title":"Herkunft offen","description":"Die Herkunft des Zettels ist noch offen.","relatedEntityIds":["entity-1"],"relatedSourceIds":["source-1"],"suggestedAction":"Als offene Frage prüfen.","status":"open"}],"warnings":[]})
             }
             CodexTaskKind::AnalyzeContinuityPassage => {
-                json!({"observedActions":[],"proposedStateChanges":[],"objectiveContradictions":[],"missingExplanations":[],"matchedLoreRules":[],"newRuleProposals":[],"plotThreadChanges":[],"confidence":0.0,"evidence":[],"warnings":[]})
+                json!({"observedActions":[{"summary":"Malik sieht den Zettel.","evidenceExcerpt":"😀 Zettel","entityIds":["entity-1","char-1"],"startOffset":0,"endOffset":8}],"proposedStateChanges":[{"entityId":"entity-1","relatedEntityId":null,"stateKind":"item_availability","previousState":"unbekannt","newState":"bei Malik","confidence":0.86,"evidenceExcerpt":"😀 Zettel","sourceReferenceId":"source-1","startOffset":0,"endOffset":8,"reason":"Die Passage etabliert den Gegenstand."}],"objectiveContradictions":[{"findingType":"probable_contradiction","subjectEntityId":"entity-1","relatedEntityIds":[],"relatedStateIds":["state-1"],"objectiveConflict":"Der Status muss geprüft werden.","evidenceExcerpt":"😀 Zettel","sourceReferenceId":"source-1","counterEvidenceExcerpts":["Früherer Zustand"],"counterEvidence":[{"sourceReferenceId":null,"excerpt":"Früherer Zustand","chapterId":null,"sceneId":null,"startOffset":null,"endOffset":null}],"confidence":0.55,"startOffset":0,"endOffset":8,"reason":"Zwei Zustände treffen aufeinander."}],"missingExplanations":[],"matchedLoreRules":[{"ruleId":"rule-1","rationale":"Die Regel könnte die Abweichung erklären.","confidence":0.63}],"newRuleProposals":[{"projectId":"synthetic-project","targetRuleId":null,"title":"Beweise können sich ändern","statement":"Ein physischer Beweis kann unter Bedingungen verändert werden.","scope":"project","prerequisites":["Spezielle Bedingung"],"effects":["Der Beweisstatus ändert sich."],"exceptions":["Keine automatische Kanonänderung"],"connectedLoreIds":["entity-1"],"sourceReferenceIds":["source-1"],"evidenceExcerpt":"😀 Zettel","chapterId":"synthetic-chapter","sceneId":"synthetic-scene","startOffset":0,"endOffset":8,"confidence":0.44,"reason":"Eine neue Regel könnte die Beobachtung erklären."}],"plotThreadChanges":[{"entityId":"thread-1","proposedStatus":"closure_candidate","evidenceExcerpt":"😀 Zettel","sourceReferenceId":"source-1","startOffset":0,"endOffset":8,"reason":"Die Spur bewegt sich weiter.","confidence":0.61}],"confidence":0.71,"evidence":[{"id":"evidence-1","label":"Passage","chapterId":"synthetic-chapter","sceneId":"synthetic-scene","entityId":"entity-1","excerpt":"😀 Zettel","sourceReferenceId":"source-1","startOffset":0,"endOffset":8}],"warnings":[]})
             }
         }
     }
@@ -2338,6 +2349,24 @@ mod tests {
                 extract_final_json(stdout.as_bytes(), &kind).expect("task result");
             assert!(completed);
             assert!(result_matches_task(&parsed, &kind));
+            let input = synthetic_input(&format!("fixture-{:?}", kind));
+            match kind {
+                CodexTaskKind::ExtractBiblePatch => {
+                    validate_bible_result(&parsed, &input.request_json).expect("Bible fixture")
+                }
+                CodexTaskKind::ExtractCharacterMemoryPatch => {
+                    validate_character_memory_result(&parsed, &input.request_json)
+                        .expect("memory fixture")
+                }
+                CodexTaskKind::AnswerWithProjectContext => {
+                    validate_chat_result(&parsed, &input.request_json).expect("chat fixture")
+                }
+                CodexTaskKind::AnalyzeContinuityPassage => {
+                    validate_continuity_result(&parsed, &input.request_json)
+                        .expect("continuity fixture")
+                }
+                _ => validate_longform_result_for_task(&parsed, &kind).expect("longform fixture"),
+            };
         }
     }
 
@@ -2354,33 +2383,79 @@ mod tests {
 
     #[test]
     fn live_codex_e2e_is_opt_in_and_uses_only_synthetic_scene() {
-        if env::var("STORYMEMORY_RUN_CODEX_E2E").ok().as_deref() != Some("1") {
+        if env::var("STORYMEMORY_RUN_CODEX_CONTINUITY_E2E")
+            .ok()
+            .as_deref()
+            != Some("1")
+        {
+            eprintln!("SKIP live continuity Codex E2E: STORYMEMORY_RUN_CODEX_CONTINUITY_E2E != 1");
             return;
         }
-        let input = synthetic_input(&format!("live-e2e-{}", std::process::id()));
-        let codex_binary_path = [
-            "/Users/juliantows/.local/bin/codex",
-            "/Applications/ChatGPT.app/Contents/Resources/codex",
-        ]
-        .into_iter()
-        .find(|path| Path::new(path).is_file())
-        .map(str::to_owned);
+        let capabilities = codex_status(None);
+        if !capabilities.installed
+            || !capabilities.compatible
+            || capabilities.authentication != CodexAuthenticationState::Authenticated
+        {
+            eprintln!("SKIP live continuity Codex E2E: {}", capabilities.detail);
+            return;
+        }
+        let mut input = synthetic_input(&format!("live-continuity-{}", std::process::id()));
+        input.task_kind = CodexTaskKind::AnalyzeContinuityPassage;
         let result = run_task(
             Arc::new(CodexRuntimeState::default()),
             input,
             AiProviderSettings {
                 active_provider: "codex-cli".into(),
-                codex_binary_path,
+                codex_binary_path: capabilities.binary_path.clone(),
                 codex_privacy_acknowledged_at: Some("2026-08-03T00:00:00Z".into()),
                 ..AiProviderSettings::default()
             },
         )
-        .expect("synthetic Codex task should complete");
+        .expect("synthetic Codex continuity task should complete");
         assert_eq!(result.status, "completed");
         assert!(result.turn_completed);
-        assert!(result.result.get("proposals").is_some());
+        assert!(result.result.get("objectiveContradictions").is_some());
         assert!(!env::temp_dir()
-            .join(format!("storymemory-codex-live-e2e-{}", std::process::id()))
+            .join(format!(
+                "storymemory-codex-live-continuity-{}",
+                std::process::id()
+            ))
             .exists());
+    }
+
+    #[test]
+    fn live_longform_e2e_is_opt_in_and_uses_only_synthetic_plan() {
+        if env::var("STORYMEMORY_RUN_CODEX_LONGFORM_E2E")
+            .ok()
+            .as_deref()
+            != Some("1")
+        {
+            eprintln!("SKIP live longform Codex E2E: STORYMEMORY_RUN_CODEX_LONGFORM_E2E != 1");
+            return;
+        }
+        let capabilities = codex_status(None);
+        if !capabilities.installed
+            || !capabilities.compatible
+            || capabilities.authentication != CodexAuthenticationState::Authenticated
+        {
+            eprintln!("SKIP live longform Codex E2E: {}", capabilities.detail);
+            return;
+        }
+        let settings = AiProviderSettings {
+            active_provider: "codex-cli".into(),
+            codex_binary_path: capabilities.binary_path.clone(),
+            codex_privacy_acknowledged_at: Some("2026-08-03T00:00:00Z".into()),
+            ..AiProviderSettings::default()
+        };
+        let state = Arc::new(CodexRuntimeState::default());
+        let mut plan_input = synthetic_input(&format!("live-longform-plan-{}", std::process::id()));
+        plan_input.task_kind = CodexTaskKind::PlanChapterDraft;
+        let plan = run_task(state.clone(), plan_input, settings.clone()).expect("synthetic plan");
+        assert_eq!(plan.status, "completed");
+        let mut draft_input =
+            synthetic_input(&format!("live-longform-draft-{}", std::process::id()));
+        draft_input.task_kind = CodexTaskKind::DraftChapterSection;
+        let draft = run_task(state, draft_input, settings).expect("synthetic draft");
+        assert_eq!(draft.status, "completed");
     }
 }
