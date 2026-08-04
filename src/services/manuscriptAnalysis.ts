@@ -1,4 +1,4 @@
-import type { Chapter, ContinuityStateLedgerEntry, CreateManuscriptAnalysisJobInput, ManuscriptAnalysisDraftLedgerEntry, ManuscriptAnalysisJob, ManuscriptAnalysisPhase, ManuscriptAnalysisPhaseProgress, ManuscriptAnalysisUnit, ManuscriptSynthesisResult, NarrativeSummaryAnalysisResult } from '../types/domain';
+import type { Chapter, ContinuityStateLedgerEntry, CreateManuscriptAnalysisJobInput, ManuscriptAnalysisDraftLedgerEntry, ManuscriptAnalysisJob, ManuscriptAnalysisPhase, ManuscriptAnalysisPhaseProgress, ManuscriptAnalysisUnit, ManuscriptSynthesisResult, NarrativeSummaryAnalysisResult, ManuscriptPhaseInput, PlotThreadSynthesisResult, BookEndStateResult, GlobalCountercheckResult } from '../types/domain';
 import type { StoryRepository } from './storyRepository';
 import { contentHash } from '../utils/aiText';
 import { editorContentToPlainText } from '../utils/editorContent';
@@ -58,9 +58,21 @@ export class ManuscriptAnalysisController {
     if (!this.runPromise) await this.repository.updateManuscriptAnalysisJob({ id: this.jobId, status: 'cancelled', errorMessage: 'Analyse wurde abgebrochen.' });
   }
 
+  async completeUserReview(explicitlySkipOpen = false): Promise<void> {
+    const job = await this.repository.getManuscriptAnalysisJob(this.jobId);
+    if (job.status !== 'awaiting_user_review' || job.currentPhase !== 'user_review') throw new Error('Der Importjob wartet derzeit nicht auf ein Nutzerreview.');
+    const [draft, findings] = await Promise.all([this.repository.listManuscriptAnalysisDraftLedger(this.jobId), this.repository.listContinuityReviewFindings(job.projectId)]);
+    const open = draft.filter((entry) => entry.status === 'proposed' || entry.status === 'uncertain').length + findings.filter((finding) => finding.reviewStatus === 'open').length;
+    if (open > 0 && !explicitlySkipOpen) throw new Error('Offene Importvorschläge müssen entschieden oder ausdrücklich übersprungen werden.');
+    const progress = { ...job.phaseProgress, user_review: { ...(job.phaseProgress.user_review ?? this.emptyProgress('user_review', open, job.providerId)), status: 'completed' as const, totalUnits: open, completedUnits: open, errorMessage: open > 0 ? 'Offene Vorschläge wurden vom Nutzer ausdrücklich übersprungen.' : undefined, updatedAt: new Date().toISOString() } };
+    await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'completed', currentPhase: 'completed', phaseProgress: progress, errorMessage: undefined, completedAt: new Date().toISOString() });
+  }
+
   async retryFailed(): Promise<void> {
     const job = await this.repository.getManuscriptAnalysisJob(this.jobId);
     const units = await this.repository.listManuscriptAnalysisUnits(this.jobId);
+    const retryStart = Math.min(...units.filter((item) => item.status === 'failed').map((item) => item.orderIndex), Number.MAX_SAFE_INTEGER);
+    if (retryStart !== Number.MAX_SAFE_INTEGER) await this.invalidateFrom(units, retryStart);
     for (const unit of units.filter((item) => item.status === 'failed')) {
       await this.repository.updateManuscriptAnalysisUnit({ id: unit.id, status: 'pending', retryCount: unit.retryCount + 1, errorMessage: undefined, errorCode: undefined, continuityRunId: undefined });
     }
@@ -84,6 +96,28 @@ export class ManuscriptAnalysisController {
     return true;
   }
 
+  private async invalidateFrom(units: ManuscriptAnalysisUnit[], orderIndex: number): Promise<void> {
+    const later = units.filter((unit) => unit.orderIndex >= orderIndex);
+    for (const unit of later) {
+      await this.repository.updateManuscriptAnalysisUnit({ id: unit.id, status: 'stale', continuityRunId: undefined, errorMessage: 'Durch eine frühere Textänderung veraltet.', errorCode: 'STALE_CONTEXT' });
+    }
+    const entries = await this.repository.listManuscriptAnalysisDraftLedger(this.jobId);
+    const orderByUnit = new Map(units.map((unit) => [unit.id, unit.orderIndex]));
+    for (const entry of entries) if ((orderByUnit.get(entry.unitId) ?? -1) >= orderIndex && entry.status !== 'superseded') await this.repository.reviewManuscriptAnalysisDraftLedger(entry.id, 'superseded');
+  }
+
+  private async verifyPreviousHashes(units: ManuscriptAnalysisUnit[], workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>): Promise<void> {
+    for (const [index, unit] of units.entries()) {
+      if (unit.status !== 'completed' && unit.status !== 'skipped') continue;
+      const chapter = workspace.chapters.find((item) => item.id === unit.chapterId);
+      const scene = chapter?.scenes.find((item) => item.id === unit.sceneId);
+      if (!scene) continue;
+      const current = Array.from(editorContentToPlainText(scene.content)).slice(unit.startOffset, unit.endOffset).join('');
+      if (contentHash(current) !== unit.contentHash) { await this.invalidateFrom(units, unit.orderIndex); return; }
+      if (index === units.length - 1) return;
+    }
+  }
+
   private async execute(): Promise<void> {
     let job = await this.repository.getManuscriptAnalysisJob(this.jobId);
     if (job.status === 'cancelled' || (job.status === 'completed' && job.currentPhase === 'completed')) return;
@@ -92,6 +126,8 @@ export class ManuscriptAnalysisController {
     const workspace = await this.repository.loadWorkspace();
     const units = (await this.repository.listManuscriptAnalysisUnits(this.jobId)).sort((a, b) => a.orderIndex - b.orderIndex);
     const chapters = [...workspace.chapters].sort((a, b) => a.orderIndex - b.orderIndex);
+    if (job.status === 'awaiting_user_review') return;
+    await this.verifyPreviousHashes(units, workspace);
     job = await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'running', currentPhase: job.currentPhase, errorMessage: undefined });
 
     for (const phase of PHASES) {
@@ -104,12 +140,13 @@ export class ManuscriptAnalysisController {
         else if (phase === 'bible_extraction') await this.runBible(job, workspace, units, active.provider, active.settings.bibleUpdateTimeoutSeconds);
         else if (phase === 'character_memory') await this.runCharacterMemory(job, workspace, units, active.provider, active.settings.bibleUpdateTimeoutSeconds);
         else if (phase === 'scene_or_chapter_synthesis') await this.runChapterSynthesis(job, workspace, chapters, active.provider, active.settings.bibleUpdateTimeoutSeconds);
-        else if (phase === 'narrative_summaries') await this.runBookSynthesis(job, workspace, active.provider, active.settings.bibleUpdateTimeoutSeconds, 'narrative_summaries');
-        else if (phase === 'plot_thread_synthesis') await this.runBookSynthesis(job, workspace, active.provider, active.settings.bibleUpdateTimeoutSeconds, 'plot_thread_synthesis');
-        else if (phase === 'book_end_state') await this.runBookSynthesis(job, workspace, active.provider, active.settings.bibleUpdateTimeoutSeconds, 'book_end_state');
-        else if (phase === 'global_countercheck') await this.runBookSynthesis(job, workspace, active.provider, active.settings.bibleUpdateTimeoutSeconds, 'global_countercheck');
+        else if (phase === 'narrative_summaries') await this.runNarrativeSummaries(job, workspace, active.provider, active.settings.bibleUpdateTimeoutSeconds);
+        else if (phase === 'plot_thread_synthesis') await this.runPlotThreadSynthesis(job, workspace, active.provider, active.settings.bibleUpdateTimeoutSeconds);
+        else if (phase === 'book_end_state') await this.runBookEndState(job, workspace, active.provider, active.settings.bibleUpdateTimeoutSeconds);
+        else if (phase === 'global_countercheck') await this.runGlobalCountercheck(job, workspace, active.provider, active.settings.bibleUpdateTimeoutSeconds);
         job = await this.repository.getManuscriptAnalysisJob(this.jobId);
         job = await this.savePhase(job, phase, { status: 'completed', failedUnits: 0, actualProvider: active.provider.id }, 'running');
+        if (phase === 'global_countercheck') { await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'awaiting_user_review', currentPhase: 'user_review', errorMessage: 'AI-Phasen abgeschlossen. Nutzerreview erforderlich; offene Vorschläge müssen ausdrücklich übersprungen oder entschieden werden.' }); return; }
         if (phase !== 'user_review') job = await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'running', currentPhase: PHASES[phaseIndex(phase) + 1] ?? 'completed', errorMessage: undefined });
       } catch (error) {
         if (this.cancelled || this.paused) { await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: this.cancelled ? 'cancelled' : 'paused', currentUnitId: undefined, errorMessage: this.cancelled ? 'Analyse wurde abgebrochen.' : undefined }); return; }
@@ -152,10 +189,11 @@ export class ManuscriptAnalysisController {
       await this.repository.updateManuscriptAnalysisUnit({ id: unit.id, status: 'running', requestedProvider: provider.id, actualProvider: undefined, promptVersion: PROMPT_VERSION, inputHash: currentHash, errorMessage: undefined, errorCode: undefined, content: currentContent, contentHash: currentHash });
       try {
         const allDraftEntries = await this.repository.listManuscriptAnalysisDraftLedger(this.jobId);
-        const draftLedger = allDraftEntries.filter((entry) => entry.unitId !== unit.id).map(draftEntryToLedger);
+        const orderByUnit = new Map(units.map((candidate) => [candidate.id, candidate.orderIndex]));
+        const draftLedger = allDraftEntries.filter((entry) => (orderByUnit.get(entry.unitId) ?? Number.MAX_SAFE_INTEGER) < unit.orderIndex && entry.status !== 'superseded').map(draftEntryToLedger);
         const previous = units[index - 1]; const following = units[index + 1];
         const result = await runContinuityReview(this.repository, { project: workspace.project, chapter, scene, currentText: currentContent, previousText: previous?.content, followingText: following?.content, sourceKind: unit.pageNumber === undefined ? 'word_threshold' : 'page_marker', startOffset: unit.startOffset, endOffset: unit.endOffset, draftLedger, provider, persistStateProposals: false, isCancelled: () => this.cancelled, forceAnalysis: true });
-        const draftEntries = result.draftStateChanges.map((change) => ({ jobId: this.jobId, unitId: unit.id, projectId: workspace.project.id, entityId: change.entityId, relatedEntityId: change.relatedEntityId, stateKind: change.stateKind, previousState: change.previousState, newState: change.newState, chapterId: unit.chapterId, sceneId: unit.sceneId, startOffset: change.startOffset ?? unit.startOffset, endOffset: change.endOffset ?? unit.endOffset, sourceExcerpt: change.evidenceExcerpt, confidence: change.confidence, status: 'proposed' as const }));
+        const draftEntries = await Promise.all(result.draftStateChanges.map(async (change) => ({ jobId: this.jobId, unitId: unit.id, projectId: workspace.project.id, entityId: change.entityId, relatedEntityId: change.relatedEntityId, stateKind: change.stateKind, previousState: change.previousState, newState: change.newState, chapterId: unit.chapterId, sceneId: unit.sceneId, startOffset: change.startOffset ?? unit.startOffset, endOffset: change.endOffset ?? unit.endOffset, sourceExcerpt: change.evidenceExcerpt, sourceReferenceId: change.sourceReferenceId ?? (await this.repository.createSourceReference({ projectId: workspace.project.id, entityId: change.entityId, chapterId: unit.chapterId, sceneId: unit.sceneId, excerpt: change.evidenceExcerpt, startOffset: change.startOffset ?? unit.startOffset, endOffset: change.endOffset ?? unit.endOffset })).id, confidence: change.confidence, status: 'proposed' as const })));
         await this.repository.replaceManuscriptAnalysisDraftLedger(unit.id, draftEntries);
         await this.repository.updateManuscriptAnalysisUnit({ id: unit.id, status: 'completed', continuityRunId: result.runId, actualProvider: provider.id, outputHash: contentHash(JSON.stringify(result)), inputHash: currentHash, content: currentContent, contentHash: currentHash, errorMessage: undefined, errorCode: undefined });
         progress.completedUnits += 1; progress.lastSuccessfulUnitId = unit.id; progress.updatedAt = new Date().toISOString();
@@ -190,9 +228,40 @@ export class ManuscriptAnalysisController {
     for (let index = start; index < chapters.length; index += 1) { if (!await this.checkControl(job)) return; const chapter = chapters[index]; const text = chapterText(chapter); const result = await provider.summarize('chapter', chapter.id, `Führe eine strukturierte Kapitel-Synthese durch. Bewerte wichtige Ereignisse, Wissen, Beziehungen, offene Threads und Endzustände.\n\n${text}`, timeout); await this.repository.saveNarrativeSummary(synthesisToSummary(result, workspace.project.id, 'chapter', chapter.id, text)); progress.completedUnits += 1; progress.lastSuccessfulUnitId = chapter.id; progress.actualProvider = provider.id; progress.updatedAt = new Date().toISOString(); await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'running', currentPhase: 'scene_or_chapter_synthesis', phaseProgress: { ...(await this.repository.getManuscriptAnalysisJob(job.id)).phaseProgress, scene_or_chapter_synthesis: progress } }); }
   }
 
-  private async runBookSynthesis(job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, provider: Provider, timeout: number, phase: ManuscriptAnalysisPhase): Promise<void> {
-    const chapters = [...workspace.chapters].sort((a, b) => a.orderIndex - b.orderIndex); const text = chapters.map(chapterText).join('\n\n'); const result = await provider.summarize('book', job.bookId, `Analyse diese Buchphase: ${phase}. Keine Kanonänderung vornehmen; alle Ergebnisse bleiben proposed.\n\n${text}`, timeout); const summary = synthesisToSummary(result, workspace.project.id, 'book', job.bookId, `${phase}\n${text}`); await this.repository.saveNarrativeSummary(summary); const progress = job.phaseProgress[phase] ?? this.emptyProgress(phase, 1, provider.id); progress.completedUnits = 1; progress.totalUnits = 1; progress.lastSuccessfulUnitId = job.bookId; progress.actualProvider = provider.id; progress.updatedAt = new Date().toISOString(); await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'running', currentPhase: phase, phaseProgress: { ...(await this.repository.getManuscriptAnalysisJob(job.id)).phaseProgress, [phase]: progress } });
+  private async phaseInput(job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>): Promise<ManuscriptPhaseInput> {
+    const chapters = [...workspace.chapters].sort((a, b) => a.orderIndex - b.orderIndex);
+    const [chapterSummaries, findings, threads, rules, ledger] = await Promise.all([this.repository.listNarrativeSummaries(workspace.project.id, 'chapter'), this.repository.listContinuityReviewFindings(workspace.project.id), this.repository.listPlotThreadLifecycleProposals(workspace.project.id), this.repository.listProjectRules(workspace.project.id), this.repository.listContinuityStateLedger(workspace.project.id)]);
+    return { projectId: workspace.project.id, bookId: job.bookId, chapters: chapters.map((chapter) => ({ id: chapter.id, title: chapter.title, orderIndex: chapter.orderIndex, text: chapterText(chapter) })), chapterSummaries, confirmedEntities: workspace.entities.filter((entity) => entity.status === 'confirmed' && entity.authorConfirmed), confirmedRules: rules.filter((rule) => rule.status === 'confirmed' && rule.authorConfirmed), confirmedStates: ledger.filter((entry) => entry.status === 'confirmed' && entry.authorConfirmed), proposedFindings: findings.filter((finding) => finding.reviewStatus === 'open'), proposedThreads: threads.filter((thread) => thread.reviewStatus === 'pending'), contentHash: contentHash(chapters.map(chapterText).join('\n\n')) };
   }
+
+  private async saveBookPhase(job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, phase: ManuscriptAnalysisPhase, summary: { summary: string; importantEvents: string[]; openThreads: string[]; characterChanges: string[] }, provider: Provider): Promise<void> {
+    const inputHash = contentHash(`${phase}:${(await this.phaseInput(job, workspace)).contentHash}`);
+    await this.repository.saveNarrativeSummary({ projectId: workspace.project.id, scopeType: 'book', scopeId: job.bookId, contentHash: inputHash, summary: summary.summary || `${phase} ohne zusätzliche Zusammenfassung.`, importantEvents: summary.importantEvents, openThreads: summary.openThreads, characterChanges: summary.characterChanges, status: 'proposed', authorConfirmed: false });
+    const progress = job.phaseProgress[phase] ?? this.emptyProgress(phase, 1, provider.id);
+    progress.completedUnits = 1; progress.totalUnits = 1; progress.lastSuccessfulUnitId = job.bookId; progress.actualProvider = provider.id; progress.inputHash = inputHash; progress.updatedAt = new Date().toISOString();
+    await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'running', currentPhase: phase, phaseProgress: { ...(await this.repository.getManuscriptAnalysisJob(job.id)).phaseProgress, [phase]: progress } });
+  }
+
+  private async runNarrativeSummaries(job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, provider: Provider, timeout: number): Promise<void> {
+    const input = await this.phaseInput(job, workspace); const result = typeof provider.analyzeNarrativeSummaries === 'function' ? await provider.analyzeNarrativeSummaries(input, timeout) : await provider.summarize('book', job.bookId, input.chapters.map((chapter) => chapter.text).join('\n\n'), timeout);
+    await this.saveBookPhase(job, workspace, 'narrative_summaries', result, provider);
+  }
+
+  private async runPlotThreadSynthesis(job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, provider: Provider, timeout: number): Promise<void> {
+    const input = await this.phaseInput(job, workspace); const result: PlotThreadSynthesisResult = typeof provider.synthesizePlotThreads === 'function' ? await provider.synthesizePlotThreads(input, timeout) : { summary: '', openQuestions: [], threadGoals: [], developments: [], closureCandidates: [], partiallyResolved: [], reopened: [], warnings: ['Provider unterstützt diese dedizierte Phase nicht.'] };
+    await this.saveBookPhase(job, workspace, 'plot_thread_synthesis', { summary: result.summary, importantEvents: result.developments, openThreads: [...result.openQuestions, ...result.closureCandidates, ...result.partiallyResolved, ...result.reopened], characterChanges: result.threadGoals }, provider);
+  }
+
+  private async runBookEndState(job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, provider: Provider, timeout: number): Promise<void> {
+    const input = await this.phaseInput(job, workspace); const result: BookEndStateResult = typeof provider.analyzeBookEndState === 'function' ? await provider.analyzeBookEndState(input, timeout) : { summary: '', characterEndStates: [], knowledgeStates: [], falseBeliefs: [], relationships: [], objectOwners: [], injuries: [], locations: [], openActions: [], unresolvedThreads: [], warnings: ['Provider unterstützt diese dedizierte Phase nicht.'] };
+    await this.saveBookPhase(job, workspace, 'book_end_state', { summary: result.summary, importantEvents: result.objectOwners, openThreads: [...result.openActions, ...result.unresolvedThreads], characterChanges: [...result.characterEndStates, ...result.knowledgeStates, ...result.falseBeliefs, ...result.relationships, ...result.injuries, ...result.locations] }, provider);
+  }
+
+  private async runGlobalCountercheck(job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, provider: Provider, timeout: number): Promise<void> {
+    const input = await this.phaseInput(job, workspace); const result: GlobalCountercheckResult = typeof provider.globalCountercheck === 'function' ? await provider.globalCountercheck(input, timeout) : { summary: '', contradictoryFacts: [], prematureKnowledge: [], lostOrDestroyedObjects: [], timeAndLocationConflicts: [], contradictoryRules: [], unclearExceptions: [], uncertainSources: [], warnings: ['Provider unterstützt diese dedizierte Phase nicht.'] };
+    await this.saveBookPhase(job, workspace, 'global_countercheck', { summary: result.summary, importantEvents: result.contradictoryFacts, openThreads: [...result.prematureKnowledge, ...result.lostOrDestroyedObjects, ...result.timeAndLocationConflicts], characterChanges: [...result.contradictoryRules, ...result.unclearExceptions, ...result.uncertainSources] }, provider);
+  }
+
 }
 
 export function createManuscriptAnalysisUnits(chapters: Chapter[], unitsByChapter: Array<Array<{ text: string; startOffset: number; endOffset: number; page?: number }>>, scenes: Array<{ id: string; chapterId: string }>): CreateManuscriptAnalysisJobInput['units'] {

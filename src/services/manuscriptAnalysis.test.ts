@@ -23,8 +23,9 @@ async function makeJob(repository: BrowserDemoRepository, importReference: strin
   const entity = await repository.createStoryEntity({ projectId: workspace.project.id, name: 'Zettel', type: 'object', description: '', status: 'confirmed', confidence: 1, chapterId: chapter.id, sceneId: scene.id, excerpt: 'Zettel', authorConfirmed: true, tags: [] });
   const first = 'Zettel wird fortgetragen.';
   const second = 'Malik wartet.';
+  const source = await repository.createSourceReference({ projectId: workspace.project.id, entityId: entity.id, chapterId: chapter.id, sceneId: scene.id, excerpt: first, startOffset: 0, endOffset: Array.from(first).length });
   const job = await repository.createManuscriptAnalysisJob({ projectId: workspace.project.id, bookId: workspace.books[0]!.id, importReference, providerId: 'codex-cli', pageMarkers: [{ chapterId: chapter.id, pageNumber: 1, label: 'Seite 1', sourceOffset: 0, textOffset: 0 }], units: [{ id: `${importReference}-1`, chapterId: chapter.id, sceneId: scene.id, orderIndex: 0, pageNumber: 1, startOffset: 0, endOffset: Array.from(first).length, content: first, contentHash: contentHash(first) }, { id: `${importReference}-2`, chapterId: chapter.id, sceneId: scene.id, orderIndex: 1, pageNumber: 9, startOffset: Array.from(first).length + 2, endOffset: Array.from(text).length, content: second, contentHash: contentHash(second) }] });
-  return { workspace: await repository.loadWorkspace(), job, entity };
+  return { workspace: await repository.loadWorkspace(), job, entity, source };
 }
 
 describe('sequenzielle, fortsetzbare Manuskript-Continuity', () => {
@@ -32,7 +33,7 @@ describe('sequenzielle, fortsetzbare Manuskript-Continuity', () => {
 
   it('verarbeitet Einheiten strikt nacheinander und reicht den Draft-Ledger weiter', async () => {
     const repository = new BrowserDemoRepository();
-    const { job, entity } = await makeJob(repository, 'sequential');
+    const { job, entity, source } = await makeJob(repository, 'sequential');
     const order: string[] = [];
     let active = 0;
     let maximum = 0;
@@ -43,13 +44,13 @@ describe('sequenzielle, fortsetzbare Manuskript-Continuity', () => {
       active += 1; maximum = Math.max(maximum, active);
       await new Promise((resolve) => setTimeout(resolve, 1));
       active -= 1;
-      return input.passage.text.startsWith('Zettel') ? { ...emptyAnalysis(), proposedStateChanges: [{ entityId: entity.id, stateKind: 'item_availability', previousState: 'vorhanden', newState: 'fortgetragen', confidence: 0.92, evidenceExcerpt: input.passage.text, reason: 'Deterministischer Fake-Provider' }] } : emptyAnalysis();
+      return input.passage.text.startsWith('Zettel') ? { ...emptyAnalysis(), proposedStateChanges: [{ entityId: entity.id, stateKind: 'item_availability', previousState: 'vorhanden', newState: 'fortgetragen', confidence: 0.92, evidenceExcerpt: input.passage.text, sourceReferenceId: source.id, reason: 'Deterministischer Fake-Provider' }] } : emptyAnalysis();
     });
     await new ManuscriptAnalysisController(repository, job.id, provider).start();
     expect(order).toEqual(['Zettel wird fortgetragen.', 'Malik wartet.']);
     expect(maximum).toBe(1);
     expect(seenDraftSizes).toEqual([0, 1]);
-    expect((await repository.getManuscriptAnalysisJob(job.id)).status).toBe('completed');
+    expect((await repository.getManuscriptAnalysisJob(job.id)).status).toBe('awaiting_user_review');
     expect((await repository.listManuscriptAnalysisDraftLedger(job.id))[0]).toMatchObject({ status: 'proposed', newState: 'fortgetragen' });
   });
 
@@ -110,9 +111,13 @@ describe('sequenzielle, fortsetzbare Manuskript-Continuity', () => {
     const { job } = await makeJob(repository, 'multipass');
     const provider = fakeProvider(async () => emptyAnalysis());
     await new ManuscriptAnalysisController(repository, job.id, provider).start();
+    const awaiting = await repository.getManuscriptAnalysisJob(job.id);
+    expect(awaiting.currentPhase).toBe('user_review');
+    expect(awaiting.status).toBe('awaiting_user_review');
+    await new ManuscriptAnalysisController(repository, job.id, provider).completeUserReview(true);
     const completed = await repository.getManuscriptAnalysisJob(job.id);
     expect(completed.currentPhase).toBe('completed');
-    expect(Object.values(completed.phaseProgress).every((progress) => progress.status === 'completed')).toBe(true);
+    expect(Object.entries(completed.phaseProgress).filter(([phase]) => phase !== 'user_review').every(([, progress]) => progress.status === 'completed')).toBe(true);
     expect((await repository.listNarrativeSummaries(completed.projectId)).every((summary) => summary.status === 'proposed' && !summary.authorConfirmed)).toBe(true);
     expect(await repository.listContinuityStateLedger(completed.projectId)).toEqual([]);
     const units = await repository.listManuscriptAnalysisUnits(completed.id);

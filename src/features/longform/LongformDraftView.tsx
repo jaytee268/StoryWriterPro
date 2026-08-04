@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronLeft, FileText, LockKeyhole, Plus, Save, X } from 'lucide-react';
 import type { Chapter, ChapterGenerationDraftLedgerEntry, ChapterGenerationJob, ChapterGenerationPlan, ChapterGenerationReview, ChapterGenerationSection, ContinuityStateLedgerEntry, NarrativeSummary, Project, ProjectContext, StoryDirection, StoryEntity, WritingPreferences } from '../../types/domain';
 import type { LongformRepository } from '../../services/longformRepository';
-import { buildPreflight, contextHashForLongform, parseLongformIntent, targetWords } from '../../services/longformWorkflow';
+import { buildPreflight, cancelLongformContinuityAnalysis, contextHashForLongform, parseLongformIntent, targetWords } from '../../services/longformWorkflow';
 import { createLongformAiProvider } from '../../services/longformAiService';
-import { providerRouter } from '../../services/aiProviderService';
+import { providerRouter, type StoryAiProvider } from '../../services/aiProviderService';
 import { createStoryRepository } from '../../services/storyRepository';
 import { LongformContextBundleBuilder } from '../../services/longformContext';
 import { editorContentToPlainText } from '../../utils/editorContent';
@@ -30,6 +30,7 @@ export function LongformDraftView({ project, chapters, entities, repository, ins
   const [editorContent, setEditorContent] = useState<Record<string, string>>({});
   const [pendingEdit, setPendingEdit] = useState<{ sectionId: string; content: string }>();
   const analysisTokens = useRef(new Map<string, { hash: string; cancelled: boolean }>());
+  const activeContinuityProviders = useRef(new Map<string, StoryAiProvider>());
   const updateSectionRef = useRef<((section: ChapterGenerationSection, content: string) => Promise<void>) | undefined>(undefined);
   const [reviews, setReviews] = useState<ChapterGenerationReview[]>([]);
   const [step, setStep] = useState<'preflight' | 'plan' | 'draft'>('preflight');
@@ -201,7 +202,8 @@ export function LongformDraftView({ project, chapters, entities, repository, ins
 
   const updateSection = async (section: ChapterGenerationSection, content: string) => {
     const previousToken = analysisTokens.current.get(section.id);
-    if (previousToken) previousToken.cancelled = true;
+    await cancelLongformContinuityAnalysis(activeContinuityProviders.current.get(section.id), previousToken ?? { cancelled: false });
+    activeContinuityProviders.current.delete(section.id);
     const hash = contentHash(content);
     const token = { hash, cancelled: false };
     analysisTokens.current.set(section.id, token);
@@ -213,7 +215,10 @@ export function LongformDraftView({ project, chapters, entities, repository, ins
     for (const item of laterSections) await repository.saveSection({ ...item, status: 'regenerate_requested', draftState: 'regenerate_requested' });
     await repository.updateJobStatus(section.jobId, 'reviewing');
     const priorDraft = (await repository.listDraftLedger(section.jobId)).filter((entry) => { const owner = sections.find((item) => item.id === entry.sectionId); return owner && owner.orderIndex < section.orderIndex && entry.status === 'proposed'; });
-    const continuity = activeProvider === 'codex-cli' ? await runContinuityReview(sourceRepository, { project, currentText: content, previousText: sections.filter((item) => item.orderIndex < section.orderIndex).at(-1)?.content, sourceKind: 'longform_section', draftLedger: toContinuityLedger(priorDraft), forceAnalysis: true, isCancelled: () => token.cancelled || analysisTokens.current.get(section.id) !== token }) : undefined;
+    const activeContinuity = activeProvider === 'codex-cli' ? await providerRouter.getActiveProvider() : undefined;
+    if (activeContinuity) activeContinuityProviders.current.set(section.id, activeContinuity.provider);
+    const continuity = activeProvider === 'codex-cli' ? await runContinuityReview(sourceRepository, { project, currentText: content, previousText: sections.filter((item) => item.orderIndex < section.orderIndex).at(-1)?.content, sourceKind: 'longform_section', draftLedger: toContinuityLedger(priorDraft), forceAnalysis: true, provider: activeContinuity?.provider, isCancelled: () => token.cancelled || analysisTokens.current.get(section.id) !== token }) : undefined;
+    activeContinuityProviders.current.delete(section.id);
     if (token.cancelled || analysisTokens.current.get(section.id) !== token) return;
     const entries = continuity?.draftStateChanges.map((change) => ({ jobId: section.jobId, sectionId: saved.id, projectId: project.id, entityId: change.entityId, relatedEntityId: change.relatedEntityId, stateKind: change.stateKind, previousState: change.previousState, newState: change.newState, sourceExcerpt: change.evidenceExcerpt, sourceStartOffset: change.startOffset, sourceEndOffset: change.endOffset, contentHash: hash, confidence: change.confidence })) ?? [];
     const savedEntries = await repository.replaceDraftLedger(saved.id, entries);
@@ -237,6 +242,8 @@ export function LongformDraftView({ project, chapters, entities, repository, ins
   }, [pendingEdit, sections]);
 
   const queueSectionEdit = (section: ChapterGenerationSection, content: string) => {
+    const token = analysisTokens.current.get(section.id);
+    if (token) void cancelLongformContinuityAnalysis(activeContinuityProviders.current.get(section.id), token);
     setEditorContent((current) => ({ ...current, [section.id]: content }));
     setSections((current) => current.map((item) => item.id === section.id ? { ...item, draftState: 'stale' } : item));
     setJob((current) => current ? { ...current, status: 'reviewing' } : current);
@@ -266,6 +273,7 @@ export function LongformDraftView({ project, chapters, entities, repository, ins
     if (!ai || !job) return;
     try {
       await ai.cancelActive();
+      await Promise.all([...activeContinuityProviders.current.values()].map((provider) => provider.cancelActive()));
       const saved = await repository.updateJobStatus(job.id, 'reviewing');
       setJob(saved);
       setError('Der Codex-Aufruf wurde abgebrochen. Der Schreibauftrag kann fortgesetzt werden.');

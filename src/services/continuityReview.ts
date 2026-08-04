@@ -125,7 +125,7 @@ async function createEvidenceSource(repository: StoryRepository, projectId: stri
   return source.id;
 }
 
-async function saveFinding(repository: StoryRepository, runId: string, project: Project, chapter: Chapter | undefined, scene: Scene | undefined, item: ContinuityAnalysisResult['objectiveContradictions'][number], rules: ProjectRule[], sources: StorySourceReference[], result: ContinuityAnalysisResult, currentText: string, startOffset?: number, endOffset?: number): Promise<SaveContinuityFindingInput> {
+async function saveFinding(repository: StoryRepository, runId: string, project: Project, chapter: Chapter | undefined, scene: Scene | undefined, chapters: Chapter[], item: ContinuityAnalysisResult['objectiveContradictions'][number], rules: ProjectRule[], sources: StorySourceReference[], result: ContinuityAnalysisResult, currentText: string, startOffset?: number, endOffset?: number): Promise<SaveContinuityFindingInput> {
   const explanations = result.matchedLoreRules.map((match) => {
     const rule = rules.find((candidate) => candidate.id === match.ruleId);
     return rule ? `${rule.title}: ${rule.statement} — ${match.rationale}` : match.rationale;
@@ -138,7 +138,10 @@ async function saveFinding(repository: StoryRepository, runId: string, project: 
   const counterEvidence: ContinuityCounterEvidence[] = [];
   for (const counter of item.counterEvidence ?? []) {
     if (counter.sourceReferenceId && !sources.some((source) => source.id === counter.sourceReferenceId)) throw new Error('Der AI-Gegenbeleg verweist auf eine nicht übergebene Quelle.');
-    const sourceReferenceId = counter.sourceReferenceId || await createEvidenceSource(repository, project.id, chapter, scene, counter.excerpt, counter.startOffset, counter.endOffset, item.subjectEntityId);
+    const counterChapter = counter.chapterId ? chapters.find((candidate) => candidate.id === counter.chapterId) : undefined;
+    const counterScene = counterChapter && counter.sceneId ? counterChapter.scenes.find((candidate) => candidate.id === counter.sceneId) : undefined;
+    if (!counter.sourceReferenceId && (!counterChapter || !counterScene || counter.startOffset === undefined || counter.endOffset === undefined)) throw new Error('Ein Gegenbeleg benötigt eine gültige Source Reference oder Kapitel, Szene und absolute Unicode-Offsets.');
+    const sourceReferenceId = counter.sourceReferenceId || await createEvidenceSource(repository, project.id, counterChapter, counterScene, counter.excerpt, counter.startOffset, counter.endOffset, item.subjectEntityId);
     counterEvidence.push({ ...counter, sourceReferenceId });
   }
   return { runId, projectId: project.id, chapterId: chapter?.id, sceneId: scene?.id, findingType: item.findingType, severity: item.findingType === 'critical_contradiction' ? 'critical' : 'warning', subjectEntityId: item.subjectEntityId, relatedEntityIds: item.relatedEntityIds, relatedStateIds: item.relatedStateIds, relatedRuleIds: result.matchedLoreRules.map((match) => match.ruleId), objectiveConflict: item.objectiveConflict, loreExplanations: explanations, evidenceExcerpt: excerpt, sourceReferenceId, counterEvidenceExcerpts: item.counterEvidenceExcerpts, counterEvidence, confidence: item.confidence, startOffset: absoluteStart, endOffset: absoluteEnd, reason: item.reason, reviewStatus: 'open' };
@@ -210,7 +213,7 @@ export async function runContinuityReview(repository: StoryRepository, input: Co
     if (input.isCancelled?.()) throw new Error('Die Kontinuitätsprüfung wurde abgebrochen.');
     const allContradictions = [...result.objectiveContradictions, ...result.missingExplanations];
     const findings: SaveContinuityFindingInput[] = [];
-    for (const item of allContradictions) findings.push(await saveFinding(repository, run.id, input.project, input.chapter, input.scene, item, confirmedRules, relevantSources, result, currentText, passageStartOffset, passageEndOffset));
+    for (const item of allContradictions) findings.push(await saveFinding(repository, run.id, input.project, input.chapter, input.scene, workspace.chapters, item, confirmedRules, relevantSources, result, currentText, passageStartOffset, passageEndOffset));
     const savedFindings = findings.length ? await repository.saveContinuityReviewFindings(run.id, findings) : [];
     const stateProposals: ContinuityStateLedgerEntry[] = [];
     const draftStateChanges = result.proposedStateChanges.filter((item) => entities.some((entity) => entity.id === item.entityId && entity.projectId === input.project.id));

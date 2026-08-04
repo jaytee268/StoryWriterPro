@@ -3296,19 +3296,28 @@ fn manuscript_analysis_draft_from_row(
 fn manuscript_analysis_job_status_valid(value: &str) -> bool {
     matches!(
         value,
-        "pending" | "running" | "paused" | "completed" | "failed" | "cancelled"
+        "pending"
+            | "running"
+            | "paused"
+            | "awaiting_user_review"
+            | "completed"
+            | "failed"
+            | "cancelled"
     )
 }
 
 fn manuscript_analysis_unit_status_valid(value: &str) -> bool {
     matches!(
         value,
-        "pending" | "running" | "completed" | "failed" | "skipped"
+        "pending" | "running" | "completed" | "failed" | "stale" | "skipped"
     )
 }
 
 fn manuscript_analysis_draft_status_valid(value: &str) -> bool {
-    matches!(value, "proposed" | "confirmed" | "rejected")
+    matches!(
+        value,
+        "proposed" | "confirmed" | "rejected" | "uncertain" | "superseded"
+    )
 }
 
 #[tauri::command]
@@ -3510,6 +3519,19 @@ pub fn review_manuscript_analysis_draft_ledger(
         return Err("Ungültiger Status des Import-Draft-Ledgers.".into());
     }
     let db = lock_db(&state)?;
+    let draft: ManuscriptAnalysisDraftLedgerEntry = db.query_row("SELECT id, job_id, unit_id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, chapter_id, scene_id, start_offset, end_offset, source_excerpt, source_reference_id, confidence, status, created_at, updated_at FROM manuscript_analysis_draft_ledger WHERE id=?1", params![id], manuscript_analysis_draft_from_row).map_err(|error| sql_error("Import-Draft-Ledger konnte nicht geladen werden", error))?;
+    if status == "confirmed" {
+        let source_id = draft.source_reference_id.clone().ok_or_else(|| {
+            "Ein bestätigter Importzustand benötigt eine Source Reference.".to_string()
+        })?;
+        let source_valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2)", params![source_id, draft.project_id], |row| row.get(0)).map_err(|error| sql_error("Import-Draft-Quelle konnte nicht geprüft werden", error))?;
+        if !source_valid {
+            return Err("Die Import-Draft-Quelle gehört nicht zum Projekt.".into());
+        }
+        project_entity_exists(&db, &draft.project_id, &draft.entity_id, None)?;
+        let stamp = now();
+        db.execute("INSERT INTO continuity_state_ledger (id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, reason, evidence_excerpt, chapter_id, scene_id, start_offset, end_offset, source_reference_id, status, confidence, author_confirmed, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,'confirmed',?15,1,?16,?16) ON CONFLICT(id) DO UPDATE SET status='confirmed', author_confirmed=1, updated_at=excluded.updated_at", params![format!("import-state-{}", draft.id), draft.project_id, draft.entity_id, draft.related_entity_id, draft.state_kind, draft.previous_state, draft.new_state, format!("Import-Draft bestätigt; job:{}; unit:{}; draft:{}", draft.job_id, draft.unit_id, draft.id), draft.source_excerpt, draft.chapter_id, draft.scene_id, draft.start_offset, draft.end_offset, source_id, draft.confidence, stamp]).map_err(|error| sql_error("Import-Zustand konnte nicht bestätigt werden", error))?;
+    }
     db.execute(
         "UPDATE manuscript_analysis_draft_ledger SET status=?2, updated_at=?3 WHERE id=?1",
         params![id, status, now()],
@@ -6793,7 +6815,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            21
+            22
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);

@@ -1,9 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { BrowserLongformRepository } from './longformRepository';
-import { buildPreflight, parseLongformIntent, targetWords } from './longformWorkflow';
+import { buildPreflight, cancelLongformContinuityAnalysis, parseLongformIntent, targetWords } from './longformWorkflow';
 import { contentHash } from '../utils/aiText';
 
 describe('guided long-form workflow', () => {
+  it('cancels the active continuity provider before accepting a newer edit', async () => {
+    const cancelActive = vi.fn(async () => undefined);
+    const token = { cancelled: false };
+    await cancelLongformContinuityAnalysis({ cancelActive }, token);
+    expect(token.cancelled).toBe(true);
+    expect(cancelActive).toHaveBeenCalledOnce();
+  });
   it('recognizes explicit chapter requests but not normal questions', () => {
     expect(parseLongformIntent('Schreib mir das nächste Kapitel mit ungefähr 17 Seiten.')).toMatchObject({ requested: true, pages: 17 });
     expect(parseLongformIntent('Welche Figuren kommen in Kapitel 3 vor?').requested).toBe(false);

@@ -31,6 +31,7 @@ describe('continuity import and longform fake-provider E2E', () => {
     const second = 'Später liegt das Papier wieder in der Tasche.';
     const firstEnd = Array.from(first).length;
     const secondStart = firstEnd + 2;
+    const source = await repository.createSourceReference({ projectId: workspace.project.id, entityId: entity.id, chapterId: chapter.id, sceneId: scene.id, excerpt: first, startOffset: 0, endOffset: firstEnd });
     const job = await repository.createManuscriptAnalysisJob({ projectId: workspace.project.id, bookId: workspace.books[0]!.id, importReference: 'e2e-import', providerId: 'fake-provider', pageMarkers: [{ chapterId: chapter.id, pageNumber: 1, label: 'Seite 1', sourceOffset: 0, textOffset: 0 }, { chapterId: chapter.id, pageNumber: 2, label: 'Seite 2', sourceOffset: secondStart, textOffset: secondStart }], units: [{ id: 'e2e-unit-1', chapterId: chapter.id, sceneId: scene.id, orderIndex: 0, pageNumber: 1, startOffset: 0, endOffset: firstEnd, content: first, contentHash: contentHash(first) }, { id: 'e2e-unit-2', chapterId: chapter.id, sceneId: scene.id, orderIndex: 1, pageNumber: 2, startOffset: secondStart, endOffset: Array.from(text).length, content: second, contentHash: contentHash(second) }] });
     let active = 0;
     let maximum = 0;
@@ -38,18 +39,20 @@ describe('continuity import and longform fake-provider E2E', () => {
       active += 1; maximum = Math.max(maximum, active);
       await new Promise((resolve) => setTimeout(resolve, 1));
       active -= 1;
-      if (input.passage.text.startsWith('😀')) return { ...emptyContinuity(), proposedStateChanges: [{ entityId: entity.id, stateKind: 'item_availability', previousState: 'vorhanden', newState: 'entsorgt', confidence: 0.96, evidenceExcerpt: input.passage.text, reason: 'Semantische Beobachtung ohne Schlüsselwortkopplung.' }] };
+      if (input.passage.text.startsWith('😀')) return { ...emptyContinuity(), proposedStateChanges: [{ entityId: entity.id, stateKind: 'item_availability', previousState: 'vorhanden', newState: 'entsorgt', confidence: 0.96, evidenceExcerpt: input.passage.text, sourceReferenceId: source.id, reason: 'Semantische Beobachtung ohne Schlüsselwortkopplung.' }] };
       return { ...emptyContinuity(), objectiveContradictions: [{ findingType: 'probable_contradiction', subjectEntityId: entity.id, relatedEntityIds: [], relatedStateIds: [], objectiveConflict: 'Ein zuvor entsorgter Gegenstand erscheint erneut.', evidenceExcerpt: input.passage.text, counterEvidenceExcerpts: ['Der Gegenstand wurde zuvor entsorgt.'], confidence: 0.88, reason: 'Papier und Zettel werden als derselbe Gegenstand verstanden.' }] };
     });
     await new ManuscriptAnalysisController(repository, job.id, provider).start();
     expect(maximum).toBe(1);
-    expect((await repository.getManuscriptAnalysisJob(job.id)).status).toBe('completed');
+    expect((await repository.getManuscriptAnalysisJob(job.id)).status).toBe('awaiting_user_review');
     expect((await repository.getManuscriptAnalysisJob(job.id)).pageMarkers).toHaveLength(2);
     const draft = await repository.listManuscriptAnalysisDraftLedger(job.id);
     expect(draft).toHaveLength(1);
     expect(draft[0]).toMatchObject({ newState: 'entsorgt', status: 'proposed', unitId: 'e2e-unit-1' });
     await repository.reviewManuscriptAnalysisDraftLedger(draft[0]!.id, 'confirmed');
-    expect(await repository.listContinuityStateLedger(workspace.project.id)).toEqual([]);
+    expect((await repository.listContinuityStateLedger(workspace.project.id))[0]).toMatchObject({ status: 'confirmed', authorConfirmed: true, newState: 'entsorgt' });
+    expect((await new ManuscriptAnalysisController(repository, job.id, provider).completeUserReview(true))).toBeUndefined();
+    expect((await repository.listContinuityStateLedger(workspace.project.id)).length).toBe(1);
     expect((await repository.listContinuityReviewFindings(workspace.project.id)).some((finding) => finding.reviewStatus === 'open')).toBe(true);
   });
 

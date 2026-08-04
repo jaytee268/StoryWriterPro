@@ -1,4 +1,5 @@
 import type { Chapter, ChapterGenerationJob, Project, ProjectContext, Scene, StoryDirection, StoryEntity, WritingPreferences } from '../types/domain';
+import type { StoryAiProvider } from './aiProviderService';
 import { createPlanFrame, type LongformRepository } from './longformRepository';
 
 export interface LongformIntent { requested: boolean; instruction: string; pages?: number; words?: number; sceneCount?: number; chapterNumber?: number; povName?: string; }
@@ -51,5 +52,7 @@ export function contextHashForLongform(project: Project, chapters: Chapter[], di
 }
 
 export function hasBlockingReviews(items: { severity: string; status: string }[]): boolean { return items.some((item) => item.severity === 'blocking' && item.status === 'open'); }
+
+export async function cancelLongformContinuityAnalysis(provider: Pick<StoryAiProvider, 'cancelActive'> | undefined, token: { cancelled: boolean }): Promise<void> { token.cancelled = true; await provider?.cancelActive(); }
 
 export function contextForLongform(context: ProjectContext): Pick<ProjectContext, 'lore' | 'characterProfiles' | 'characterVoicePatterns' | 'characterExperiences' | 'characterDialogueMemories' | 'relationshipMemories' | 'characterKnowledgeStates' | 'projectStyle' | 'styleReferences' | 'acceptedStyleObservations' | 'narrativeSummaries'> { return { lore: context.lore?.slice(0, 20), characterProfiles: context.characterProfiles?.slice(0, 10), characterVoicePatterns: context.characterVoicePatterns?.slice(0, 20), characterExperiences: context.characterExperiences?.slice(0, 20), characterDialogueMemories: context.characterDialogueMemories?.slice(0, 20), relationshipMemories: context.relationshipMemories?.slice(0, 20), characterKnowledgeStates: context.characterKnowledgeStates?.slice(0, 30), projectStyle: context.projectStyle, styleReferences: context.styleReferences?.slice(0, 5), acceptedStyleObservations: context.acceptedStyleObservations?.slice(0, 20), narrativeSummaries: context.narrativeSummaries?.filter((summary) => summary.status === 'confirmed') }; }

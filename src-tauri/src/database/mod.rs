@@ -550,6 +550,17 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
         ))?;
         connection.execute("INSERT INTO schema_migrations (version) VALUES (21)", [])?;
     }
+    let has_temporal_integrity: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 22",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_temporal_integrity == 0 {
+        connection.execute_batch(include_str!(
+            "../../../migrations/022_manuscript_analysis_temporal_integrity.sql"
+        ))?;
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (22)", [])?;
+    }
     Ok(())
 }
 
@@ -705,7 +716,7 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            21
+            22
         );
         assert_eq!(
             connection
@@ -957,7 +968,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                21
+                22
             );
             // Running startup migrations again must not change the assignment
             // or fail on the ALTER TABLE statement.
