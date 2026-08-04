@@ -101,6 +101,26 @@ describe('sequenzielle, fortsetzbare Manuskript-Continuity', () => {
     expect(units[0]?.endOffset).toBe(8);
   });
 
+  it('blockiert die Passageanalyse bis zum Strukturreview und remappt danach die Units', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace(); const chapterForGate = workspace.chapters[0]!; const sceneForGate = chapterForGate.scenes[0]!; const fullText = 'Zettel wird fortgetragen.\n\nMalik wartet.'; await repository.updateScene({ ...sceneForGate, content: fullText }); for (const scene of chapterForGate.scenes.slice(1)) await repository.updateScene({ ...scene, content: '' }); const splitOffset = Array.from(fullText).indexOf('\n'); const job = await repository.createManuscriptAnalysisJob({ projectId: workspace.project.id, bookId: workspace.books[0]!.id, importReference: 'structure-gate', providerId: 'codex-cli', units: [{ id: 'structure-gate-1', chapterId: chapterForGate.id, sceneId: sceneForGate.id, orderIndex: 0, startOffset: 0, endOffset: splitOffset, content: Array.from(fullText).slice(0, splitOffset).join(''), contentHash: contentHash(Array.from(fullText).slice(0, splitOffset).join('')) }, { id: 'structure-gate-2', chapterId: chapterForGate.id, sceneId: sceneForGate.id, orderIndex: 1, startOffset: splitOffset, endOffset: Array.from(fullText).length, content: Array.from(fullText).slice(splitOffset).join(''), contentHash: contentHash(Array.from(fullText).slice(splitOffset).join('')) }] });
+    const provider = fakeProvider(async () => emptyAnalysis());
+    Object.assign(provider, { analyzeManuscriptStructure: vi.fn(async (input: { projectId: string; chapter: { id: string; scenes: Array<{ content: string }> } }) => { const text = input.chapter.scenes[0]!.content; const split = Array.from(text).indexOf('\n'); const firstEnd = split > 0 ? split : Math.floor(Array.from(text).length / 2); return { scenes: [{ temporaryId: 'scene-a', chapterId: 'chapter', startOffset: 0, endOffset: firstEnd, title: 'Erste Szene', povCharacterName: null, povEntityId: null, location: 'Zimmer', storyTime: 'Abend', participatingCharacterNames: [], goal: 'Beobachten', conflict: 'Offene Spur', importantEvents: [], transitionType: 'chapter_continuation' as const, boundaryReason: 'Erste Bewegung', confidence: 0.8, evidenceExcerpt: Array.from(text).slice(0, firstEnd).join('') }, { temporaryId: 'scene-b', chapterId: 'chapter', startOffset: firstEnd, endOffset: Array.from(text).length, title: 'Zweite Szene', povCharacterName: null, povEntityId: null, location: 'Zimmer', storyTime: 'Später', participatingCharacterNames: [], goal: 'Warten', conflict: 'Ungewissheit', importantEvents: [], transitionType: 'chapter_continuation' as const, boundaryReason: 'Neue Bewegung', confidence: 0.7, evidenceExcerpt: Array.from(text).slice(firstEnd).join('') }], warnings: [] }; }) });
+    await new ManuscriptAnalysisController(repository, job.id, provider).start();
+    expect((await repository.getManuscriptAnalysisJob(job.id)).status).toBe('awaiting_structure_review');
+    expect(provider.analyzeContinuityPassage).not.toHaveBeenCalled();
+    const run = (await repository.listManuscriptStructureRuns(job.projectId, chapterForGate.id))[0]!;
+    const proposals = await repository.listManuscriptStructureProposals(run.id);
+    for (const proposal of proposals) await repository.reviewManuscriptStructureProposal(proposal.id, 'accepted');
+    const scenes = await repository.applyManuscriptStructure(job.projectId, run.id);
+    expect(scenes).toHaveLength(2);
+    expect((await repository.getManuscriptAnalysisJob(job.id)).currentPhase).toBe('passage_continuity');
+    const units = await repository.listManuscriptAnalysisUnits(job.id);
+    expect(new Set(units.map((unit) => unit.sceneId)).size).toBe(2);
+    await new ManuscriptAnalysisController(repository, job.id, provider).start();
+    expect(provider.analyzeContinuityPassage).toHaveBeenCalled();
+  });
+
   it('ordnet ein synthetisches 54-Seiten-Manuskript ohne Offset- oder Speicherverlust', () => {
     const chapter = { id: 'chapter-54', bookId: 'book-1', title: '54 Seiten', orderIndex: 0, scenes: [{ id: 'scene-54', chapterId: 'chapter-54', title: 'Text', orderIndex: 0, content: '', pov: '', location: '', storyTime: '', status: 'draft' as const, goal: '', notes: '' }] };
     const pageUnits = Array.from({ length: 54 }, (_, index) => ({ text: `Seite ${index + 1} 😀`, startOffset: index * 10, endOffset: index * 10 + Array.from(`Seite ${index + 1} 😀`).length, page: index + 1 }));

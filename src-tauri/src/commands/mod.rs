@@ -4169,6 +4169,7 @@ fn manuscript_analysis_job_status_valid(value: &str) -> bool {
         "pending"
             | "running"
             | "paused"
+            | "awaiting_structure_review"
             | "awaiting_user_review"
             | "completed"
             | "failed"
@@ -4926,6 +4927,77 @@ pub fn apply_manuscript_structure(
             params![run.chapter_id, old_scene.id],
         )
         .map_err(|e| sql_error("Alte implizite Szenen konnten nicht bereinigt werden", e))?;
+    let structure_jobs: Vec<(String, String)> = {
+        let mut statement = transaction
+            .prepare("SELECT id,provider_id FROM manuscript_analysis_jobs WHERE project_id=?1 AND current_phase='structure' AND status='awaiting_structure_review'")
+            .map_err(|e| sql_error("Strukturreview-Jobs konnten nicht geladen werden", e))?;
+        let rows = statement
+            .query_map(params![project_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|e| sql_error("Strukturreview-Jobs konnten nicht gelesen werden", e))?
+            .collect::<SqlResult<Vec<_>>>()
+            .map_err(|e| sql_error("Strukturreview-Jobs konnten nicht gelesen werden", e))?;
+        rows
+    };
+    for (job_id, provider_id) in structure_jobs {
+        let old_units: Vec<(String, i64, Option<i64>, i64, i64)> = {
+            let mut statement = transaction
+                .prepare("SELECT id,order_index,page_number,start_offset,end_offset FROM manuscript_analysis_units WHERE job_id=?1 ORDER BY order_index")
+                .map_err(|e| sql_error("Alte Analyse-Units konnten nicht geladen werden", e))?;
+            let rows = statement
+                .query_map(params![job_id], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                })
+                .map_err(|e| sql_error("Alte Analyse-Units konnten nicht gelesen werden", e))?
+                .collect::<SqlResult<Vec<_>>>()
+                .map_err(|e| sql_error("Alte Analyse-Units konnten nicht gelesen werden", e))?;
+            rows
+        };
+        transaction
+            .execute(
+                "DELETE FROM manuscript_analysis_draft_ledger WHERE job_id=?1",
+                params![job_id],
+            )
+            .map_err(|e| sql_error("Alte Draft-Zustände konnten nicht entfernt werden", e))?;
+        transaction
+            .execute(
+                "DELETE FROM manuscript_analysis_artifacts WHERE job_id=?1",
+                params![job_id],
+            )
+            .map_err(|e| sql_error("Alte Analyseartefakte konnten nicht entfernt werden", e))?;
+        transaction
+            .execute(
+                "DELETE FROM manuscript_analysis_phase_results WHERE job_id=?1",
+                params![job_id],
+            )
+            .map_err(|e| sql_error("Alte Phasenergebnisse konnten nicht entfernt werden", e))?;
+        transaction
+            .execute(
+                "DELETE FROM manuscript_analysis_units WHERE job_id=?1",
+                params![job_id],
+            )
+            .map_err(|e| sql_error("Alte Analyse-Units konnten nicht entfernt werden", e))?;
+        let mut order_index = 0_i64;
+        for (old_id, old_order, page_number, unit_start, unit_end) in old_units {
+            for (scene_index, proposal) in proposals.iter().enumerate() {
+                let start = unit_start.max(proposal.start_offset);
+                let end = unit_end.min(proposal.end_offset);
+                if end <= start {
+                    continue;
+                }
+                let content: String = chars[start as usize..end as usize].iter().collect();
+                transaction.execute("INSERT INTO manuscript_analysis_units (id,job_id,project_id,chapter_id,scene_id,order_index,page_number,start_offset,end_offset,content,content_hash,status,retry_count,requested_provider,prompt_version,input_hash,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'pending',0,?12,'manuscript-analysis-v1',?11,?13,?13)", params![format!("{old_id}-{scene_index}"), job_id, project_id, run.chapter_id, result[scene_index].id, order_index, page_number, start, end, content, canonical_content_hash(&content), provider_id, timestamp]) .map_err(|e| sql_error("Neue Analyse-Unit konnte nicht gespeichert werden", e))?;
+                order_index += 1;
+            }
+            let _ = old_order;
+        }
+        transaction.execute("UPDATE manuscript_analysis_jobs SET status='pending',current_phase='passage_continuity',phase_progress_json='{}',phase_errors_json='{}',total_units=?1,completed_units=0,failed_units=0,current_unit_id=NULL,last_successful_unit_id=NULL,error_message=NULL,updated_at=?2 WHERE id=?3", params![order_index, timestamp, job_id]).map_err(|e| sql_error("Analysejob konnte nach Strukturübernahme nicht zurückgesetzt werden", e))?;
+    }
     transaction
         .commit()
         .map_err(|e| sql_error("Strukturübernahme konnte nicht abgeschlossen werden", e))?;
@@ -8801,7 +8873,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            28
+            29
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);

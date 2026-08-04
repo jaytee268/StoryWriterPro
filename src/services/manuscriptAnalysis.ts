@@ -174,7 +174,7 @@ export class ManuscriptAnalysisController {
 
   private async execute(): Promise<void> {
     let job = await this.repository.getManuscriptAnalysisJob(this.jobId);
-    if (job.status === 'cancelled' || (job.status === 'completed' && job.currentPhase === 'completed')) return;
+    if (job.status === 'cancelled' || job.status === 'awaiting_structure_review' || (job.status === 'completed' && job.currentPhase === 'completed')) return;
     const active = this.providerOverride ? { provider: this.providerOverride, settings: await providerRouter.getSettings() } : await providerRouter.getActiveProvider();
     this.currentProvider = active.provider;
     const workspace = await this.repository.loadWorkspace();
@@ -206,6 +206,7 @@ export class ManuscriptAnalysisController {
         else if (phase === 'global_countercheck') await this.runGlobalCountercheck(job, workspace, active.provider, active.settings.bibleUpdateTimeoutSeconds);
         job = await this.repository.getManuscriptAnalysisJob(this.jobId);
         job = await this.savePhase(job, phase, { status: 'completed', failedUnits: 0, actualProvider: active.provider.id }, 'running');
+        if (phase === 'structure' && typeof active.provider.analyzeManuscriptStructure === 'function') { await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'awaiting_structure_review', currentPhase: 'structure', errorMessage: 'Strukturanalyse abgeschlossen. Szenenvorschläge müssen vor der Passageanalyse geprüft und übernommen werden.' }); return; }
         if (phase === 'global_countercheck') { await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'awaiting_user_review', currentPhase: 'user_review', errorMessage: 'AI-Phasen abgeschlossen. Nutzerreview erforderlich; offene Vorschläge müssen ausdrücklich übersprungen oder entschieden werden.' }); return; }
         if (phase !== 'user_review') job = await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'running', currentPhase: PHASES[phaseIndex(phase) + 1] ?? 'completed', errorMessage: undefined });
       } catch (error) {
