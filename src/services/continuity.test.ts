@@ -120,4 +120,62 @@ describe('AI-gestützte semantische Continuity', () => {
     expect(shouldRunContinuityReview('Ein kurzer Anfang.', `${'neues '.repeat(301)}Ende.`, 300, 'word_threshold')).toBe(true);
     expect(shouldRunContinuityReview('Ein kurzer Anfang.', 'Seitenmarker-Prüfung.', 300, 'page_marker')).toBe(true);
   });
+
+  it('markiert Textkorrektur erst nach einer erfolgreichen erneuten Analyse als gelöst', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const entity = workspace.entities[0]!;
+    let calls = 0;
+    const provider = fakeProvider(() => calls++ === 0 ? { ...emptyAnalysis(), objectiveContradictions: [{ findingType: 'probable_contradiction', subjectEntityId: entity.id, relatedEntityIds: [entity.id], relatedStateIds: [], objectiveConflict: 'Konflikt', evidenceExcerpt: 'Beleg', startOffset: 0, endOffset: 5, counterEvidenceExcerpts: [], confidence: 0.8, reason: 'Providerbeleg' }] } : emptyAnalysis());
+    const first = await runContinuityReview(repository, { project: workspace.project, chapter: workspace.chapters[0], scene: workspace.chapters[0]!.scenes[0], currentText: 'Beleg bleibt.', sourceKind: 'manual', provider });
+    const finding = first.findings[0]!;
+    await repository.applyContinuityFindingDecision({ findingId: finding.id, projectId: workspace.project.id, status: 'open', decisionKind: 'text_correction', sourceReferenceId: finding.sourceReferenceId });
+    expect((await repository.listContinuityFindingDecisions(workspace.project.id))[0]?.status).toBe('open');
+    await runContinuityReview(repository, { project: workspace.project, chapter: workspace.chapters[0], scene: workspace.chapters[0]!.scenes[0], currentText: 'Korrigiert.', sourceKind: 'manual', provider });
+    expect((await repository.listContinuityFindingDecisions(workspace.project.id))[0]?.status).toBe('resolved_after_text_change');
+  });
+
+  it('verlangt bestätigte Regeln, begründete Ausnahmen und hält neue Regeln pending', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const finding = (await runContinuityReview(repository, { project: workspace.project, chapter: workspace.chapters[0], scene: workspace.chapters[0]!.scenes[0], currentText: 'Konflikt.', sourceKind: 'manual', provider: fakeProvider(() => ({ ...emptyAnalysis(), objectiveContradictions: [{ findingType: 'missing_explanation', subjectEntityId: workspace.entities[0]!.id, relatedEntityIds: [], relatedStateIds: [], objectiveConflict: 'Konflikt', evidenceExcerpt: 'Konflikt.', startOffset: 0, endOffset: 9, counterEvidenceExcerpts: [], confidence: 0.7, reason: 'Erklärung fehlt.' }] })) })).findings[0]!;
+    const proposedRule = await repository.saveProjectRule({ projectId: workspace.project.id, title: 'Unbestätigt', statement: 'Noch nicht aktiv', scope: 'project', prerequisites: [], effects: [], exceptions: [], connectedLoreIds: [], sourceReferenceIds: [], status: 'proposed', confidence: 0.5, authorConfirmed: false, origin: 'manual' });
+    await expect(repository.applyContinuityFindingDecision({ findingId: finding.id, projectId: workspace.project.id, status: 'resolved_with_confirmed_rule', decisionKind: 'confirmed_rule', ruleId: proposedRule.id })).rejects.toThrow();
+    const confirmedRule = await repository.saveProjectRule({ ...proposedRule, status: 'confirmed', authorConfirmed: true });
+    await repository.applyContinuityFindingDecision({ findingId: finding.id, projectId: workspace.project.id, status: 'resolved_with_confirmed_rule', decisionKind: 'confirmed_rule', ruleId: confirmedRule.id, sourceReferenceId: finding.sourceReferenceId });
+    expect((await repository.listContinuityFindingDecisions(workspace.project.id))[0]?.status).toBe('resolved_with_confirmed_rule');
+    const pendingProposal = await repository.saveProjectRuleProposal({ projectId: workspace.project.id, title: 'Neue Regelprüfung', statement: 'Nur ein unbestätigter Entwurf', scope: 'project', prerequisites: [], effects: [], exceptions: [], connectedLoreIds: [], sourceReferenceIds: finding.sourceReferenceId ? [finding.sourceReferenceId] : [], evidenceExcerpt: finding.evidenceExcerpt, chapterId: finding.chapterId, sceneId: finding.sceneId, startOffset: finding.startOffset, endOffset: finding.endOffset, confidence: finding.confidence, reason: finding.reason });
+    expect(pendingProposal.reviewStatus).toBe('pending');
+  });
+
+  it('persistiert Ausnahmebegründung, Open-Question-Verknüpfung und Kanon-Audit ohne Überschreiben', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const finding = (await runContinuityReview(repository, { project: workspace.project, chapter: workspace.chapters[0], scene: workspace.chapters[0]!.scenes[0], currentText: 'Konflikt.', sourceKind: 'manual', provider: fakeProvider(() => ({ ...emptyAnalysis(), objectiveContradictions: [{ findingType: 'possible_intentional_exception', subjectEntityId: workspace.entities[0]!.id, relatedEntityIds: [], relatedStateIds: [], objectiveConflict: 'Konflikt', evidenceExcerpt: 'Konflikt.', startOffset: 0, endOffset: 9, counterEvidenceExcerpts: [], confidence: 0.7, reason: 'Ausnahme möglich.' }] })) })).findings[0]!;
+    await expect(repository.applyContinuityFindingDecision({ findingId: finding.id, projectId: workspace.project.id, status: 'accepted_exception', decisionKind: 'intentional_exception', sourceReferenceId: finding.sourceReferenceId })).rejects.toThrow();
+    await repository.applyContinuityFindingDecision({ findingId: finding.id, projectId: workspace.project.id, status: 'deferred_canon_review', decisionKind: 'canon_review', sourceReferenceId: finding.sourceReferenceId, canonAction: 'retcon', canonReason: 'Explizite Autorentscheidung', canonSourceReferenceIds: finding.sourceReferenceId ? [finding.sourceReferenceId] : [] });
+    expect((await repository.listContinuityCanonChangeAudits(workspace.project.id, finding.id))[0]?.action).toBe('retcon');
+    expect((await repository.listContinuityStateLedger(workspace.project.id)).length).toBe(0);
+  });
+
+  it('bestätigt Zustände nur mit Source Reference und speichert offene Fragen als Bible-Entity', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const scene = workspace.chapters[0]!.scenes[0]!;
+    const source = await repository.createSourceReference({ projectId: workspace.project.id, entityId: workspace.entities[0]!.id, chapterId: workspace.chapters[0]!.id, sceneId: scene.id, excerpt: 'Zustand', startOffset: 0, endOffset: 7 });
+    const proposed = await repository.saveContinuityStateEntry({ projectId: workspace.project.id, entityId: workspace.entities[0]!.id, stateKind: 'location', previousState: '', newState: 'Archiv', chapterId: workspace.chapters[0]!.id, sceneId: scene.id, sourceReferenceId: source.id, status: 'proposed', confidence: 0.9, authorConfirmed: false });
+    await expect(repository.saveContinuityStateEntry({ ...proposed, status: 'confirmed', sourceReferenceId: undefined, authorConfirmed: true })).rejects.toThrow();
+    const confirmed = await repository.saveContinuityStateEntry({ ...proposed, status: 'confirmed', sourceReferenceId: source.id, authorConfirmed: true });
+    expect(confirmed.status).toBe('confirmed');
+    const question = await repository.createStoryEntity({ projectId: workspace.project.id, name: 'Offene Frage', type: 'open_question', description: 'Warum?', status: 'proposed', confidence: 0.5, chapterId: workspace.chapters[0]!.id, sceneId: scene.id, excerpt: 'Warum?', authorConfirmed: false, tags: ['open_question'] });
+    expect(question.type).toBe('open_question');
+  });
+
+  it('weist einen AI-resolved-Plot-Thread zurück und lässt die Nutzerentscheidung mit Quelle speichern', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const thread = workspace.entities.find((entity) => entity.type === 'plot_thread') ?? workspace.entities[0]!;
+    const run = await repository.createContinuityReviewRun({ projectId: workspace.project.id, chapterId: workspace.chapters[0]!.id, sceneId: workspace.chapters[0]!.scenes[0]!.id, sourceKind: 'manual', contentHash: 'thread-review', providerId: 'codex-cli' });
+    await expect(repository.savePlotThreadLifecycleProposal({ runId: run.id, projectId: workspace.project.id, entityId: thread.id, proposedStatus: 'resolved' as never, evidenceExcerpt: 'Beleg', sourceReferenceId: undefined, startOffset: 0, endOffset: 5, reason: 'AI darf dies nicht setzen', confidence: 0.8 })).rejects.toThrow();
+  });
 });

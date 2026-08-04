@@ -16,15 +16,16 @@ use crate::{
         validate_relationship_memory_type, validate_review_status, validate_rule_proposal_status,
         validate_scene_status, validate_scene_version_reason, validate_style_reference_category,
         validate_truthfulness, AcceptChapterGenerationJobInput, AddCharacterMemoryEvidenceInput,
-        BibleProposal, BibleProposalInput, BibleUpdateRun, Book, Chapter,
-        ChapterGenerationDraftLedgerEntry, ChapterGenerationJob, ChapterGenerationPlan,
-        ChapterGenerationReview, ChapterGenerationSection, ChapterPlanBeat,
+        ApplyContinuityFindingDecisionInput, BibleProposal, BibleProposalInput, BibleUpdateRun,
+        Book, Chapter, ChapterGenerationDraftLedgerEntry, ChapterGenerationJob,
+        ChapterGenerationPlan, ChapterGenerationReview, ChapterGenerationSection, ChapterPlanBeat,
         CharacterDialogueMemory, CharacterExperience, CharacterKnowledgeState,
         CharacterMemoryEvidence, CharacterMemoryProposal, CharacterMemoryProposalDraft,
         CharacterMemoryUpdateRun, CharacterProfile, CharacterSceneState, CharacterVoicePattern,
-        ContinuityReviewFinding, ContinuityReviewRun, ContinuityReviewSettings,
-        ContinuityStateLedgerEntry, CreateBibleUpdateRunInput, CreateChapterGenerationJobInput,
-        CreateChapterInput, CreateCharacterMemoryUpdateRunInput, CreateLoreEntryInput,
+        ContinuityCanonChangeAudit, ContinuityFindingDecision, ContinuityReviewFinding,
+        ContinuityReviewRun, ContinuityReviewSettings, ContinuityStateLedgerEntry,
+        CreateBibleUpdateRunInput, CreateChapterGenerationJobInput, CreateChapterInput,
+        CreateCharacterMemoryUpdateRunInput, CreateLoreEntryInput,
         CreateManuscriptAnalysisJobInput, CreateProjectInput, CreateProjectStyleAnalysisRunInput,
         CreateSceneInput, CreateSceneVersionInput, CreateSourceReferenceInput,
         CreateStoryEntityInput, CreateStoryEntityRelationInput, CreateStyleReferenceInput,
@@ -33,14 +34,15 @@ use crate::{
         ManuscriptAnalysisUnit, ManuscriptImportInput, ManuscriptImportResult, ManuscriptPosition,
         NarrativeSummary, PlotThreadLifecycle, PlotThreadLifecycleProposal, Project, ProjectRule,
         ProjectRuleProposal, ProjectStyle, ProjectStyleAnalysisRun, ProjectStyleObservation,
-        ProviderStatus, RelationshipMemory, RestoreSceneVersionInput, ReviewBibleProposalInput,
-        ReviewCharacterMemoryProposalInput, SaveChapterGenerationDraftLedgerInput,
-        SaveChapterGenerationPlanInput, SaveChapterGenerationReviewInput,
-        SaveChapterGenerationSectionInput, SaveCharacterDialogueMemoryInput,
-        SaveCharacterExperienceInput, SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput,
-        SaveCharacterSceneStateInput, SaveCharacterVoicePatternInput, SaveContinuityFindingInput,
-        SaveContinuityReviewInput, SaveContinuityReviewRunStatusInput, SaveContinuityStateInput,
-        SaveLoreMetadataInput, SaveManuscriptAnalysisDraftLedgerInput, SaveNarrativeSummaryInput,
+        ProviderStatus, ReconcileContinuityTextCorrectionInput, RelationshipMemory,
+        RestoreSceneVersionInput, ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput,
+        SaveChapterGenerationDraftLedgerInput, SaveChapterGenerationPlanInput,
+        SaveChapterGenerationReviewInput, SaveChapterGenerationSectionInput,
+        SaveCharacterDialogueMemoryInput, SaveCharacterExperienceInput,
+        SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput, SaveCharacterSceneStateInput,
+        SaveCharacterVoicePatternInput, SaveContinuityFindingInput, SaveContinuityReviewInput,
+        SaveContinuityReviewRunStatusInput, SaveContinuityStateInput, SaveLoreMetadataInput,
+        SaveManuscriptAnalysisDraftLedgerInput, SaveNarrativeSummaryInput,
         SavePlotThreadLifecycleInput, SavePlotThreadLifecycleProposalInput, SaveProjectRuleInput,
         SaveProjectRuleProposalInput, SaveProjectStyleInput, SaveProjectStyleObservationInput,
         SaveRelationshipMemoryInput, SaveStoryDirectionInput, SaveWritingPreferencesInput, Scene,
@@ -892,7 +894,8 @@ fn load_entity(db: &Connection, id: &str) -> Result<StoryEntity, String> {
 fn validate_entity_type(value: &str) -> Result<(), String> {
     match value {
         "character" | "relationship" | "place" | "organization" | "world_rule" | "object"
-        | "event" | "fact" | "clue" | "secret" | "plot_thread" | "retcon" | "author_note" => Ok(()),
+        | "event" | "fact" | "clue" | "secret" | "plot_thread" | "retcon" | "author_note"
+        | "open_question" => Ok(()),
         _ => Err(format!("Ungültiger Story-Bible-Typ: {value}")),
     }
 }
@@ -2941,6 +2944,14 @@ pub fn save_continuity_state_entry(
 ) -> Result<ContinuityStateLedgerEntry, String> {
     let db = lock_db(&state)?;
     validate_continuity_input(&db, &input)?;
+    if input.id.is_some()
+        && input.status == "confirmed"
+        && (!input.author_confirmed || input.source_reference_id.is_none())
+    {
+        return Err(
+            "Ein bestätigter Zustand benötigt Autorbestätigung und eine Source Reference.".into(),
+        );
+    }
     let id = input.id.clone().unwrap_or_else(new_id);
     let stamp = now();
     db.execute("INSERT INTO continuity_state_ledger (id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, reason, evidence_excerpt, chapter_id, scene_id, start_offset, end_offset, source_reference_id, status, confidence, author_confirmed, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?18) ON CONFLICT(id) DO UPDATE SET previous_state=excluded.previous_state, new_state=excluded.new_state, reason=excluded.reason, evidence_excerpt=excluded.evidence_excerpt, chapter_id=excluded.chapter_id, scene_id=excluded.scene_id, start_offset=excluded.start_offset, end_offset=excluded.end_offset, source_reference_id=excluded.source_reference_id, status=excluded.status, confidence=excluded.confidence, author_confirmed=excluded.author_confirmed, updated_at=excluded.updated_at", params![id, input.project_id, input.entity_id, input.related_entity_id, input.state_kind, input.previous_state, input.new_state, input.reason, input.evidence_excerpt, input.chapter_id, input.scene_id, input.start_offset, input.end_offset, input.source_reference_id, input.status, input.confidence, input.author_confirmed, stamp]).map_err(|error| sql_error("Zustandsänderung konnte nicht gespeichert werden", error))?;
@@ -3101,9 +3112,10 @@ fn lifecycle_proposal_from_row(row: &rusqlite::Row<'_>) -> SqlResult<PlotThreadL
         start_offset: row.get(7)?,
         end_offset: row.get(8)?,
         reason: row.get(9)?,
-        review_status: row.get(10)?,
-        reviewed_at: row.get(11)?,
-        created_at: row.get(12)?,
+        confidence: row.get(10)?,
+        review_status: row.get(11)?,
+        reviewed_at: row.get(12)?,
+        created_at: row.get(13)?,
     })
 }
 
@@ -3253,10 +3265,12 @@ fn manuscript_analysis_draft_from_row(
         scene_id: row.get(10)?,
         start_offset: row.get(11)?,
         end_offset: row.get(12)?,
-        confidence: row.get(13)?,
-        status: row.get(14)?,
-        created_at: row.get(15)?,
-        updated_at: row.get(16)?,
+        source_excerpt: row.get(13)?,
+        source_reference_id: row.get(14)?,
+        confidence: row.get(15)?,
+        status: row.get(16)?,
+        created_at: row.get(17)?,
+        updated_at: row.get(18)?,
     })
 }
 
@@ -3401,7 +3415,7 @@ pub fn list_manuscript_analysis_draft_ledger(
     job_id: String,
 ) -> Result<Vec<ManuscriptAnalysisDraftLedgerEntry>, String> {
     let db = lock_db(&state)?;
-    let result = db.prepare("SELECT d.id, d.job_id, d.unit_id, d.project_id, d.entity_id, d.related_entity_id, d.state_kind, d.previous_state, d.new_state, d.chapter_id, d.scene_id, d.start_offset, d.end_offset, d.confidence, d.status, d.created_at, d.updated_at FROM manuscript_analysis_draft_ledger d JOIN manuscript_analysis_units u ON u.id=d.unit_id WHERE d.job_id=?1 ORDER BY u.order_index ASC, d.created_at ASC").map_err(|error| sql_error("Import-Draft-Ledger konnte nicht geladen werden", error))?.query_map(params![job_id], manuscript_analysis_draft_from_row).map_err(|error| sql_error("Import-Draft-Ledger konnte nicht gelesen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Import-Draft-Ledger konnte nicht gelesen werden", error));
+    let result = db.prepare("SELECT d.id, d.job_id, d.unit_id, d.project_id, d.entity_id, d.related_entity_id, d.state_kind, d.previous_state, d.new_state, d.chapter_id, d.scene_id, d.start_offset, d.end_offset, d.source_excerpt, d.source_reference_id, d.confidence, d.status, d.created_at, d.updated_at FROM manuscript_analysis_draft_ledger d JOIN manuscript_analysis_units u ON u.id=d.unit_id WHERE d.job_id=?1 ORDER BY u.order_index ASC, d.created_at ASC").map_err(|error| sql_error("Import-Draft-Ledger konnte nicht geladen werden", error))?.query_map(params![job_id], manuscript_analysis_draft_from_row).map_err(|error| sql_error("Import-Draft-Ledger konnte nicht gelesen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Import-Draft-Ledger konnte nicht gelesen werden", error));
     result
 }
 
@@ -3441,7 +3455,13 @@ pub fn replace_manuscript_analysis_draft_ledger(
         if let Some(related) = &entry.related_entity_id {
             project_entity_exists(&tx, &entry.project_id, related, None)?;
         }
-        tx.execute("INSERT INTO manuscript_analysis_draft_ledger (id, job_id, unit_id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, chapter_id, scene_id, start_offset, end_offset, confidence, status, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?16)", params![entry.id.clone().unwrap_or_else(new_id), entry.job_id, entry.unit_id, entry.project_id, entry.entity_id, entry.related_entity_id, entry.state_kind, entry.previous_state, entry.new_state, entry.chapter_id, entry.scene_id, entry.start_offset, entry.end_offset, entry.confidence, entry.status.clone().unwrap_or_else(|| "proposed".into()), stamp]).map_err(|error| sql_error("Import-Draft-Ledger konnte nicht gespeichert werden", error))?;
+        if let Some(source_id) = &entry.source_reference_id {
+            let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2)", params![source_id, entry.project_id], |row| row.get(0)).map_err(|error| sql_error("Import-Draft-Quelle konnte nicht geprüft werden", error))?;
+            if !valid {
+                return Err("Die Import-Draft-Quelle gehört nicht zum Projekt.".into());
+            }
+        }
+        tx.execute("INSERT INTO manuscript_analysis_draft_ledger (id, job_id, unit_id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, chapter_id, scene_id, start_offset, end_offset, source_excerpt, source_reference_id, confidence, status, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?18)", params![entry.id.clone().unwrap_or_else(new_id), entry.job_id, entry.unit_id, entry.project_id, entry.entity_id, entry.related_entity_id, entry.state_kind, entry.previous_state, entry.new_state, entry.chapter_id, entry.scene_id, entry.start_offset, entry.end_offset, entry.source_excerpt, entry.source_reference_id, entry.confidence, entry.status.clone().unwrap_or_else(|| "proposed".into()), stamp]).map_err(|error| sql_error("Import-Draft-Ledger konnte nicht gespeichert werden", error))?;
     }
     tx.commit().map_err(|error| {
         sql_error(
@@ -3449,7 +3469,7 @@ pub fn replace_manuscript_analysis_draft_ledger(
             error,
         )
     })?;
-    let result = db.prepare("SELECT id, job_id, unit_id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, chapter_id, scene_id, start_offset, end_offset, confidence, status, created_at, updated_at FROM manuscript_analysis_draft_ledger WHERE unit_id=?1 ORDER BY created_at ASC").map_err(|error| sql_error("Import-Draft-Ledger konnte nicht geladen werden", error))?.query_map(params![unit_id], manuscript_analysis_draft_from_row).map_err(|error| sql_error("Import-Draft-Ledger konnte nicht gelesen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Import-Draft-Ledger konnte nicht gelesen werden", error));
+    let result = db.prepare("SELECT id, job_id, unit_id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, chapter_id, scene_id, start_offset, end_offset, source_excerpt, source_reference_id, confidence, status, created_at, updated_at FROM manuscript_analysis_draft_ledger WHERE unit_id=?1 ORDER BY created_at ASC").map_err(|error| sql_error("Import-Draft-Ledger konnte nicht geladen werden", error))?.query_map(params![unit_id], manuscript_analysis_draft_from_row).map_err(|error| sql_error("Import-Draft-Ledger konnte nicht gelesen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Import-Draft-Ledger konnte nicht gelesen werden", error));
     result
 }
 
@@ -3468,7 +3488,7 @@ pub fn review_manuscript_analysis_draft_ledger(
         params![id, status, now()],
     )
     .map_err(|error| sql_error("Import-Draft-Ledger konnte nicht geprüft werden", error))?;
-    db.query_row("SELECT id, job_id, unit_id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, chapter_id, scene_id, start_offset, end_offset, confidence, status, created_at, updated_at FROM manuscript_analysis_draft_ledger WHERE id=?1", params![id], manuscript_analysis_draft_from_row).map_err(|error| sql_error("Import-Draft-Ledger konnte nicht geladen werden", error))
+    db.query_row("SELECT id, job_id, unit_id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, chapter_id, scene_id, start_offset, end_offset, source_excerpt, source_reference_id, confidence, status, created_at, updated_at FROM manuscript_analysis_draft_ledger WHERE id=?1", params![id], manuscript_analysis_draft_from_row).map_err(|error| sql_error("Import-Draft-Ledger konnte nicht geladen werden", error))
 }
 
 #[tauri::command]
@@ -3626,6 +3646,272 @@ pub fn review_continuity_finding(
     db.query_row("SELECT id, run_id, project_id, chapter_id, scene_id, finding_type, severity, subject_entity_id, related_entity_ids_json, related_state_ids_json, related_rule_ids_json, objective_conflict, lore_explanations_json, evidence_excerpt, source_reference_id, counter_evidence_json, counter_evidence_structured_json, confidence, start_offset, end_offset, reason, review_status, user_decision, created_at, updated_at FROM continuity_review_findings WHERE id=?1", params![id], continuity_finding_from_row).map_err(|error| sql_error("Entscheidung konnte nicht geladen werden", error))
 }
 
+fn continuity_decision_status_valid(value: &str) -> bool {
+    matches!(
+        value,
+        "open"
+            | "resolved_after_text_change"
+            | "resolved_with_confirmed_rule"
+            | "accepted_exception"
+            | "deferred_rule_review"
+            | "deferred_canon_review"
+            | "deferred_open_question"
+            | "dismissed"
+    )
+}
+
+fn continuity_decision_kind_valid(value: &str) -> bool {
+    matches!(
+        value,
+        "text_correction"
+            | "confirmed_rule"
+            | "new_rule"
+            | "canon_review"
+            | "intentional_exception"
+            | "open_question"
+            | "dismiss"
+    )
+}
+
+fn continuity_decision_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ContinuityFindingDecision> {
+    Ok(ContinuityFindingDecision {
+        id: row.get(0)?,
+        finding_id: row.get(1)?,
+        project_id: row.get(2)?,
+        status: row.get(3)?,
+        decision_kind: row.get(4)?,
+        rule_id: row.get(5)?,
+        rule_proposal_id: row.get(6)?,
+        open_question_entity_id: row.get(7)?,
+        source_reference_id: row.get(8)?,
+        exception_reason: row.get(9)?,
+        content_hash: row.get(10)?,
+        payload: serde_json::from_str(&row.get::<_, String>(11)?).unwrap_or(serde_json::json!({})),
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
+    })
+}
+
+fn continuity_canon_audit_from_row(
+    row: &rusqlite::Row<'_>,
+) -> SqlResult<ContinuityCanonChangeAudit> {
+    Ok(ContinuityCanonChangeAudit {
+        id: row.get(0)?,
+        finding_id: row.get(1)?,
+        project_id: row.get(2)?,
+        target_entity_id: row.get(3)?,
+        target_state_id: row.get(4)?,
+        action: row.get(5)?,
+        reason: row.get(6)?,
+        previous_source_reference_id: row.get(7)?,
+        new_source_reference_id: row.get(8)?,
+        source_reference_ids: serde_json::from_str(&row.get::<_, String>(9)?).unwrap_or_default(),
+        payload: serde_json::from_str(&row.get::<_, String>(10)?).unwrap_or(serde_json::json!({})),
+        created_at: row.get(11)?,
+    })
+}
+
+#[tauri::command]
+pub fn list_continuity_finding_decisions(
+    state: State<'_, DbState>,
+    project_id: String,
+) -> Result<Vec<ContinuityFindingDecision>, String> {
+    let db = lock_db(&state)?;
+    let result = db.prepare("SELECT id, finding_id, project_id, status, decision_kind, rule_id, rule_proposal_id, open_question_entity_id, source_reference_id, exception_reason, content_hash, payload_json, created_at, updated_at FROM continuity_review_decisions WHERE project_id=?1 ORDER BY updated_at DESC").map_err(|error| sql_error("Continuity-Entscheidungen konnten nicht geladen werden", error))?.query_map(params![project_id], continuity_decision_from_row).map_err(|error| sql_error("Continuity-Entscheidungen konnten nicht geladen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Continuity-Entscheidungen konnten nicht gelesen werden", error));
+    result
+}
+
+#[tauri::command]
+pub fn apply_continuity_finding_decision(
+    state: State<'_, DbState>,
+    input: ApplyContinuityFindingDecisionInput,
+) -> Result<ContinuityFindingDecision, String> {
+    if !continuity_decision_status_valid(&input.status)
+        || !continuity_decision_kind_valid(&input.decision_kind)
+    {
+        return Err("Ungültige Continuity-Entscheidung.".into());
+    }
+    if input.status == "accepted_exception"
+        && input
+            .exception_reason
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+    {
+        return Err("Eine bewusste Ausnahme benötigt eine Begründung.".into());
+    }
+    let db = lock_db(&state)?;
+    let (finding_project, _finding_scene, finding_status, finding_source): (String, Option<String>, String, Option<String>) = db.query_row("SELECT project_id, scene_id, review_status, source_reference_id FROM continuity_review_findings WHERE id=?1", params![input.finding_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))).map_err(|error| sql_error("Kontinuitätswarnung konnte nicht geladen werden", error))?;
+    if finding_project != input.project_id {
+        return Err("Finding und Entscheidung gehören nicht zum Projekt.".into());
+    }
+    if input.status != "open" && finding_status != "open" {
+        return Err("Diese Kontinuitätswarnung wurde bereits entschieden.".into());
+    }
+    if let Some(rule_id) = &input.rule_id {
+        let valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM project_rules WHERE id=?1 AND project_id=?2 AND status='confirmed' AND author_confirmed=1)", params![rule_id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Projektregel konnte nicht geprüft werden", error))?;
+        if !valid {
+            return Err("Nur bestätigte Projektregeln können ausgewählt werden.".into());
+        }
+    }
+    if let Some(proposal_id) = &input.rule_proposal_id {
+        let valid: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM project_rule_proposals WHERE id=?1 AND project_id=?2)",
+                params![proposal_id, input.project_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| sql_error("Regelvorschlag konnte nicht geprüft werden", error))?;
+        if !valid {
+            return Err("Der Regelvorschlag gehört nicht zum Projekt.".into());
+        }
+    }
+    if let Some(entity_id) = &input.open_question_entity_id {
+        project_entity_exists(&db, &input.project_id, entity_id, Some("open_question"))?;
+    }
+    if let Some(source_id) = &input.source_reference_id {
+        let valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2)", params![source_id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Entscheidungsquelle konnte nicht geprüft werden", error))?;
+        if !valid {
+            return Err("Die Entscheidungsquelle gehört nicht zum Projekt.".into());
+        }
+    }
+    if let Some(action) = &input.canon_action {
+        if !matches!(
+            action.as_str(),
+            "previous_incomplete"
+                | "retcon"
+                | "new_information"
+                | "unreliable_perspective"
+                | "cancelled"
+        ) {
+            return Err("Ungültige Kanonaktion.".into());
+        }
+        if input
+            .canon_reason
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        {
+            return Err("Eine Kanonentscheidung benötigt eine Begründung.".into());
+        }
+        if let Some(entity_id) = &input.canon_target_entity_id {
+            project_entity_exists(&db, &input.project_id, entity_id, None)?;
+        }
+        if let Some(state_id) = &input.canon_target_state_id {
+            let valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM continuity_state_ledger WHERE id=?1 AND project_id=?2)", params![state_id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Kanon-Zustand konnte nicht geprüft werden", error))?;
+            if !valid {
+                return Err("Der Kanon-Zustand gehört nicht zum Projekt.".into());
+            }
+        }
+        for source_id in &input.canon_source_reference_ids {
+            let valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2)", params![source_id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Kanonquelle konnte nicht geprüft werden", error))?;
+            if !valid {
+                return Err("Eine Kanonquelle gehört nicht zum Projekt.".into());
+            }
+        }
+    }
+    let stamp = now();
+    let tx = db.unchecked_transaction().map_err(|error| {
+        sql_error(
+            "Continuity-Entscheidung konnte nicht gestartet werden",
+            error,
+        )
+    })?;
+    let decision_id: String = tx
+        .query_row(
+            "SELECT id FROM continuity_review_decisions WHERE finding_id=?1",
+            params![input.finding_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| sql_error("Continuity-Entscheidung konnte nicht gelesen werden", error))?
+        .unwrap_or_else(new_id);
+    tx.execute("INSERT INTO continuity_review_decisions (id, finding_id, project_id, status, decision_kind, rule_id, rule_proposal_id, open_question_entity_id, source_reference_id, exception_reason, content_hash, payload_json, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,COALESCE((SELECT created_at FROM continuity_review_decisions WHERE id=?1),?13),?13) ON CONFLICT(finding_id) DO UPDATE SET status=excluded.status, decision_kind=excluded.decision_kind, rule_id=excluded.rule_id, rule_proposal_id=excluded.rule_proposal_id, open_question_entity_id=excluded.open_question_entity_id, source_reference_id=excluded.source_reference_id, exception_reason=excluded.exception_reason, content_hash=excluded.content_hash, payload_json=excluded.payload_json, updated_at=excluded.updated_at", params![decision_id, input.finding_id, input.project_id, input.status, input.decision_kind, input.rule_id, input.rule_proposal_id, input.open_question_entity_id, input.source_reference_id, input.exception_reason, input.content_hash, serde_json::to_string(&input.payload).unwrap_or_else(|_| "{}".into()), stamp]).map_err(|error| sql_error("Continuity-Entscheidung konnte nicht gespeichert werden", error))?;
+    let legacy_status = match input.status.as_str() {
+        "dismissed" => "dismissed",
+        "resolved_after_text_change" | "resolved_with_confirmed_rule" => "resolved",
+        "accepted_exception" => "accepted",
+        "deferred_rule_review" | "deferred_canon_review" | "deferred_open_question" => "deferred",
+        _ => "open",
+    };
+    tx.execute("UPDATE continuity_review_findings SET review_status=?2, user_decision=?3, updated_at=?4 WHERE id=?1", params![input.finding_id, legacy_status, input.decision_kind, stamp]).map_err(|error| sql_error("Findingstatus konnte nicht gespeichert werden", error))?;
+    if let Some(action) = &input.canon_action {
+        tx.execute("INSERT INTO continuity_canon_change_audits (id, finding_id, project_id, target_entity_id, target_state_id, action, reason, previous_source_reference_id, new_source_reference_id, source_reference_ids_json, payload_json, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)", params![new_id(), input.finding_id, input.project_id, input.canon_target_entity_id, input.canon_target_state_id, action, input.canon_reason.as_deref().unwrap_or_default(), finding_source, input.source_reference_id, serde_json::to_string(&input.canon_source_reference_ids).unwrap_or_else(|_| "[]".into()), serde_json::to_string(&input.payload).unwrap_or_else(|_| "{}".into()), stamp]).map_err(|error| sql_error("Kanon-Audit konnte nicht gespeichert werden", error))?;
+    }
+    tx.commit().map_err(|error| {
+        sql_error(
+            "Continuity-Entscheidung konnte nicht abgeschlossen werden",
+            error,
+        )
+    })?;
+    db.query_row("SELECT id, finding_id, project_id, status, decision_kind, rule_id, rule_proposal_id, open_question_entity_id, source_reference_id, exception_reason, content_hash, payload_json, created_at, updated_at FROM continuity_review_decisions WHERE finding_id=?1", params![input.finding_id], continuity_decision_from_row).map_err(|error| sql_error("Gespeicherte Continuity-Entscheidung konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn reconcile_continuity_text_correction(
+    state: State<'_, DbState>,
+    input: ReconcileContinuityTextCorrectionInput,
+) -> Result<(), String> {
+    let db = lock_db(&state)?;
+    let run_project: String = db
+        .query_row(
+            "SELECT project_id FROM continuity_review_runs WHERE id=?1",
+            params![input.run_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| sql_error("Continuity-Run konnte nicht geladen werden", error))?;
+    if run_project != input.project_id {
+        return Err("Continuity-Run und Textkorrektur gehören nicht zusammen.".into());
+    }
+    let tx = db
+        .unchecked_transaction()
+        .map_err(|error| sql_error("Textkorrektur konnte nicht abgeglichen werden", error))?;
+    let mut statement = tx.prepare("SELECT d.id, f.finding_type, f.subject_entity_id, f.scene_id FROM continuity_review_decisions d JOIN continuity_review_findings f ON f.id=d.finding_id WHERE d.project_id=?1 AND d.decision_kind='text_correction' AND d.status='open' AND f.scene_id=?2") .map_err(|error| sql_error("Textkorrekturen konnten nicht geladen werden", error))?;
+    let rows = statement
+        .query_map(params![input.project_id, input.scene_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })
+        .map_err(|error| sql_error("Textkorrekturen konnten nicht gelesen werden", error))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|error| sql_error("Textkorrekturen konnten nicht gelesen werden", error))?;
+    for (decision_id, finding_type, subject_entity_id) in rows {
+        let remains: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM continuity_review_findings WHERE run_id=?1 AND finding_type=?2 AND (subject_entity_id=?3 OR (subject_entity_id IS NULL AND ?3 IS NULL)) AND review_status='open')", params![input.run_id, finding_type, subject_entity_id], |row| row.get(0)).map_err(|error| sql_error("Textkorrektur konnte nicht abgeglichen werden", error))?;
+        if !remains {
+            tx.execute("UPDATE continuity_review_decisions SET status='resolved_after_text_change', content_hash=?2, updated_at=?3 WHERE id=?1", params![decision_id, input.content_hash, now()]).map_err(|error| sql_error("Textkorrekturentscheidung konnte nicht abgeschlossen werden", error))?;
+            let finding_id: String = tx
+                .query_row(
+                    "SELECT finding_id FROM continuity_review_decisions WHERE id=?1",
+                    params![decision_id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| {
+                    sql_error("Textkorrektur-Finding konnte nicht geladen werden", error)
+                })?;
+            tx.execute("UPDATE continuity_review_findings SET review_status='resolved', user_decision='resolved_after_text_change', updated_at=?2 WHERE id=?1", params![finding_id, now()]).map_err(|error| sql_error("Finding konnte nach Textkorrektur nicht gelöst werden", error))?;
+        }
+    }
+    drop(statement);
+    tx.commit()
+        .map_err(|error| sql_error("Textkorrektur konnte nicht abgeschlossen werden", error))
+}
+
+#[tauri::command]
+pub fn list_continuity_canon_change_audits(
+    state: State<'_, DbState>,
+    project_id: String,
+    finding_id: Option<String>,
+) -> Result<Vec<ContinuityCanonChangeAudit>, String> {
+    let db = lock_db(&state)?;
+    let result = db.prepare("SELECT id, finding_id, project_id, target_entity_id, target_state_id, action, reason, previous_source_reference_id, new_source_reference_id, source_reference_ids_json, payload_json, created_at FROM continuity_canon_change_audits WHERE project_id=?1 AND (?2 IS NULL OR finding_id=?2) ORDER BY created_at DESC").map_err(|error| sql_error("Kanon-Audits konnten nicht geladen werden", error))?.query_map(params![project_id, finding_id], continuity_canon_audit_from_row).map_err(|error| sql_error("Kanon-Audits konnten nicht gelesen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Kanon-Audits konnten nicht gelesen werden", error));
+    result
+}
+
 fn validate_plot_thread(db: &Connection, project_id: &str, entity_id: &str) -> Result<(), String> {
     project_entity_exists(db, project_id, entity_id, Some("plot_thread"))
 }
@@ -3668,7 +3954,7 @@ pub fn list_plot_thread_lifecycle_proposals(
     run_id: Option<String>,
 ) -> Result<Vec<PlotThreadLifecycleProposal>, String> {
     let db = lock_db(&state)?;
-    let mut statement = db.prepare("SELECT id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, source_reference_id, start_offset, end_offset, reason, review_status, reviewed_at, created_at FROM plot_thread_lifecycle_proposals WHERE project_id=?1 AND (?2 IS NULL OR run_id=?2) ORDER BY created_at DESC").map_err(|error| sql_error("Handlungsstrang-Vorschläge konnten nicht geladen werden", error))?;
+    let mut statement = db.prepare("SELECT id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, source_reference_id, start_offset, end_offset, reason, confidence, review_status, reviewed_at, created_at FROM plot_thread_lifecycle_proposals WHERE project_id=?1 AND (?2 IS NULL OR run_id=?2) ORDER BY created_at DESC").map_err(|error| sql_error("Handlungsstrang-Vorschläge konnten nicht geladen werden", error))?;
     let result = statement
         .query_map(params![project_id, run_id], lifecycle_proposal_from_row)
         .map_err(|error| {
@@ -3718,8 +4004,12 @@ pub fn save_plot_thread_lifecycle_proposal(
     if status != "pending" && !matches!(status.as_str(), "accepted" | "edited" | "rejected") {
         return Err("Ungültiger Handlungsstrang-Reviewstatus.".into());
     }
-    db.execute("INSERT INTO plot_thread_lifecycle_proposals (id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, source_reference_id, start_offset, end_offset, reason, review_status, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) ON CONFLICT(id) DO UPDATE SET proposed_status=excluded.proposed_status, reason=excluded.reason, source_reference_id=excluded.source_reference_id, review_status=excluded.review_status", params![id, input.run_id, input.project_id, input.entity_id, input.proposed_status, input.evidence_excerpt, input.source_reference_id, input.start_offset, input.end_offset, input.reason, status, now()]).map_err(|error| sql_error("Handlungsstrang-Vorschlag konnte nicht gespeichert werden", error))?;
-    db.query_row("SELECT id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, source_reference_id, start_offset, end_offset, reason, review_status, reviewed_at, created_at FROM plot_thread_lifecycle_proposals WHERE id=?1", params![id], lifecycle_proposal_from_row).map_err(|error| sql_error("Handlungsstrang-Vorschlag konnte nicht geladen werden", error))
+    if input.proposed_status == "resolved" {
+        return Err("Der AI-Vorschlag darf keinen resolved-Status setzen.".into());
+    }
+    validate_probability(input.confidence, "Die Handlungsstrang-Confidence")?;
+    db.execute("INSERT INTO plot_thread_lifecycle_proposals (id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, source_reference_id, start_offset, end_offset, reason, confidence, review_status, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13) ON CONFLICT(id) DO UPDATE SET proposed_status=excluded.proposed_status, reason=excluded.reason, source_reference_id=excluded.source_reference_id, confidence=excluded.confidence, review_status=excluded.review_status", params![id, input.run_id, input.project_id, input.entity_id, input.proposed_status, input.evidence_excerpt, input.source_reference_id, input.start_offset, input.end_offset, input.reason, input.confidence, status, now()]).map_err(|error| sql_error("Handlungsstrang-Vorschlag konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, source_reference_id, start_offset, end_offset, reason, confidence, review_status, reviewed_at, created_at FROM plot_thread_lifecycle_proposals WHERE id=?1", params![id], lifecycle_proposal_from_row).map_err(|error| sql_error("Handlungsstrang-Vorschlag konnte nicht geladen werden", error))
 }
 
 #[tauri::command]
@@ -3733,7 +4023,7 @@ pub fn review_plot_thread_lifecycle_proposal(
         return Err("Ungültiger Handlungsstrang-Reviewstatus.".into());
     }
     let db = lock_db(&state)?;
-    let proposal = db.query_row("SELECT id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, source_reference_id, start_offset, end_offset, reason, review_status, reviewed_at, created_at FROM plot_thread_lifecycle_proposals WHERE id=?1", params![id], lifecycle_proposal_from_row).map_err(|error| sql_error("Handlungsstrang-Vorschlag konnte nicht geladen werden", error))?;
+    let proposal = db.query_row("SELECT id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, source_reference_id, start_offset, end_offset, reason, confidence, review_status, reviewed_at, created_at FROM plot_thread_lifecycle_proposals WHERE id=?1", params![id], lifecycle_proposal_from_row).map_err(|error| sql_error("Handlungsstrang-Vorschlag konnte nicht geladen werden", error))?;
     if proposal.review_status != "pending" {
         return Err("Dieser Handlungsstrang-Vorschlag wurde bereits geprüft.".into());
     }
@@ -3745,7 +4035,7 @@ pub fn review_plot_thread_lifecycle_proposal(
         if !lifecycle_status_valid(&status) {
             return Err("Unbekannter Handlungsstrangstatus.".into());
         }
-        tx.execute("INSERT INTO plot_thread_lifecycle (id, project_id, entity_id, lifecycle_status, updated_at) VALUES (COALESCE((SELECT id FROM plot_thread_lifecycle WHERE entity_id=?1),?2),?3,?1,?4,?5) ON CONFLICT(entity_id) DO UPDATE SET lifecycle_status=excluded.lifecycle_status, updated_at=excluded.updated_at", params![proposal.entity_id, new_id(), proposal.project_id, status, now()]).map_err(|error| sql_error("Handlungsstrangstatus konnte nicht übernommen werden", error))?;
+        tx.execute("INSERT INTO plot_thread_lifecycle (id, project_id, entity_id, lifecycle_status, last_source_reference_id, updated_at) VALUES (COALESCE((SELECT id FROM plot_thread_lifecycle WHERE entity_id=?1),?2),?3,?1,?4,?5,?6) ON CONFLICT(entity_id) DO UPDATE SET lifecycle_status=excluded.lifecycle_status, last_source_reference_id=excluded.last_source_reference_id, updated_at=excluded.updated_at", params![proposal.entity_id, new_id(), proposal.project_id, status, proposal.source_reference_id, now()]).map_err(|error| sql_error("Handlungsstrangstatus konnte nicht übernommen werden", error))?;
     }
     tx.execute(
         "UPDATE plot_thread_lifecycle_proposals SET review_status=?2, reviewed_at=?3 WHERE id=?1",
@@ -3763,7 +4053,7 @@ pub fn review_plot_thread_lifecycle_proposal(
             error,
         )
     })?;
-    db.query_row("SELECT id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, source_reference_id, start_offset, end_offset, reason, review_status, reviewed_at, created_at FROM plot_thread_lifecycle_proposals WHERE id=?1", params![id], lifecycle_proposal_from_row).map_err(|error| sql_error("Handlungsstrangreview konnte nicht geladen werden", error))
+    db.query_row("SELECT id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, source_reference_id, start_offset, end_offset, reason, confidence, review_status, reviewed_at, created_at FROM plot_thread_lifecycle_proposals WHERE id=?1", params![id], lifecycle_proposal_from_row).map_err(|error| sql_error("Handlungsstrangreview konnte nicht geladen werden", error))
 }
 
 fn validate_character(db: &Connection, project_id: &str, character_id: &str) -> Result<(), String> {
@@ -6464,7 +6754,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            19
+            20
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);

@@ -535,6 +535,8 @@ pub struct ManuscriptAnalysisDraftLedgerEntry {
     pub scene_id: String,
     pub start_offset: Option<i64>,
     pub end_offset: Option<i64>,
+    pub source_excerpt: String,
+    pub source_reference_id: Option<String>,
     pub confidence: f64,
     pub status: String,
     pub created_at: String,
@@ -557,6 +559,9 @@ pub struct SaveManuscriptAnalysisDraftLedgerInput {
     pub scene_id: String,
     pub start_offset: Option<i64>,
     pub end_offset: Option<i64>,
+    #[serde(default)]
+    pub source_excerpt: String,
+    pub source_reference_id: Option<String>,
     pub confidence: f64,
     pub status: Option<String>,
 }
@@ -627,6 +632,83 @@ pub struct SaveContinuityFindingInput {
     pub user_decision: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContinuityFindingDecision {
+    pub id: String,
+    pub finding_id: String,
+    pub project_id: String,
+    pub status: String,
+    pub decision_kind: String,
+    pub rule_id: Option<String>,
+    pub rule_proposal_id: Option<String>,
+    pub open_question_entity_id: Option<String>,
+    pub source_reference_id: Option<String>,
+    pub exception_reason: Option<String>,
+    pub content_hash: Option<String>,
+    pub payload: serde_json::Value,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContinuityCanonChangeAudit {
+    pub id: String,
+    pub finding_id: String,
+    pub project_id: String,
+    pub target_entity_id: Option<String>,
+    pub target_state_id: Option<String>,
+    pub action: String,
+    pub reason: String,
+    pub previous_source_reference_id: Option<String>,
+    pub new_source_reference_id: Option<String>,
+    pub source_reference_ids: Vec<String>,
+    pub payload: serde_json::Value,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyContinuityFindingDecisionInput {
+    pub finding_id: String,
+    pub project_id: String,
+    pub status: String,
+    pub decision_kind: String,
+    pub rule_id: Option<String>,
+    pub rule_proposal_id: Option<String>,
+    pub open_question_entity_id: Option<String>,
+    pub source_reference_id: Option<String>,
+    pub exception_reason: Option<String>,
+    pub content_hash: Option<String>,
+    #[serde(default)]
+    pub payload: serde_json::Value,
+    pub canon_action: Option<String>,
+    pub canon_target_entity_id: Option<String>,
+    pub canon_target_state_id: Option<String>,
+    pub canon_reason: Option<String>,
+    #[serde(default)]
+    pub canon_source_reference_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconcileContinuityTextCorrectionInput {
+    pub project_id: String,
+    pub scene_id: String,
+    pub run_id: String,
+    pub content_hash: String,
+    pub findings: Vec<ReconcileContinuityFindingSignature>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconcileContinuityFindingSignature {
+    pub finding_type: String,
+    pub subject_entity_id: Option<String>,
+    pub objective_conflict: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContinuityCounterEvidence {
@@ -676,6 +758,7 @@ pub struct PlotThreadLifecycleProposal {
     pub start_offset: Option<i64>,
     pub end_offset: Option<i64>,
     pub reason: String,
+    pub confidence: f64,
     pub review_status: String,
     pub reviewed_at: Option<String>,
     pub created_at: String,
@@ -695,6 +778,8 @@ pub struct SavePlotThreadLifecycleProposalInput {
     pub start_offset: Option<i64>,
     pub end_offset: Option<i64>,
     pub reason: String,
+    #[serde(default)]
+    pub confidence: f64,
     pub review_status: Option<String>,
 }
 

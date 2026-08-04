@@ -6,7 +6,7 @@ import { editorContentToPlainText } from '../../utils/editorContent';
 import { FoundationsView, type FoundationTab } from './FoundationsView';
 import { ContinuityView } from './ContinuityView';
 
-const typeLabels: Record<EntityType, string> = { character: 'Charakter', relationship: 'Beziehung', place: 'Ort', organization: 'Organisation', world_rule: 'Weltregel', object: 'Gegenstand', event: 'Ereignis', fact: 'Fakt', clue: 'Hinweis', secret: 'Geheimnis', plot_thread: 'Handlungsstrang', retcon: 'Retcon', author_note: 'Autorennotiz' };
+const typeLabels: Record<EntityType, string> = { character: 'Charakter', relationship: 'Beziehung', place: 'Ort', organization: 'Organisation', world_rule: 'Weltregel', object: 'Gegenstand', event: 'Ereignis', fact: 'Fakt', clue: 'Hinweis', secret: 'Geheimnis', plot_thread: 'Handlungsstrang', retcon: 'Retcon', author_note: 'Autorennotiz', open_question: 'Offene Frage' };
 const statusLabels: Record<EntityStatus, string> = { confirmed: 'Bestätigt', proposed: 'Vorgeschlagen', uncertain: 'Vermutung', contradicted: 'Widersprochen', retconned: 'Retcon', archived: 'Archiviert' };
 const emptyForm = (projectId: string): CreateStoryEntityInput => ({ projectId, name: '', type: 'fact', description: '', status: 'proposed', confidence: 0.7, excerpt: '', authorConfirmed: false, tags: [] });
 
