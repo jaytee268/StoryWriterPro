@@ -175,13 +175,14 @@ fn scene_from_row(row: &rusqlite::Row<'_>) -> SqlResult<Scene> {
         status: row.get(8)?,
         goal: row.get(9)?,
         notes: row.get(10)?,
-        created_at: row.get(11)?,
-        updated_at: row.get(12)?,
+        is_implicit: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
     })
 }
 
 fn load_scene(db: &Connection, scene_id: &str) -> Result<Scene, String> {
-    db.query_row("SELECT id, chapter_id, title, order_index, content, pov, location, story_time, status, goal, notes, created_at, updated_at FROM scenes WHERE id=?1", params![scene_id], scene_from_row).map_err(|error| sql_error("Szene konnte nicht geladen werden", error))
+    db.query_row("SELECT id, chapter_id, title, order_index, content, pov, location, story_time, status, goal, notes, is_implicit, created_at, updated_at FROM scenes WHERE id=?1", params![scene_id], scene_from_row).map_err(|error| sql_error("Szene konnte nicht geladen werden", error))
 }
 
 fn scene_input_from_scene(scene: &Scene) -> SceneInput {
@@ -197,6 +198,7 @@ fn scene_input_from_scene(scene: &Scene) -> SceneInput {
         status: scene.status.clone(),
         goal: scene.goal.clone(),
         notes: scene.notes.clone(),
+        is_implicit: scene.is_implicit,
     }
 }
 
@@ -348,7 +350,7 @@ fn load_scene_versions(db: &Connection, scene_id: &str) -> Result<Vec<SceneVersi
 
 fn load_chapter(db: &Connection, chapter_id: &str) -> Result<Chapter, String> {
     let mut chapter = db.query_row("SELECT id, book_id, title, order_index, created_at, updated_at FROM chapters WHERE id=?1", params![chapter_id], |row| Ok(Chapter { id: row.get(0)?, book_id: row.get(1)?, title: row.get(2)?, order_index: row.get(3)?, scenes: Vec::new(), created_at: row.get(4)?, updated_at: row.get(5)? })).map_err(|error| sql_error("Kapitel konnte nicht geladen werden", error))?;
-    let mut statement = db.prepare("SELECT id, chapter_id, title, order_index, content, pov, location, story_time, status, goal, notes, created_at, updated_at FROM scenes WHERE chapter_id=?1 ORDER BY order_index, created_at").map_err(|error| sql_error("Szenen konnten nicht geladen werden", error))?;
+    let mut statement = db.prepare("SELECT id, chapter_id, title, order_index, content, pov, location, story_time, status, goal, notes, is_implicit, created_at, updated_at FROM scenes WHERE chapter_id=?1 ORDER BY order_index, created_at").map_err(|error| sql_error("Szenen konnten nicht geladen werden", error))?;
     chapter.scenes = statement
         .query_map(params![chapter_id], scene_from_row)
         .map_err(|error| sql_error("Szenen konnten nicht geladen werden", error))?
@@ -576,6 +578,7 @@ pub(crate) fn import_manuscript_in_db(
             status: "draft".into(),
             goal: String::new(),
             notes: String::new(),
+            is_implicit: true,
             created_at: timestamp.clone(),
             updated_at: timestamp.clone(),
         };
@@ -587,7 +590,7 @@ pub(crate) fn import_manuscript_in_db(
             .map_err(|error| sql_error("Kapitel konnte nicht importiert werden", error))?;
         transaction
             .execute(
-                "INSERT INTO scenes (id, chapter_id, title, order_index, content, pov, location, story_time, status, goal, notes, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
+                "INSERT INTO scenes (id, chapter_id, title, order_index, content, pov, location, story_time, status, goal, notes, is_implicit, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?12)",
                 params![scene.id, scene.chapter_id, scene.title, scene.order_index, scene.content, scene.pov, scene.location, scene.story_time, scene.status, scene.goal, scene.notes, timestamp],
             )
             .map_err(|error| sql_error("Kapiteltext konnte nicht importiert werden", error))?;
@@ -3201,27 +3204,37 @@ pub fn update_continuity_review_run_status(
 }
 
 fn manuscript_analysis_job_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ManuscriptAnalysisJob> {
-    let page_markers_json: String = row.get(10)?;
+    let phase_progress_json: String = row.get(6)?;
+    let phase_errors_json: String = row.get(7)?;
+    let page_markers_json: String = row.get(14)?;
+    let phase_progress =
+        serde_json::from_str(&phase_progress_json).unwrap_or_else(|_| serde_json::json!({}));
+    let phase_errors =
+        serde_json::from_str(&phase_errors_json).unwrap_or_else(|_| serde_json::json!({}));
     let page_markers = serde_json::from_str::<Vec<ManuscriptAnalysisPageMarker>>(
         &page_markers_json,
     )
-    .map_err(|error| rusqlite::Error::FromSqlConversionFailure(10, Type::Text, Box::new(error)))?;
+    .map_err(|error| rusqlite::Error::FromSqlConversionFailure(14, Type::Text, Box::new(error)))?;
     Ok(ManuscriptAnalysisJob {
         id: row.get(0)?,
         project_id: row.get(1)?,
         book_id: row.get(2)?,
         import_reference: row.get(3)?,
         status: row.get(4)?,
-        total_units: row.get(5)?,
-        completed_units: row.get(6)?,
-        failed_units: row.get(7)?,
-        current_unit_id: row.get(8)?,
-        provider_id: row.get(9)?,
+        current_phase: row.get(5)?,
+        phase_progress,
+        phase_errors,
+        total_units: row.get(8)?,
+        completed_units: row.get(9)?,
+        failed_units: row.get(10)?,
+        current_unit_id: row.get(11)?,
+        last_successful_unit_id: row.get(12)?,
+        provider_id: row.get(13)?,
         page_markers,
-        created_at: row.get(11)?,
-        updated_at: row.get(12)?,
-        completed_at: row.get(13)?,
-        error_message: row.get(14)?,
+        created_at: row.get(15)?,
+        updated_at: row.get(16)?,
+        completed_at: row.get(17)?,
+        error_message: row.get(18)?,
     })
 }
 
@@ -3241,10 +3254,16 @@ fn manuscript_analysis_unit_from_row(row: &rusqlite::Row<'_>) -> SqlResult<Manus
         status: row.get(11)?,
         retry_count: row.get(12)?,
         continuity_run_id: row.get(13)?,
-        error_message: row.get(14)?,
-        created_at: row.get(15)?,
-        updated_at: row.get(16)?,
-        completed_at: row.get(17)?,
+        requested_provider: row.get(14)?,
+        actual_provider: row.get(15)?,
+        prompt_version: row.get(16)?,
+        input_hash: row.get(17)?,
+        output_hash: row.get(18)?,
+        error_code: row.get(19)?,
+        error_message: row.get(20)?,
+        created_at: row.get(21)?,
+        updated_at: row.get(22)?,
+        completed_at: row.get(23)?,
     })
 }
 
@@ -3302,7 +3321,7 @@ pub fn create_manuscript_analysis_job(
     required(&input.import_reference, "Die Importreferenz")?;
     let db = lock_db(&state)?;
     validate_book_project(&db, &input.project_id, &input.book_id)?;
-    if let Some(existing) = db.query_row("SELECT id, project_id, book_id, import_reference, status, total_units, completed_units, failed_units, current_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE project_id=?1 AND import_reference=?2", params![input.project_id, input.import_reference], manuscript_analysis_job_from_row).optional().map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geprüft werden", error))? {
+    if let Some(existing) = db.query_row("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE project_id=?1 AND import_reference=?2", params![input.project_id, input.import_reference], manuscript_analysis_job_from_row).optional().map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geprüft werden", error))? {
         return Ok(existing);
     }
     let tx = db
@@ -3312,7 +3331,7 @@ pub fn create_manuscript_analysis_job(
     let stamp = now();
     let page_markers_json = serde_json::to_string(&input.page_markers)
         .map_err(|error| format!("Seitenmarker konnten nicht serialisiert werden: {error}"))?;
-    tx.execute("INSERT INTO manuscript_analysis_jobs (id, project_id, book_id, import_reference, status, total_units, provider_id, page_markers_json, created_at, updated_at) VALUES (?1,?2,?3,?4,'pending',?5,?6,?7,?8,?8)", params![job_id, input.project_id, input.book_id, input.import_reference, input.units.len() as i64, input.provider_id, page_markers_json, stamp]).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht gespeichert werden", error))?;
+    tx.execute("INSERT INTO manuscript_analysis_jobs (id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, provider_id, page_markers_json, created_at, updated_at) VALUES (?1,?2,?3,?4,'pending','structure','{}','{}',?5,?6,?7,?8,?8)", params![job_id, input.project_id, input.book_id, input.import_reference, input.units.len() as i64, input.provider_id, page_markers_json, stamp]).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht gespeichert werden", error))?;
     for unit in &input.units {
         if unit.start_offset < 0
             || unit.end_offset < unit.start_offset
@@ -3333,7 +3352,7 @@ pub fn create_manuscript_analysis_job(
         if !chapter_matches {
             return Err("Kapitel und Szene einer Prüfeinheit passen nicht zusammen.".into());
         }
-        tx.execute("INSERT INTO manuscript_analysis_units (id, job_id, project_id, chapter_id, scene_id, order_index, page_number, start_offset, end_offset, content, content_hash, status, retry_count, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'pending',0,?12,?12)", params![unit.id.clone().unwrap_or_else(new_id), job_id, input.project_id, unit.chapter_id, unit.scene_id, unit.order_index, unit.page_number, unit.start_offset, unit.end_offset, unit.content, unit.content_hash, stamp]).map_err(|error| sql_error("Manuskriptprüfeinheit konnte nicht gespeichert werden", error))?;
+        tx.execute("INSERT INTO manuscript_analysis_units (id, job_id, project_id, chapter_id, scene_id, order_index, page_number, start_offset, end_offset, content, content_hash, status, retry_count, requested_provider, prompt_version, input_hash, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'pending',0,?12,'manuscript-analysis-v1',?11,?13,?13)", params![unit.id.clone().unwrap_or_else(new_id), job_id, input.project_id, unit.chapter_id, unit.scene_id, unit.order_index, unit.page_number, unit.start_offset, unit.end_offset, unit.content, unit.content_hash, input.provider_id, stamp]).map_err(|error| sql_error("Manuskriptprüfeinheit konnte nicht gespeichert werden", error))?;
     }
     tx.commit().map_err(|error| {
         sql_error(
@@ -3341,7 +3360,7 @@ pub fn create_manuscript_analysis_job(
             error,
         )
     })?;
-    db.query_row("SELECT id, project_id, book_id, import_reference, status, total_units, completed_units, failed_units, current_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE id=?1", params![job_id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geladen werden", error))
+    db.query_row("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE id=?1", params![job_id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geladen werden", error))
 }
 
 #[tauri::command]
@@ -3350,7 +3369,7 @@ pub fn list_manuscript_analysis_jobs(
     project_id: String,
 ) -> Result<Vec<ManuscriptAnalysisJob>, String> {
     let db = lock_db(&state)?;
-    let result = db.prepare("SELECT id, project_id, book_id, import_reference, status, total_units, completed_units, failed_units, current_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE project_id=?1 ORDER BY updated_at DESC").map_err(|error| sql_error("Manuskriptanalysejobs konnten nicht geladen werden", error))?.query_map(params![project_id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejobs konnten nicht gelesen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Manuskriptanalysejobs konnten nicht gelesen werden", error));
+    let result = db.prepare("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE project_id=?1 ORDER BY updated_at DESC").map_err(|error| sql_error("Manuskriptanalysejobs konnten nicht geladen werden", error))?.query_map(params![project_id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejobs konnten nicht gelesen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Manuskriptanalysejobs konnten nicht gelesen werden", error));
     result
 }
 
@@ -3360,7 +3379,7 @@ pub fn get_manuscript_analysis_job(
     id: String,
 ) -> Result<ManuscriptAnalysisJob, String> {
     let db = lock_db(&state)?;
-    db.query_row("SELECT id, project_id, book_id, import_reference, status, total_units, completed_units, failed_units, current_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE id=?1", params![id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geladen werden", error))
+    db.query_row("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE id=?1", params![id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geladen werden", error))
 }
 
 #[tauri::command]
@@ -3369,7 +3388,7 @@ pub fn list_manuscript_analysis_units(
     job_id: String,
 ) -> Result<Vec<ManuscriptAnalysisUnit>, String> {
     let db = lock_db(&state)?;
-    let result = db.prepare("SELECT id, job_id, project_id, chapter_id, scene_id, order_index, page_number, start_offset, end_offset, content, content_hash, status, retry_count, continuity_run_id, error_message, created_at, updated_at, completed_at FROM manuscript_analysis_units WHERE job_id=?1 ORDER BY order_index ASC").map_err(|error| sql_error("Manuskriptprüfeinheiten konnten nicht geladen werden", error))?.query_map(params![job_id], manuscript_analysis_unit_from_row).map_err(|error| sql_error("Manuskriptprüfeinheiten konnten nicht gelesen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Manuskriptprüfeinheiten konnten nicht gelesen werden", error));
+    let result = db.prepare("SELECT id, job_id, project_id, chapter_id, scene_id, order_index, page_number, start_offset, end_offset, content, content_hash, status, retry_count, continuity_run_id, requested_provider, actual_provider, prompt_version, input_hash, output_hash, error_code, error_message, created_at, updated_at, completed_at FROM manuscript_analysis_units WHERE job_id=?1 ORDER BY order_index ASC").map_err(|error| sql_error("Manuskriptprüfeinheiten konnten nicht geladen werden", error))?.query_map(params![job_id], manuscript_analysis_unit_from_row).map_err(|error| sql_error("Manuskriptprüfeinheiten konnten nicht gelesen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Manuskriptprüfeinheiten konnten nicht gelesen werden", error));
     result
 }
 
@@ -3387,8 +3406,16 @@ pub fn update_manuscript_analysis_job(
     } else {
         None
     };
-    db.execute("UPDATE manuscript_analysis_jobs SET status=?2, current_unit_id=?3, error_message=?4, completed_at=?5, completed_units=(SELECT COUNT(*) FROM manuscript_analysis_units WHERE job_id=?1 AND status IN ('completed','skipped')), failed_units=(SELECT COUNT(*) FROM manuscript_analysis_units WHERE job_id=?1 AND status='failed'), updated_at=?6 WHERE id=?1", params![input.id, input.status, input.current_unit_id, input.error_message, completed_at, now()]).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht aktualisiert werden", error))?;
-    db.query_row("SELECT id, project_id, book_id, import_reference, status, total_units, completed_units, failed_units, current_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE id=?1", params![input.id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geladen werden", error))
+    let phase_progress = input
+        .phase_progress
+        .as_ref()
+        .map(serde_json::Value::to_string);
+    let phase_errors = input
+        .phase_errors
+        .as_ref()
+        .map(serde_json::Value::to_string);
+    db.execute("UPDATE manuscript_analysis_jobs SET status=?2, current_phase=COALESCE(?3,current_phase), phase_progress_json=COALESCE(?4,phase_progress_json), phase_errors_json=COALESCE(?5,phase_errors_json), current_unit_id=?6, last_successful_unit_id=COALESCE(?7,last_successful_unit_id), error_message=?8, completed_at=?9, completed_units=(SELECT COUNT(*) FROM manuscript_analysis_units WHERE job_id=?1 AND status IN ('completed','skipped')), failed_units=(SELECT COUNT(*) FROM manuscript_analysis_units WHERE job_id=?1 AND status='failed'), updated_at=?10 WHERE id=?1", params![input.id, input.status, input.current_phase, phase_progress, phase_errors, input.current_unit_id, input.last_successful_unit_id, input.error_message, completed_at, now()]).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht aktualisiert werden", error))?;
+    db.query_row("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE id=?1", params![input.id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geladen werden", error))
 }
 
 #[tauri::command]
@@ -3405,8 +3432,8 @@ pub fn update_manuscript_analysis_unit(
     } else {
         None
     };
-    db.execute("UPDATE manuscript_analysis_units SET status=?2, retry_count=COALESCE(?3,retry_count), continuity_run_id=?4, content=COALESCE(?5,content), content_hash=COALESCE(?6,content_hash), error_message=?7, completed_at=?8, updated_at=?9 WHERE id=?1", params![input.id, input.status, input.retry_count, input.continuity_run_id, input.content, input.content_hash, input.error_message, completed_at, now()]).map_err(|error| sql_error("Manuskriptprüfeinheit konnte nicht aktualisiert werden", error))?;
-    db.query_row("SELECT id, job_id, project_id, chapter_id, scene_id, order_index, page_number, start_offset, end_offset, content, content_hash, status, retry_count, continuity_run_id, error_message, created_at, updated_at, completed_at FROM manuscript_analysis_units WHERE id=?1", params![input.id], manuscript_analysis_unit_from_row).map_err(|error| sql_error("Manuskriptprüfeinheit konnte nicht geladen werden", error))
+    db.execute("UPDATE manuscript_analysis_units SET status=?2, retry_count=COALESCE(?3,retry_count), continuity_run_id=?4, requested_provider=COALESCE(?5,requested_provider), actual_provider=COALESCE(?6,actual_provider), prompt_version=COALESCE(?7,prompt_version), input_hash=COALESCE(?8,input_hash), output_hash=COALESCE(?9,output_hash), error_code=?10, content=COALESCE(?11,content), content_hash=COALESCE(?12,content_hash), error_message=?13, completed_at=?14, updated_at=?15 WHERE id=?1", params![input.id, input.status, input.retry_count, input.continuity_run_id, input.requested_provider, input.actual_provider, input.prompt_version, input.input_hash, input.output_hash, input.error_code, input.content, input.content_hash, input.error_message, completed_at, now()]).map_err(|error| sql_error("Manuskriptprüfeinheit konnte nicht aktualisiert werden", error))?;
+    db.query_row("SELECT id, job_id, project_id, chapter_id, scene_id, order_index, page_number, start_offset, end_offset, content, content_hash, status, retry_count, continuity_run_id, requested_provider, actual_provider, prompt_version, input_hash, output_hash, error_code, error_message, created_at, updated_at, completed_at FROM manuscript_analysis_units WHERE id=?1", params![input.id], manuscript_analysis_unit_from_row).map_err(|error| sql_error("Manuskriptprüfeinheit konnte nicht geladen werden", error))
 }
 
 #[tauri::command]
@@ -5899,6 +5926,7 @@ fn accept_chapter_generation_job_in_db(
             status: "draft".into(),
             goal: plan.chapter_goal.clone(),
             notes: String::new(),
+            is_implicit: false,
             created_at: now(),
             updated_at: now(),
         };
@@ -6236,6 +6264,7 @@ mod tests {
             .iter()
             .all(|chapter| chapter.scenes.len() == 1));
         assert_eq!(result.scenes.len(), 2);
+        assert!(result.scenes.iter().all(|scene| scene.is_implicit));
         assert_eq!(result.versions.len(), 2);
         assert!(result
             .versions
@@ -6244,6 +6273,15 @@ mod tests {
         assert_eq!(
             db.query_row(
                 "SELECT COUNT(*) FROM scenes WHERE chapter_id IN (?1, ?2)",
+                params![result.chapters[0].id, result.chapters[1].id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT COUNT(*) FROM scenes WHERE chapter_id IN (?1, ?2) AND is_implicit=1",
                 params![result.chapters[0].id, result.chapters[1].id],
                 |row| row.get::<_, i64>(0),
             )
@@ -6367,6 +6405,7 @@ mod tests {
             status: "revised".into(),
             goal: "Ein Ziel".into(),
             notes: "Eine Notiz".into(),
+            is_implicit: false,
         };
         update_scene_in_db(&db, input.clone()).unwrap();
         let version = create_scene_version_in_db(&db, "scene-1", "manual").unwrap();
@@ -6754,7 +6793,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            20
+            21
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);

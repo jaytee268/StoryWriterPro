@@ -11,7 +11,7 @@ vi.stubGlobal('localStorage', { getItem: (key: string) => values.get(key) ?? nul
 const emptyAnalysis = (): ContinuityAnalysisResult => ({ observedActions: [], proposedStateChanges: [], objectiveContradictions: [], missingExplanations: [], matchedLoreRules: [], newRuleProposals: [], plotThreadChanges: [], confidence: 0.8, evidence: [], warnings: [] });
 
 function fakeProvider(onAnalyze: (input: ContinuityAnalysisInput) => Promise<ContinuityAnalysisResult> | ContinuityAnalysisResult, cancelActive = vi.fn(async () => undefined)): StoryAiProvider {
-  return { id: 'codex-cli', analyzeContinuityPassage: vi.fn(onAnalyze), getStatus: vi.fn(), extractBiblePatch: vi.fn(), extractCharacterMemoryPatch: vi.fn(), analyzeProjectStyle: vi.fn(), summarize: vi.fn(), answerWithProjectContext: vi.fn(), cancel: vi.fn(), cancelActive } as unknown as StoryAiProvider;
+  return { id: 'codex-cli', analyzeContinuityPassage: vi.fn(onAnalyze), getStatus: vi.fn(), extractBiblePatch: vi.fn(async () => ({ proposals: [], warnings: [] })), extractCharacterMemoryPatch: vi.fn(async () => ({ proposals: [], warnings: [] })), analyzeProjectStyle: vi.fn(), summarize: vi.fn(async () => ({ summary: 'Fake-Synthese', importantEvents: [], openThreads: [], characterChanges: [], knowledgeChanges: [], relationshipEffects: [], warnings: [] })), answerWithProjectContext: vi.fn(), cancel: vi.fn(), cancelActive } as unknown as StoryAiProvider;
 }
 
 async function makeJob(repository: BrowserDemoRepository, importReference: string) {
@@ -103,5 +103,19 @@ describe('sequenzielle, fortsetzbare Manuskript-Continuity', () => {
   it('enthält im Importworkflow keine verschluckten catch(() => undefined)-Fehler', () => {
     const app = Object.values(import.meta.glob('../App.tsx', { eager: true, query: '?raw', import: 'default' }) as Record<string, string>)[0] ?? '';
     expect(app).not.toContain('catch(() => undefined)');
+  });
+
+  it('führt alle Analysephasen lokal orchestriert aus und bestätigt nichts automatisch', async () => {
+    const repository = new BrowserDemoRepository();
+    const { job } = await makeJob(repository, 'multipass');
+    const provider = fakeProvider(async () => emptyAnalysis());
+    await new ManuscriptAnalysisController(repository, job.id, provider).start();
+    const completed = await repository.getManuscriptAnalysisJob(job.id);
+    expect(completed.currentPhase).toBe('completed');
+    expect(Object.values(completed.phaseProgress).every((progress) => progress.status === 'completed')).toBe(true);
+    expect((await repository.listNarrativeSummaries(completed.projectId)).every((summary) => summary.status === 'proposed' && !summary.authorConfirmed)).toBe(true);
+    expect(await repository.listContinuityStateLedger(completed.projectId)).toEqual([]);
+    const units = await repository.listManuscriptAnalysisUnits(completed.id);
+    expect(units.every((unit) => unit.actualProvider === 'codex-cli' && unit.inputHash && unit.outputHash)).toBe(true);
   });
 });

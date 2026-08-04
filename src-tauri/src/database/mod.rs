@@ -539,6 +539,17 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
         ))?;
         connection.execute("INSERT INTO schema_migrations (version) VALUES (20)", [])?;
     }
+    let has_multi_pass_manuscript_analysis: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 21",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_multi_pass_manuscript_analysis == 0 {
+        connection.execute_batch(include_str!(
+            "../../../migrations/021_multi_pass_manuscript_analysis.sql"
+        ))?;
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (21)", [])?;
+    }
     Ok(())
 }
 
@@ -694,7 +705,7 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            20
+            21
         );
         assert_eq!(
             connection
@@ -946,7 +957,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                20
+                21
             );
             // Running startup migrations again must not change the assignment
             // or fail on the ALTER TABLE statement.
