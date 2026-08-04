@@ -33,7 +33,7 @@ export interface BibleProposalDraft { targetEntityId?: string; proposalAction: B
 export interface BibleExtractionInput { project: Project; chapter: Chapter; scene: Scene; existingEntities: StoryEntity[]; relevantSources?: StorySourceReference[]; previousAnalyzedContent?: string; changedRange?: { start: number; end: number }; }
 export interface BibleExtractionResult { proposals: BibleProposalDraft[]; warnings: string[]; }
 export interface BibleExtractor { readonly id: string; extract(input: BibleExtractionInput): Promise<BibleExtractionResult>; }
-export interface ContextRequest { projectId: string; currentChapterId?: string; currentSceneId?: string; userQuestion: string; includeProposedSummaries?: boolean; }
+export interface ContextRequest { projectId: string; currentChapterId?: string; currentSceneId?: string; userQuestion: string; includeProposedSummaries?: boolean; passageText?: string; passageStartOffset?: number; passageEndOffset?: number; }
 export type LoreCategory = 'world_rule' | 'history' | 'objective_truth' | 'belief' | 'myth' | 'mystery' | 'terminology';
 export type LoreScope = 'series' | 'book' | 'arc';
 export type LoreRevealState = 'author_only' | 'foreshadowed' | 'reader_revealed';

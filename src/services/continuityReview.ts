@@ -15,6 +15,7 @@ export interface ContinuityReviewRequest {
   currentText: string;
   previousText?: string;
   followingText?: string;
+  chronological?: boolean;
   sourceKind: ContinuityReviewSourceKind;
   startOffset?: number;
   endOffset?: number;
@@ -65,8 +66,23 @@ function isFuture(entry: ContinuityStateLedgerEntry, chapters: Chapter[], chapte
   return entryChapter.orderIndex > chapter.orderIndex || (entryChapter.orderIndex === chapter.orderIndex && (entryScene.orderIndex > scene.orderIndex || (entryScene.orderIndex === scene.orderIndex && offset !== undefined && (entry.startOffset ?? 0) > offset)));
 }
 
+function sourceIsAtOrBefore(source: StorySourceReference, chapters: Chapter[], chapter?: Chapter, scene?: Scene, offset?: number): boolean {
+  if (!chapter || !scene || !source.chapterId) return true;
+  const sourceChapter = chapters.find((item) => item.id === source.chapterId);
+  if (!sourceChapter) return false;
+  if (sourceChapter.orderIndex < chapter.orderIndex) return true;
+  if (sourceChapter.orderIndex > chapter.orderIndex) return false;
+  if (source.sceneId !== scene.id) {
+    if (!source.sceneId) return true;
+    const sourceScene = sourceChapter.scenes.find((item) => item.id === source.sceneId);
+    const targetScene = chapter.scenes.find((item) => item.id === scene.id);
+    return !sourceScene || !targetScene || sourceScene.orderIndex <= targetScene.orderIndex;
+  }
+  return offset === undefined || source.startOffset === undefined || source.startOffset <= offset;
+}
+
 export function buildContinuityPrefilter(input: ContinuityReviewRequest & { chapters: Chapter[]; entities: StoryEntity[]; ledger: ContinuityStateLedgerEntry[]; rules: ProjectRule[]; sources?: StorySourceReference[] }): ContinuityPrefilter {
-  const searchableText = `${input.previousText ?? ''}\n${input.currentText}\n${input.followingText ?? ''}`;
+  const searchableText = `${input.previousText ?? ''}\n${input.currentText}${input.chronological ? '' : `\n${input.followingText ?? ''}`}`;
   const passageStart = input.startOffset ?? 0;
   const passageEnd = input.endOffset ?? codepoints(input.currentText).length;
   const sourceIdsInPassage = new Set(input.sources?.filter((source) => source.chapterId === input.chapter?.id && source.sceneId === input.scene?.id && (source.startOffset === undefined || source.endOffset === undefined || (source.startOffset <= passageEnd && source.endOffset >= passageStart))).flatMap((source) => source.entityId ? [source.entityId] : []) ?? []);
@@ -87,8 +103,10 @@ export function detectContinuityFindings(_input: ContinuityReviewRequest & { cha
   return [];
 }
 
-function sourceEvidence(result: ContinuityAnalysisResult, currentText: string, startOffset?: number, endOffset?: number): string {
-  return result.evidence[0]?.excerpt?.trim() || codepoints(currentText).slice(startOffset ?? 0, endOffset).join('').trim() || codepoints(currentText).slice(0, 240).join('').trim();
+function sourceEvidence(result: ContinuityAnalysisResult, currentText: string, startOffset?: number, endOffset?: number, passageStartOffset = 0): string {
+  const relativeStart = startOffset === undefined ? 0 : Math.max(0, startOffset - passageStartOffset);
+  const relativeEnd = endOffset === undefined ? undefined : Math.max(0, endOffset - passageStartOffset);
+  return result.evidence[0]?.excerpt?.trim() || codepoints(currentText).slice(relativeStart, relativeEnd).join('').trim() || codepoints(currentText).slice(0, 240).join('').trim();
 }
 
 function normalizeRelativeOffsets<T extends { startOffset?: number; endOffset?: number; evidenceExcerpt?: string }>(item: T, text: string, passageStartOffset: number): T {
@@ -125,12 +143,12 @@ async function createEvidenceSource(repository: StoryRepository, projectId: stri
   return source.id;
 }
 
-async function saveFinding(repository: StoryRepository, runId: string, project: Project, chapter: Chapter | undefined, scene: Scene | undefined, chapters: Chapter[], item: ContinuityAnalysisResult['objectiveContradictions'][number], rules: ProjectRule[], sources: StorySourceReference[], result: ContinuityAnalysisResult, currentText: string, startOffset?: number, endOffset?: number): Promise<SaveContinuityFindingInput> {
+async function saveFinding(repository: StoryRepository, runId: string, project: Project, chapter: Chapter | undefined, scene: Scene | undefined, chapters: Chapter[], item: ContinuityAnalysisResult['objectiveContradictions'][number], rules: ProjectRule[], sources: StorySourceReference[], result: ContinuityAnalysisResult, currentText: string, startOffset?: number, endOffset?: number, passageStartOffset = 0): Promise<SaveContinuityFindingInput> {
   const explanations = result.matchedLoreRules.map((match) => {
     const rule = rules.find((candidate) => candidate.id === match.ruleId);
     return rule ? `${rule.title}: ${rule.statement} — ${match.rationale}` : match.rationale;
   });
-  const excerpt = item.evidenceExcerpt || sourceEvidence(result, currentText, startOffset, endOffset);
+  const excerpt = item.evidenceExcerpt || sourceEvidence(result, currentText, startOffset, endOffset, passageStartOffset);
   const absoluteStart = item.startOffset ?? startOffset;
   const absoluteEnd = item.endOffset ?? endOffset;
   if (item.sourceReferenceId && !sources.some((source) => source.id === item.sourceReferenceId)) throw new Error('Der AI-Finding verweist auf eine nicht übergebene Quelle.');
@@ -157,13 +175,13 @@ export async function runContinuityReview(repository: StoryRepository, input: Co
   const settings = await repository.getContinuityReviewSettings(input.project.id);
   const currentText = editorContentToPlainText(input.currentText);
   const previousText = input.previousText ? editorContentToPlainText(input.previousText) : undefined;
-  const followingText = input.followingText ? editorContentToPlainText(input.followingText) : undefined;
+  const followingText = input.chronological ? undefined : input.followingText ? editorContentToPlainText(input.followingText) : undefined;
   const correctionFindings = input.scene?.id ? await repository.listContinuityReviewFindings(input.project.id) : [];
   const correctionDecisions = input.scene?.id ? await repository.listContinuityFindingDecisions(input.project.id) : [];
   const pendingTextCorrection = Boolean(input.scene?.id && correctionDecisions.some((decision) => decision.decisionKind === 'text_correction' && decision.status === 'open' && correctionFindings.some((finding) => finding.id === decision.findingId && finding.sceneId === input.scene?.id)));
   if (!input.forceAnalysis && !pendingTextCorrection && !shouldRunContinuityReview(previousText, currentText, settings.wordThreshold, input.sourceKind)) return { runId: '', findings: [], stateProposals: [], draftStateChanges: [], analysis: { observedActions: [], proposedStateChanges: [], objectiveContradictions: [], missingExplanations: [], matchedLoreRules: [], newRuleProposals: [], plotThreadChanges: [], confidence: 0, evidence: [], warnings: ['Die konfigurierte Prüfschwelle wurde noch nicht erreicht.'] } };
   const hash = contentHash(`${currentText}\n${previousText ?? ''}\n${followingText ?? ''}`);
-  const previousRun = (await repository.listContinuityReviewRuns(input.project.id, input.chapter?.id, input.scene?.id)).find((run) => run.sourceKind === input.sourceKind && run.contentHash === hash && run.status === 'completed');
+  const previousRun = input.chronological ? undefined : (await repository.listContinuityReviewRuns(input.project.id, input.chapter?.id, input.scene?.id)).find((run) => run.sourceKind === input.sourceKind && run.contentHash === hash && run.status === 'completed');
   if (previousRun) return { runId: previousRun.id, findings: await repository.listContinuityReviewFindings(input.project.id, previousRun.id), stateProposals: [], draftStateChanges: [], analysis: { observedActions: [], proposedStateChanges: [], objectiveContradictions: [], missingExplanations: [], matchedLoreRules: [], newRuleProposals: [], plotThreadChanges: [], confidence: 0, evidence: [], warnings: ['Dieser Abschnitt wurde bereits mit demselben Inhalt geprüft.'] } };
 
   const entities = await repository.listStoryEntities(input.project.id);
@@ -186,10 +204,10 @@ export async function runContinuityReview(repository: StoryRepository, input: Co
   dialogueMemories.forEach((memory) => memory.participants.forEach((participant) => { if (memory.status === 'confirmed' && memory.authorConfirmed) candidateIds.add(participant.characterId); }));
   relationshipMemories.forEach((memory) => { if (memory.status === 'confirmed' && memory.authorConfirmed) { candidateIds.add(memory.characterAId); candidateIds.add(memory.characterBId); } });
   const confirmedEntities = entities.filter((entity) => entity.status === 'confirmed' && entity.authorConfirmed && (candidateIds.has(entity.id) || entity.type === 'plot_thread')).slice(0, 160);
-  const relevantSources = sources.filter((source) => !source.entityId || candidateIds.has(source.entityId) || (source.chapterId === input.chapter?.id && source.sceneId === input.scene?.id)).slice(0, 120);
-  const confirmedRules = rules.filter((rule) => rule.status === 'confirmed' && rule.authorConfirmed);
   const passageStartOffset = input.startOffset ?? 0;
   const passageEndOffset = input.endOffset ?? passageStartOffset + codepoints(currentText).length;
+  const relevantSources = sources.filter((source) => sourceIsAtOrBefore(source, workspace.chapters, input.chapter, input.scene, passageEndOffset) && (!source.entityId || candidateIds.has(source.entityId) || (source.chapterId === input.chapter?.id && source.sceneId === input.scene?.id))).slice(0, 120);
+  const confirmedRules = rules.filter((rule) => rule.status === 'confirmed' && rule.authorConfirmed);
   const relevantStates = [...prefilter.confirmedStates, ...(input.draftLedger ?? []).filter((entry) => candidateIds.has(entry.entityId))].filter((entry, index, all) => all.findIndex((candidate) => candidate.id === entry.id) === index);
   const characterIds = new Set(confirmedEntities.filter((entity) => entity.type === 'character').map((entity) => entity.id));
   const sceneOrder = new Map(workspace.chapters.flatMap((chapter) => chapter.scenes.map((scene, index) => [scene.id, chapter.orderIndex * 10000 + index] as const)));
@@ -213,7 +231,7 @@ export async function runContinuityReview(repository: StoryRepository, input: Co
     if (input.isCancelled?.()) throw new Error('Die Kontinuitätsprüfung wurde abgebrochen.');
     const allContradictions = [...result.objectiveContradictions, ...result.missingExplanations];
     const findings: SaveContinuityFindingInput[] = [];
-    for (const item of allContradictions) findings.push(await saveFinding(repository, run.id, input.project, input.chapter, input.scene, workspace.chapters, item, confirmedRules, relevantSources, result, currentText, passageStartOffset, passageEndOffset));
+    for (const item of allContradictions) findings.push(await saveFinding(repository, run.id, input.project, input.chapter, input.scene, workspace.chapters, item, confirmedRules, relevantSources, result, currentText, item.startOffset ?? passageStartOffset, item.endOffset ?? passageEndOffset, passageStartOffset));
     const savedFindings = findings.length ? await repository.saveContinuityReviewFindings(run.id, findings) : [];
     const stateProposals: ContinuityStateLedgerEntry[] = [];
     const draftStateChanges = result.proposedStateChanges.filter((item) => entities.some((entity) => entity.id === item.entityId && entity.projectId === input.project.id));

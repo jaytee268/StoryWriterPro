@@ -127,4 +127,57 @@ describe('sequenzielle, fortsetzbare Manuskript-Continuity', () => {
   it('persistiert Plot-, Endzustands- und Countercheck-Phasen getrennt und als jobgebundene Vorschläge', async () => {
     const repository = new BrowserDemoRepository(); const { job, source } = await makeJob(repository, 'structured-phases'); const workspace = await repository.loadWorkspace(); const thread = await repository.createStoryEntity({ projectId: workspace.project.id, name: 'Zettelfrage', type: 'plot_thread', description: 'Wer hinterließ den Zettel?', status: 'confirmed', confidence: 1, authorConfirmed: true, tags: [], excerpt: 'Zettelfrage' }); const provider = fakeProvider(async () => emptyAnalysis()); Object.assign(provider, { synthesizePlotThreads: vi.fn(async () => ({ summary: 'Spur bleibt offen.', openQuestions: ['Wer hinterließ den Zettel?'], threadGoals: ['Herkunft klären'], developments: ['Neue Spur'], closureCandidates: [], partiallyResolved: [], reopened: [], threadProposals: [{ entityId: thread.id, proposedStatus: 'closure_candidate' as const, evidenceExcerpt: 'Zettel wird fortgetragen.', sourceReferenceId: source.id, reason: 'Vorschlag', confidence: 0.7 }], warnings: [] })), analyzeBookEndState: vi.fn(async () => ({ summary: 'Endzustand', characterEndStates: ['Malik wartet.'], knowledgeStates: [], falseBeliefs: [], relationships: [], objectOwners: ['Zettel bei Malik'], injuries: [], locations: ['Zimmer'], openActions: ['Herkunft klären'], unresolvedThreads: ['Zettelfrage'], endStateProposals: [{ category: 'object_owner', entityId: undefined, statement: 'Zettel bei Malik', confidence: 0.6, evidenceExcerpt: 'Malik wartet.', sourceReferenceId: source.id }], warnings: [] })), globalCountercheck: vi.fn(async () => ({ summary: 'Gegenprüfung', contradictoryFacts: [], prematureKnowledge: [], lostOrDestroyedObjects: [], timeAndLocationConflicts: [], contradictoryRules: [], unclearExceptions: [], uncertainSources: [], countercheckFindings: [{ severity: 'warning' as const, category: 'object_state', objectiveConflict: 'Status offen', reason: 'Prüfen', confidence: 0.5, evidenceExcerpt: 'Zettel wird fortgetragen.', sourceReferenceId: source.id }], warnings: [] })) }); await new ManuscriptAnalysisController(repository, job.id, provider).start(); const phases = await repository.listManuscriptAnalysisPhaseResults(job.id); expect(phases.map((phase) => phase.phase)).toEqual(expect.arrayContaining(['narrative_summaries', 'plot_thread_synthesis', 'book_end_state', 'global_countercheck'])); const artifacts = await repository.listManuscriptAnalysisArtifacts(job.id); expect(artifacts.map((artifact) => artifact.artifactType)).toEqual(expect.arrayContaining(['plot_thread_proposal', 'book_end_state_proposal', 'global_countercheck_finding'])); expect((await repository.listPlotThreadLifecycleProposals(workspace.project.id)).every((proposal) => proposal.reviewStatus === 'pending')).toBe(true); expect((await repository.listContinuityReviewFindings(workspace.project.id)).some((finding) => finding.objectiveConflict === 'Status offen')).toBe(true);
   });
+
+  it('führt die Passage-Aufgaben pro Einheit chronologisch aus und übergibt keinen Zukunftstext', async () => {
+    const repository = new BrowserDemoRepository();
+    const { job, entity } = await makeJob(repository, 'chronological-pipeline');
+    await repository.saveProvisionalEntity({ id: 'future-provisional', jobId: job.id, projectId: job.projectId, entityType: 'character', canonicalName: 'Später genannt', aliases: [], description: 'Nur auf Seite 9', confidence: 0.9, reviewStatus: 'proposed' });
+    const calls: string[] = [];
+    const seenContinuity: ContinuityAnalysisInput[] = [];
+    const provider = fakeProvider(async (input) => { calls.push(`continuity:${input.passage.text}`); seenContinuity.push(input); return emptyAnalysis(); });
+    Object.assign(provider, {
+      resolveManuscriptEntityMentions: vi.fn(async (input) => { calls.push(`mentions:${input.passageText}`); expect(input.previousProvisionalEntities.some((item: { canonicalName: string }) => item.canonicalName === 'Später genannt')).toBe(false); return { entities: [], mentions: [], relations: [], events: [], mergeProposals: [], warnings: [] }; }),
+      extractBiblePatch: vi.fn(async (input) => { calls.push(`bible:${input.scene.content}`); expect(input.chapter.scenes).toHaveLength(1); expect(input.scene.content).toBe(input.chapter.scenes[0]?.content); return { proposals: [], warnings: [] }; }),
+      extractCharacterMemoryPatch: vi.fn(async (input) => { calls.push(`memory:${input.scene.content}`); if (input.scene.content.startsWith('Zettel')) expect(input.scene.content).not.toContain('Malik wartet.'); return { proposals: [], warnings: [] }; }),
+    });
+    await new ManuscriptAnalysisController(repository, job.id, provider).start();
+    expect(calls.slice(0, 8)).toEqual([
+      'mentions:Zettel wird fortgetragen.', 'bible:Zettel wird fortgetragen.', 'memory:Zettel wird fortgetragen.', 'continuity:Zettel wird fortgetragen.',
+      'mentions:Malik wartet.', 'bible:Malik wartet.', 'memory:Malik wartet.', 'continuity:Malik wartet.',
+    ]);
+    expect(seenContinuity.every((input) => input.followingContext === '')).toBe(true);
+    expect(seenContinuity[0]?.confirmedStoryBible.some((item) => item.id === entity.id)).toBe(true);
+  });
+
+  it('nimmt bei einer späteren Einheit nur bestätigte und frühere Zustände in den Request', async () => {
+    const repository = new BrowserDemoRepository();
+    const { job } = await makeJob(repository, 'temporal-context');
+    const workspace = await repository.loadWorkspace();
+    const future = await repository.createStoryEntity({ projectId: workspace.project.id, name: 'Spätere Figur', type: 'character', description: 'Erst auf Seite 9', status: 'confirmed', confidence: 1, authorConfirmed: true, tags: [], excerpt: 'Spätere Figur' });
+    await repository.createSourceReference({ projectId: workspace.project.id, entityId: future.id, chapterId: workspace.chapters[0]!.id, sceneId: workspace.chapters[0]!.scenes[0]!.id, excerpt: 'Malik wartet.', startOffset: 29, endOffset: 42 });
+    const seen: ContinuityAnalysisInput[] = [];
+    const provider = fakeProvider(async (input) => { seen.push(input); return emptyAnalysis(); });
+    Object.assign(provider, { resolveManuscriptEntityMentions: vi.fn(async () => ({ entities: [], mentions: [], relations: [], events: [], mergeProposals: [], warnings: [] })) });
+    await new ManuscriptAnalysisController(repository, job.id, provider).start();
+    expect(seen[0]?.confirmedStoryBible.some((item) => item.id === future.id)).toBe(false);
+    expect(seen[0]?.relevantSources.some((source) => source.entityId === future.id)).toBe(false);
+  });
+
+  it('setzt bei einer früheren Textänderung die aktuelle und alle späteren Einheiten zurück', async () => {
+    const repository = new BrowserDemoRepository();
+    const { job } = await makeJob(repository, 'invalidate-later');
+    const initial: string[] = [];
+    const provider = fakeProvider(async (input) => { initial.push(input.passage.text); return emptyAnalysis(); });
+    const controller = new ManuscriptAnalysisController(repository, job.id, provider);
+    await controller.start();
+    expect(initial).toHaveLength(2);
+    const workspace = await repository.loadWorkspace();
+    const scene = workspace.chapters[0]!.scenes[0]!;
+    await repository.updateScene({ ...scene, content: 'Zettel wird fortgetragen!\n\nMalik wartet.' });
+    const rerun: string[] = [];
+    const rerunProvider = fakeProvider(async (input) => { rerun.push(input.passage.text); return emptyAnalysis(); });
+    await new ManuscriptAnalysisController(repository, job.id, rerunProvider).start();
+    expect(rerun).toEqual(['Zettel wird fortgetragen!', 'Malik wartet.']);
+    expect((await repository.listManuscriptAnalysisUnits(job.id)).every((unit) => unit.status === 'completed')).toBe(true);
+  });
 });
