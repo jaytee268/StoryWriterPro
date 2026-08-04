@@ -93,9 +93,11 @@ export class ManuscriptAnalysisController {
     const openArtifacts = artifacts.filter((artifact) => artifact.reviewStatus === 'pending');
     const open = openArtifacts.length || draft.filter((entry) => entry.status === 'proposed' || entry.status === 'uncertain').length;
     if (open > 0 && !explicitlySkipOpen) throw new Error('Offene Importvorschläge müssen entschieden oder ausdrücklich übersprungen werden.');
-    if (openArtifacts.length > 0 && explicitlySkipOpen) {
+    const openDrafts = draft.filter((entry) => entry.status === 'proposed' || entry.status === 'uncertain');
+    if (explicitlySkipOpen && (openArtifacts.length > 0 || openDrafts.length > 0)) {
       for (const artifact of openArtifacts) await this.repository.reviewManuscriptAnalysisArtifact(artifact.id, 'skipped', true);
-      await this.repository.saveManuscriptAnalysisReviewAudit({ jobId: job.id, projectId: job.projectId, action: 'skip_open_artifacts', artifactIds: openArtifacts.map((artifact) => artifact.id), artifactTypes: [...new Set(openArtifacts.map((artifact) => artifact.artifactType))] as ManuscriptAnalysisArtifactType[], note: `Nutzer überspringt ausdrücklich ${openArtifacts.length} offene Ergebnisse.`, });
+      for (const entry of openDrafts) await this.repository.reviewManuscriptAnalysisDraftLedger(entry.id, 'uncertain');
+      await this.repository.saveManuscriptAnalysisReviewAudit({ jobId: job.id, projectId: job.projectId, action: 'skip_open_artifacts', artifactIds: [...openArtifacts.map((artifact) => artifact.id), ...openDrafts.map((entry) => entry.id)], artifactTypes: [...new Set([...openArtifacts.map((artifact) => artifact.artifactType), ...(openDrafts.length ? ['import_draft_state' as const] : [])])] as ManuscriptAnalysisArtifactType[], note: `Nutzer überspringt ausdrücklich ${openArtifacts.length + openDrafts.length} offene Ergebnisse.`, });
     }
     await this.repository.saveManuscriptAnalysisReviewAudit({ jobId: job.id, projectId: job.projectId, action: 'complete_review', artifactIds: artifacts.map((artifact) => artifact.id), artifactTypes: [...new Set(artifacts.map((artifact) => artifact.artifactType))] as ManuscriptAnalysisArtifactType[], note: explicitlySkipOpen ? 'Review mit ausdrücklich übersprungenen Ergebnissen abgeschlossen.' : 'Review aller jobgebundenen Ergebnisse abgeschlossen.' });
     const progress = { ...job.phaseProgress, user_review: { ...(job.phaseProgress.user_review ?? this.emptyProgress('user_review', open, job.providerId)), status: 'completed' as const, totalUnits: open, completedUnits: open, errorMessage: open > 0 ? 'Offene Vorschläge wurden vom Nutzer ausdrücklich übersprungen.' : undefined, updatedAt: new Date().toISOString() } };
