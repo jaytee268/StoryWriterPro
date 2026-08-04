@@ -13,7 +13,7 @@ export interface Chapter { id: string; bookId: string; title: string; orderIndex
 export interface Scene { id: string; chapterId: string; title: string; orderIndex: number; content: string; pov: string; location: string; storyTime: string; status: SceneStatus; goal: string; notes: string; isImplicit?: boolean; createdAt?: string; updatedAt?: string; }
 export type SceneVersionReason = 'manual' | 'before_correction' | 'before_ai_change' | 'before_import' | 'automatic_checkpoint';
 export interface SceneVersion { id: string; sceneId: string; versionNumber: number; content: string; reason: SceneVersionReason; createdAt: string; scene: Scene; }
-export type StoryEntityOrigin = 'manual' | 'bible_update' | 'edited';
+export type StoryEntityOrigin = 'manual' | 'bible_update' | 'edited' | 'lore_crafter';
 export interface StoryEntity { id: string; projectId: string; name: string; type: EntityType; description: string; status: EntityStatus; confidence: number; source: string; chapter: string; scene: string; authorConfirmed: boolean; updatedAt: string; createdAt?: string; tags: string[]; origin: StoryEntityOrigin; }
 export interface StorySourceReference { id: string; projectId: string; entityId?: string; proposalId?: string; chapterId: string; sceneId: string; excerpt: string; startOffset?: number; endOffset?: number; createdAt: string; }
 export type BibleRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'reviewed';
@@ -33,7 +33,7 @@ export type LoreRevealState = 'author_only' | 'foreshadowed' | 'reader_revealed'
 export type LoreImportance = 'core' | 'supporting' | 'background';
 export type ProjectRuleScope = 'project' | 'book' | 'arc';
 export type ProjectRuleStatus = 'proposed' | 'confirmed' | 'rejected' | 'retired';
-export type ProjectRuleOrigin = 'manual' | 'bible_update' | 'edited';
+export type ProjectRuleOrigin = 'manual' | 'bible_update' | 'edited' | 'lore_crafter';
 export interface ProjectRule { id: string; projectId: string; title: string; statement: string; scope: ProjectRuleScope; prerequisites: string[]; effects: string[]; exceptions: string[]; connectedLoreIds: string[]; sourceReferenceIds: string[]; status: ProjectRuleStatus; confidence: number; authorConfirmed: boolean; origin: ProjectRuleOrigin; createdAt: string; updatedAt: string; }
 export interface SaveProjectRuleInput extends Omit<ProjectRule, 'id' | 'createdAt' | 'updatedAt'> { id?: string; }
 export type ProjectRuleProposalReviewStatus = 'pending' | 'accepted' | 'edited' | 'rejected';
@@ -175,10 +175,68 @@ export interface ProviderStatus { available: boolean; label: string; detail: str
 export type CodexAuthenticationState = 'authenticated' | 'notAuthenticated' | 'unknown';
 export interface CodexCliCapabilities { installed: boolean; binaryPath?: string; version?: string; supportsExec: boolean; supportsJson: boolean; supportsEphemeral: boolean; supportsOutputSchema: boolean; supportsReadOnlySandbox: boolean; supportsSkipGitCheck: boolean; supportsModel: boolean; supportsDisableFeatures: boolean; authentication: CodexAuthenticationState; compatible: boolean; detail: string; }
 export interface AiProviderSettings { activeProvider: 'local-prototype' | 'codex-cli'; codexBinaryPath?: string; codexModelOverride?: string; bibleUpdateTimeoutSeconds: number; chatTimeoutSeconds: number; allowLocalFallback: boolean; codexPrivacyAcknowledgedAt?: string; }
-export type CodexTaskKind = 'extractBiblePatch' | 'extractCharacterMemoryPatch' | 'answerWithProjectContext' | 'analyzeProjectStyle' | 'summarizeScene' | 'summarizeChapter' | 'summarizeBook' | 'planChapterDraft' | 'draftChapterSection' | 'reviewChapterSection' | 'reviewCompleteChapter' | 'analyzeContinuityPassage';
+export type CodexTaskKind = 'extractBiblePatch' | 'extractCharacterMemoryPatch' | 'answerWithProjectContext' | 'analyzeProjectStyle' | 'summarizeScene' | 'summarizeChapter' | 'summarizeBook' | 'planChapterDraft' | 'draftChapterSection' | 'reviewChapterSection' | 'reviewCompleteChapter' | 'analyzeContinuityPassage' | 'analyzeLoreDraft' | 'buildLoreSheet';
 export interface GroundedChatResult { answer: string; usedEntityIds: string[]; usedSourceIds: string[]; uncertainty: 'low' | 'medium' | 'high'; warnings: string[]; }
 export interface Correction { id: string; kind: CorrectionKind; from: string; to: string; reason: string; start: number; end: number; }
 export interface CorrectionResult { id: string; sourceText: string; corrections: Correction[]; provider: string; message?: string; }
+
+export type LoreCrafterRunStatus = 'pending' | 'running' | 'awaiting_review' | 'completed' | 'failed' | 'cancelled';
+export type LoreCrafterItemStatus = 'proposed' | 'accepted' | 'rejected' | 'uncertain' | 'merged';
+export type LoreCrafterClarificationStatus = 'open' | 'answered' | 'skipped';
+export type LoreSheetDraftStatus = 'proposed' | 'reviewed' | 'rejected';
+export type LoreCrafterExcludedTarget = 'character_memory' | 'plot_thread' | 'continuity_state' | 'manuscript' | 'style';
+export interface LoreCrafterExcludedContent { content: string; suggestedTarget: LoreCrafterExcludedTarget; reason: string; }
+export interface LoreCrafterAnalysis {
+  understandingSummary: string;
+  confirmedStatements: string[];
+  proposedWorldRules: string[];
+  prerequisites: string[];
+  effects: string[];
+  limitations: string[];
+  costs: string[];
+  exceptions: string[];
+  terminology: string[];
+  relevantOrganizations: string[];
+  relevantLocations: string[];
+  historicalBackground: string[];
+  unresolvedQuestions: string[];
+  contradictions: string[];
+  excludedContent: LoreCrafterExcludedContent[];
+  clarificationQuestions: string[];
+  confidence: number;
+  warnings: string[];
+}
+export interface BuildLoreSheetResult {
+  title: string;
+  premise: string;
+  categories: string[];
+  worldRules: string[];
+  prerequisites: string[];
+  effects: string[];
+  limitations: string[];
+  costs: string[];
+  exceptions: string[];
+  terminology: string[];
+  organizations: string[];
+  locations: string[];
+  historicalEvents: string[];
+  knownAspects: string[];
+  unknownAspects: string[];
+  ruleConnections: string[];
+  openQuestions: string[];
+  warnings: string[];
+}
+export interface LoreCrafterRun { id: string; projectId: string; originalText: string; contentHash: string; providerId: string; promptVersion: string; status: LoreCrafterRunStatus; understandingSummary?: string; analysis?: LoreCrafterAnalysis; confirmationText?: string; createdAt: string; updatedAt: string; completedAt?: string; errorCode?: string; errorMessage?: string; }
+export interface LoreCrafterClarification { id: string; runId: string; projectId: string; question: string; answer?: string; status: LoreCrafterClarificationStatus; createdAt: string; updatedAt: string; }
+export interface LoreCrafterSourceReference { id: string; runId: string; projectId: string; excerpt: string; startOffset: number; endOffset: number; createdAt: string; }
+export interface LoreSheetDraft { id: string; runId: string; projectId: string; contentHash: string; title: string; premise: string; categories: string[]; worldRules: string[]; prerequisites: string[]; effects: string[]; limitations: string[]; costs: string[]; exceptions: string[]; terminology: string[]; organizations: string[]; locations: string[]; historicalEvents: string[]; knownAspects: string[]; unknownAspects: string[]; ruleConnections: string[]; openQuestions: string[]; status: LoreSheetDraftStatus; createdAt: string; updatedAt: string; }
+export interface LoreSheetItem { id: string; draftId: string; runId: string; projectId: string; itemType: string; title: string; content: string; confidence: number; sourceReferenceId?: string; targetEntityId?: string; targetRuleId?: string; status: LoreCrafterItemStatus; createdAt: string; updatedAt: string; }
+export interface CreateLoreCrafterRunInput { projectId: string; originalText: string; contentHash: string; providerId: string; promptVersion: string; }
+export interface UpdateLoreCrafterRunInput { id: string; status: LoreCrafterRunStatus; understandingSummary?: string; analysis?: LoreCrafterAnalysis; confirmationText?: string; errorCode?: string; errorMessage?: string; completedAt?: string; }
+export interface SaveLoreCrafterClarificationInput { id?: string; runId: string; projectId: string; question: string; answer?: string; status?: LoreCrafterClarificationStatus; }
+export interface SaveLoreCrafterSourceInput { runId: string; projectId: string; excerpt: string; startOffset: number; endOffset: number; }
+export interface SaveLoreSheetDraftInput extends Omit<LoreSheetDraft, 'id' | 'createdAt' | 'updatedAt'> { id?: string; }
+export interface SaveLoreSheetItemInput extends Omit<LoreSheetItem, 'id' | 'createdAt' | 'updatedAt' | 'status'> { id?: string; status?: LoreCrafterItemStatus; }
 
 export interface WorkspaceSnapshot { project: Project; books: Book[]; chapters: Chapter[]; entities: StoryEntity[]; }
 export interface CreateProjectInput { title: string; author: string; description?: string; volumeTitle?: string; volume?: number; }
@@ -192,7 +250,7 @@ export type ManuscriptFormat = 'txt' | 'markdown' | 'docx';
 export interface ManuscriptImportInput { projectId: string; bookId: string; chapters: ManuscriptImportChapterInput[]; }
 export interface ManuscriptImportResult { chapters: Chapter[]; scenes: Scene[]; versions: SceneVersion[]; }
 export interface SaveStoryEntityInput extends StoryEntity { projectId: string; }
-export interface CreateStoryEntityInput { projectId: string; name: string; type: EntityType; description: string; status: EntityStatus; confidence: number; chapterId?: string; sceneId?: string; excerpt: string; authorConfirmed: boolean; tags: string[]; }
+export interface CreateStoryEntityInput { projectId: string; name: string; type: EntityType; description: string; status: EntityStatus; confidence: number; chapterId?: string; sceneId?: string; excerpt: string; authorConfirmed: boolean; tags: string[]; origin?: StoryEntityOrigin; }
 export interface UpdateStoryEntityInput extends CreateStoryEntityInput { id: string; }
 export interface CreateSourceReferenceInput { projectId: string; entityId?: string; proposalId?: string; chapterId: string; sceneId: string; excerpt: string; startOffset?: number; endOffset?: number; }
 export interface CreateBibleUpdateRunInput { projectId: string; sceneId: string; sceneUpdatedAt: string; contentHash: string; extractorId: string; analyzedContent?: string; force?: boolean; }

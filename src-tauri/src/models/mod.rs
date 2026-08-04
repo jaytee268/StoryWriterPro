@@ -164,6 +164,8 @@ pub struct CreateStoryEntityInput {
     pub author_confirmed: bool,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub origin: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1028,6 +1030,187 @@ pub struct LoreMetadata {
     pub author_knowledge: String,
     pub reader_knowledge: String,
     pub reveal_plan: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateLoreCrafterRunInput {
+    pub project_id: String,
+    pub original_text: String,
+    pub content_hash: String,
+    pub provider_id: String,
+    pub prompt_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateLoreCrafterRunInput {
+    pub id: String,
+    pub status: String,
+    pub understanding_summary: Option<String>,
+    pub analysis: Option<serde_json::Value>,
+    pub confirmation_text: Option<String>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoreCrafterRun {
+    pub id: String,
+    pub project_id: String,
+    pub original_text: String,
+    pub content_hash: String,
+    pub provider_id: String,
+    pub prompt_version: String,
+    pub status: String,
+    pub understanding_summary: Option<String>,
+    pub analysis: Option<serde_json::Value>,
+    pub confirmation_text: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: Option<String>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveLoreCrafterClarificationInput {
+    pub id: Option<String>,
+    pub run_id: String,
+    pub project_id: String,
+    pub question: String,
+    pub answer: Option<String>,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoreCrafterClarification {
+    pub id: String,
+    pub run_id: String,
+    pub project_id: String,
+    pub question: String,
+    pub answer: Option<String>,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveLoreCrafterSourceInput {
+    pub run_id: String,
+    pub project_id: String,
+    pub excerpt: String,
+    pub start_offset: i64,
+    pub end_offset: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoreCrafterSourceReference {
+    pub id: String,
+    pub run_id: String,
+    pub project_id: String,
+    pub excerpt: String,
+    pub start_offset: i64,
+    pub end_offset: i64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveLoreSheetDraftInput {
+    pub id: Option<String>,
+    pub run_id: String,
+    pub project_id: String,
+    pub content_hash: String,
+    pub title: String,
+    pub premise: String,
+    pub categories: Vec<String>,
+    pub world_rules: Vec<String>,
+    pub prerequisites: Vec<String>,
+    pub effects: Vec<String>,
+    pub limitations: Vec<String>,
+    pub costs: Vec<String>,
+    pub exceptions: Vec<String>,
+    pub terminology: Vec<String>,
+    pub organizations: Vec<String>,
+    pub locations: Vec<String>,
+    pub historical_events: Vec<String>,
+    pub known_aspects: Vec<String>,
+    pub unknown_aspects: Vec<String>,
+    pub rule_connections: Vec<String>,
+    pub open_questions: Vec<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoreSheetDraft {
+    pub id: String,
+    pub run_id: String,
+    pub project_id: String,
+    pub content_hash: String,
+    pub title: String,
+    pub premise: String,
+    pub categories: Vec<String>,
+    pub world_rules: Vec<String>,
+    pub prerequisites: Vec<String>,
+    pub effects: Vec<String>,
+    pub limitations: Vec<String>,
+    pub costs: Vec<String>,
+    pub exceptions: Vec<String>,
+    pub terminology: Vec<String>,
+    pub organizations: Vec<String>,
+    pub locations: Vec<String>,
+    pub historical_events: Vec<String>,
+    pub known_aspects: Vec<String>,
+    pub unknown_aspects: Vec<String>,
+    pub rule_connections: Vec<String>,
+    pub open_questions: Vec<String>,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveLoreSheetItemInput {
+    pub id: Option<String>,
+    pub draft_id: String,
+    pub run_id: String,
+    pub project_id: String,
+    pub item_type: String,
+    pub title: String,
+    pub content: String,
+    pub confidence: f64,
+    pub source_reference_id: Option<String>,
+    pub target_entity_id: Option<String>,
+    pub target_rule_id: Option<String>,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoreSheetItem {
+    pub id: String,
+    pub draft_id: String,
+    pub run_id: String,
+    pub project_id: String,
+    pub item_type: String,
+    pub title: String,
+    pub content: String,
+    pub confidence: f64,
+    pub source_reference_id: Option<String>,
+    pub target_entity_id: Option<String>,
+    pub target_rule_id: Option<String>,
+    pub status: String,
     pub created_at: String,
     pub updated_at: String,
 }

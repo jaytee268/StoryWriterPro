@@ -5,6 +5,7 @@ import type { StoryRepository } from '../../services/storyRepository';
 import { editorContentToPlainText } from '../../utils/editorContent';
 import { FoundationsView, type FoundationTab } from './FoundationsView';
 import { ContinuityView } from './ContinuityView';
+import { LoreCrafterView } from './LoreCrafterView';
 
 const typeLabels: Record<EntityType, string> = { character: 'Charakter', relationship: 'Beziehung', place: 'Ort', organization: 'Organisation', world_rule: 'Weltregel', object: 'Gegenstand', event: 'Ereignis', fact: 'Fakt', clue: 'Hinweis', secret: 'Geheimnis', plot_thread: 'Handlungsstrang', retcon: 'Retcon', author_note: 'Autorennotiz', open_question: 'Offene Frage' };
 const statusLabels: Record<EntityStatus, string> = { confirmed: 'Bestätigt', proposed: 'Vorgeschlagen', uncertain: 'Vermutung', contradicted: 'Widersprochen', retconned: 'Retcon', archived: 'Archiviert' };
@@ -24,7 +25,7 @@ export function StoryBibleView({ entities, projectId, chapters, initialFilter, r
   const [error, setError] = useState('');
   const [sourceReferences, setSourceReferences] = useState<StorySourceReference[]>([]);
   const [sourcesLoading, setSourcesLoading] = useState(false);
-  const [foundationTab, setFoundationTab] = useState<FoundationTab | 'continuity'>(initialFilter === 'character' ? 'characters' : 'bible');
+  const [foundationTab, setFoundationTab] = useState<FoundationTab | 'continuity' | 'lore_crafter'>(initialFilter === 'character' ? 'characters' : 'bible');
 
   const filtered = useMemo(() => entities.filter((entity) => (showArchived || entity.status !== 'archived') && (filter === 'all' || entity.type === filter) && `${entity.name} ${entity.description} ${entity.tags.join(' ')}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())), [entities, filter, query, showArchived]);
   const active = entities.find((entity) => entity.id === selected) ?? filtered[0];
@@ -45,8 +46,9 @@ export function StoryBibleView({ entities, projectId, chapters, initialFilter, r
 
   return <section className="bible-view">
     <div className="view-heading"><div><span className="eyebrow">KANONISCHE WISSENSBASIS</span><h1>Story Bible</h1><p>Du bestätigst jeden Eintrag selbst. Quellen bleiben mit der Szene verknüpft.</p></div>{foundationTab === 'bible' && <button className="primary-button" onClick={openNew}><Plus size={16} /> Neuer Eintrag</button>}</div>
-    <div className="foundation-tabs"><button className={foundationTab === 'bible' ? 'active' : ''} onClick={() => setFoundationTab('bible')}>Story Bible</button><button className={foundationTab === 'lore' ? 'active' : ''} onClick={() => setFoundationTab('lore')}>Lore</button><button className={foundationTab === 'characters' ? 'active' : ''} onClick={() => setFoundationTab('characters')}>Charaktere</button><button className={foundationTab === 'style' ? 'active' : ''} onClick={() => setFoundationTab('style')}>Projektstil</button><button className={foundationTab === 'continuity' ? 'active' : ''} onClick={() => setFoundationTab('continuity')}>Kontinuität</button></div>
-    {foundationTab !== 'bible' && foundationTab !== 'continuity' && <FoundationsView tab={foundationTab} projectId={projectId} entities={entities} chapters={chapters} repository={repository} onOpenSourceReference={onOpenSourceReference} onOpenStyleReference={onOpenStyleReference} onEntityChanged={onEntityChanged} />}
+    <div className="foundation-tabs"><button className={foundationTab === 'bible' ? 'active' : ''} onClick={() => setFoundationTab('bible')}>Story Bible</button><button className={foundationTab === 'lore' ? 'active' : ''} onClick={() => setFoundationTab('lore')}>Lore</button><button className={foundationTab === 'lore_crafter' ? 'active' : ''} onClick={() => setFoundationTab('lore_crafter')}>Lore Crafter</button><button className={foundationTab === 'characters' ? 'active' : ''} onClick={() => setFoundationTab('characters')}>Charaktere</button><button className={foundationTab === 'style' ? 'active' : ''} onClick={() => setFoundationTab('style')}>Projektstil</button><button className={foundationTab === 'continuity' ? 'active' : ''} onClick={() => setFoundationTab('continuity')}>Kontinuität</button></div>
+    {foundationTab === 'lore_crafter' && <LoreCrafterView projectId={projectId} repository={repository} />}
+    {foundationTab !== 'bible' && foundationTab !== 'continuity' && foundationTab !== 'lore_crafter' && <FoundationsView tab={foundationTab} projectId={projectId} entities={entities} chapters={chapters} repository={repository} onOpenSourceReference={onOpenSourceReference} onOpenStyleReference={onOpenStyleReference} onEntityChanged={onEntityChanged} />}
     {foundationTab === 'continuity' && <ContinuityView projectId={projectId} chapters={chapters} entities={entities} repository={repository} onOpenSourceReference={onOpenSourceReference} />}
     {foundationTab === 'bible' && <div className="bible-toolbar"><div className="search-field"><Search size={15} /><input placeholder="Story Bible durchsuchen …" value={query} onChange={(event) => setQuery(event.target.value)} /></div><div className="filter-select"><Filter size={14} /><select value={filter} onChange={(event) => setFilter(event.target.value as EntityType | 'all')}><option value="all">Alle Kategorien</option>{Object.entries(typeLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select><ChevronDown size={13} /></div><label className="checkline"><input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} /> Archivierte</label></div>}
     {foundationTab === 'bible' && <div className="bible-layout">

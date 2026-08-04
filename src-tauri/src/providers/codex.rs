@@ -92,6 +92,8 @@ pub enum CodexTaskKind {
     SynthesizePlotThreads,
     AnalyzeBookEndState,
     GlobalCountercheck,
+    AnalyzeLoreDraft,
+    BuildLoreSheet,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -365,6 +367,8 @@ const SUMMARY_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"r
 const PLOT_THREAD_SYNTHESIS_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["summary","openQuestions","threadGoals","developments","closureCandidates","partiallyResolved","reopened","warnings"],"properties":{"summary":{"type":"string"},"openQuestions":{"type":"array","items":{"type":"string"}},"threadGoals":{"type":"array","items":{"type":"string"}},"developments":{"type":"array","items":{"type":"string"}},"closureCandidates":{"type":"array","items":{"type":"string"}},"partiallyResolved":{"type":"array","items":{"type":"string"}},"reopened":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string"}}}}"#;
 const BOOK_END_STATE_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["summary","characterEndStates","knowledgeStates","falseBeliefs","relationships","objectOwners","injuries","locations","openActions","unresolvedThreads","warnings"],"properties":{"summary":{"type":"string"},"characterEndStates":{"type":"array","items":{"type":"string"}},"knowledgeStates":{"type":"array","items":{"type":"string"}},"falseBeliefs":{"type":"array","items":{"type":"string"}},"relationships":{"type":"array","items":{"type":"string"}},"objectOwners":{"type":"array","items":{"type":"string"}},"injuries":{"type":"array","items":{"type":"string"}},"locations":{"type":"array","items":{"type":"string"}},"openActions":{"type":"array","items":{"type":"string"}},"unresolvedThreads":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string"}}}}"#;
 const GLOBAL_COUNTERCHECK_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["summary","contradictoryFacts","prematureKnowledge","lostOrDestroyedObjects","timeAndLocationConflicts","contradictoryRules","unclearExceptions","uncertainSources","warnings"],"properties":{"summary":{"type":"string"},"contradictoryFacts":{"type":"array","items":{"type":"string"}},"prematureKnowledge":{"type":"array","items":{"type":"string"}},"lostOrDestroyedObjects":{"type":"array","items":{"type":"string"}},"timeAndLocationConflicts":{"type":"array","items":{"type":"string"}},"contradictoryRules":{"type":"array","items":{"type":"string"}},"unclearExceptions":{"type":"array","items":{"type":"string"}},"uncertainSources":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string"}}}}"#;
+const LORE_DRAFT_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["understandingSummary","confirmedStatements","proposedWorldRules","prerequisites","effects","limitations","costs","exceptions","terminology","relevantOrganizations","relevantLocations","historicalBackground","unresolvedQuestions","contradictions","excludedContent","clarificationQuestions","confidence","warnings"],"properties":{"understandingSummary":{"type":"string"},"confirmedStatements":{"type":"array","items":{"type":"string"}},"proposedWorldRules":{"type":"array","items":{"type":"string"}},"prerequisites":{"type":"array","items":{"type":"string"}},"effects":{"type":"array","items":{"type":"string"}},"limitations":{"type":"array","items":{"type":"string"}},"costs":{"type":"array","items":{"type":"string"}},"exceptions":{"type":"array","items":{"type":"string"}},"terminology":{"type":"array","items":{"type":"string"}},"relevantOrganizations":{"type":"array","items":{"type":"string"}},"relevantLocations":{"type":"array","items":{"type":"string"}},"historicalBackground":{"type":"array","items":{"type":"string"}},"unresolvedQuestions":{"type":"array","items":{"type":"string"}},"contradictions":{"type":"array","items":{"type":"string"}},"excludedContent":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["content","suggestedTarget","reason"],"properties":{"content":{"type":"string"},"suggestedTarget":{"enum":["character_memory","plot_thread","continuity_state","manuscript","style"]},"reason":{"type":"string"}}}},"clarificationQuestions":{"type":"array","items":{"type":"string"}},"confidence":{"type":"number","minimum":0,"maximum":1},"warnings":{"type":"array","items":{"type":"string"}}}}"#;
+const LORE_SHEET_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["title","premise","categories","worldRules","prerequisites","effects","limitations","costs","exceptions","terminology","organizations","locations","historicalEvents","knownAspects","unknownAspects","ruleConnections","openQuestions","warnings"],"properties":{"title":{"type":"string"},"premise":{"type":"string"},"categories":{"type":"array","items":{"type":"string"}},"worldRules":{"type":"array","items":{"type":"string"}},"prerequisites":{"type":"array","items":{"type":"string"}},"effects":{"type":"array","items":{"type":"string"}},"limitations":{"type":"array","items":{"type":"string"}},"costs":{"type":"array","items":{"type":"string"}},"exceptions":{"type":"array","items":{"type":"string"}},"terminology":{"type":"array","items":{"type":"string"}},"organizations":{"type":"array","items":{"type":"string"}},"locations":{"type":"array","items":{"type":"string"}},"historicalEvents":{"type":"array","items":{"type":"string"}},"knownAspects":{"type":"array","items":{"type":"string"}},"unknownAspects":{"type":"array","items":{"type":"string"}},"ruleConnections":{"type":"array","items":{"type":"string"}},"openQuestions":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string"}}}}"#;
 const CHAPTER_PLAN_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["chapterTitle","chapterGoal","povCharacterId","startingState","endingState","chapterSummary","endingConnection","newInformation","withheldInformation","assumptions","beats","warnings"],"properties":{"chapterTitle":{"type":"string","minLength":1,"maxLength":300},"chapterGoal":{"type":"string","maxLength":2000},"povCharacterId":{"type":["string","null"]},"startingState":{"type":"string","maxLength":3000},"endingState":{"type":"string","maxLength":3000},"chapterSummary":{"type":"string","maxLength":6000},"endingConnection":{"type":"string","maxLength":3000},"newInformation":{"type":"array","items":{"type":"string","maxLength":1000}},"withheldInformation":{"type":"array","items":{"type":"string","maxLength":1000}},"assumptions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["type","text"],"properties":{"type":{"type":"string"},"text":{"type":"string","maxLength":2000}}}},"beats":{"type":"array","minItems":1,"maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["id","orderIndex","title","purpose","participatingCharacterIds","startingState","event","conflict","newInformation","knowledgeChanges","relationshipChanges","cluesUsed","loreEntityIds","endingHook","targetWords"],"properties":{"id":{"type":"string"},"orderIndex":{"type":"integer","minimum":0},"title":{"type":"string","maxLength":300},"purpose":{"type":"string","maxLength":2000},"participatingCharacterIds":{"type":"array","items":{"type":"string"}},"startingState":{"type":"string"},"event":{"type":"string"},"conflict":{"type":"string"},"newInformation":{"type":"array","items":{"type":"string"}},"knowledgeChanges":{"type":"array","items":{"type":"object"}},"relationshipChanges":{"type":"array","items":{"type":"object"}},"cluesUsed":{"type":"array","items":{"type":"string"}},"loreEntityIds":{"type":"array","items":{"type":"string"}},"endingHook":{"type":"string"},"targetWords":{"type":"integer","minimum":1}}}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
 const CHAPTER_SECTION_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["content","continuationSummary","continuityState","usedEntityIds","usedMemoryIds","usedSourceIds","warnings"],"properties":{"content":{"type":"string","minLength":1,"maxLength":50000},"continuationSummary":{"type":"string","maxLength":3000},"continuityState":{"type":"object","additionalProperties":false,"required":["currentLocation","currentStoryTime","presentCharacterIds","characterStates","establishedFacts","knowledgeChanges","relationshipChanges","movedObjects","injuries","cluesIntroduced","promisesCreated","unresolvedActions","lastParagraphSummary"],"properties":{"currentLocation":{"type":"string"},"currentStoryTime":{"type":"string"},"presentCharacterIds":{"type":"array","items":{"type":"string"}},"characterStates":{"type":"array","items":{"type":"object"}},"establishedFacts":{"type":"array","items":{"type":"string"}},"knowledgeChanges":{"type":"array","items":{"type":"object"}},"relationshipChanges":{"type":"array","items":{"type":"object"}},"movedObjects":{"type":"array","items":{"type":"object"}},"injuries":{"type":"array","items":{"type":"object"}},"cluesIntroduced":{"type":"array","items":{"type":"string"}},"promisesCreated":{"type":"array","items":{"type":"string"}},"unresolvedActions":{"type":"array","items":{"type":"string"}},"lastParagraphSummary":{"type":"string"}}},"usedEntityIds":{"type":"array","items":{"type":"string"}},"usedMemoryIds":{"type":"array","items":{"type":"string"}},"usedSourceIds":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
 const REVIEW_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["issues","warnings"],"properties":{"issues":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["reviewScope","issueType","severity","title","description","relatedEntityIds","relatedSourceIds","suggestedAction","status"],"properties":{"reviewScope":{"enum":["section","chapter"]},"issueType":{"type":"string"},"severity":{"enum":["info","warning","blocking"]},"title":{"type":"string","maxLength":300},"description":{"type":"string","maxLength":4000},"relatedEntityIds":{"type":"array","items":{"type":"string"}},"relatedSourceIds":{"type":"array","items":{"type":"string"}},"suggestedAction":{"type":"string","maxLength":1000},"status":{"type":"string"}}}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
@@ -390,6 +394,8 @@ fn schema_for_task(kind: &CodexTaskKind) -> &'static str {
         CodexTaskKind::SynthesizePlotThreads => PLOT_THREAD_SYNTHESIS_SCHEMA,
         CodexTaskKind::AnalyzeBookEndState => BOOK_END_STATE_SCHEMA,
         CodexTaskKind::GlobalCountercheck => GLOBAL_COUNTERCHECK_SCHEMA,
+        CodexTaskKind::AnalyzeLoreDraft => LORE_DRAFT_SCHEMA,
+        CodexTaskKind::BuildLoreSheet => LORE_SHEET_SCHEMA,
         CodexTaskKind::PlanChapterDraft => CHAPTER_PLAN_SCHEMA_STRICT,
         CodexTaskKind::DraftChapterSection => CHAPTER_SECTION_SCHEMA_STRICT,
         CodexTaskKind::ReviewChapterSection | CodexTaskKind::ReviewCompleteChapter => REVIEW_SCHEMA,
@@ -413,6 +419,8 @@ fn prompt_for(kind: &CodexTaskKind) -> (&'static str, &'static str) {
         CodexTaskKind::SynthesizePlotThreads => ("storymemory-plot-thread-v1", "Synthetisiere offene Handlungsstränge. Liefere niemals resolved; closure_candidate ist nur ein Vorschlag für Nutzerreview."),
         CodexTaskKind::AnalyzeBookEndState => ("storymemory-book-end-state-v1", "Ermittle ausschließlich vorgeschlagene Figuren-, Wissens-, Beziehungs-, Orts- und Gegenstands-Endzustände."),
         CodexTaskKind::GlobalCountercheck => ("storymemory-global-countercheck-v1", "Führe ausschließlich eine globale Gegenprüfung aus. Ändere keinen bestätigten Kanon und liefere Quellenunsicherheiten als Vorschläge."),
+        CodexTaskKind::AnalyzeLoreDraft => ("storymemory-lore-draft-v1", "Analysiere ausschließlich freie Lore-Notizen. Erkläre das Verständnis, trenne Weltregeln von Inhalten für andere Storybereiche und übernehme nichts automatisch in Story Bible oder Projektregeln."),
+        CodexTaskKind::BuildLoreSheet => ("storymemory-lore-sheet-v1", "Erstelle ausschließlich aus dem geprüften Lore-Verständnis ein vorgeschlagenes Lore Sheet. Erfinde keine Fakten und bestätige keinen Kanon."),
     }
 }
 
@@ -757,6 +765,12 @@ fn result_matches_task(value: &Value, task: &CodexTaskKind) -> bool {
         }
         CodexTaskKind::GlobalCountercheck => {
             object.contains_key("contradictoryFacts") && object.contains_key("uncertainSources")
+        }
+        CodexTaskKind::AnalyzeLoreDraft => {
+            object.contains_key("understandingSummary") && object.contains_key("excludedContent")
+        }
+        CodexTaskKind::BuildLoreSheet => {
+            object.contains_key("title") && object.contains_key("worldRules")
         }
         CodexTaskKind::PlanChapterDraft => {
             object.contains_key("chapterTitle") && object.contains_key("beats")
@@ -1663,6 +1677,44 @@ fn validate_longform_result_for_task(
             "unclearExceptions",
             "uncertainSources",
         ],
+        CodexTaskKind::AnalyzeLoreDraft => &[
+            "understandingSummary",
+            "confirmedStatements",
+            "proposedWorldRules",
+            "prerequisites",
+            "effects",
+            "limitations",
+            "costs",
+            "exceptions",
+            "terminology",
+            "relevantOrganizations",
+            "relevantLocations",
+            "historicalBackground",
+            "unresolvedQuestions",
+            "contradictions",
+            "excludedContent",
+            "clarificationQuestions",
+            "confidence",
+        ],
+        CodexTaskKind::BuildLoreSheet => &[
+            "title",
+            "premise",
+            "categories",
+            "worldRules",
+            "prerequisites",
+            "effects",
+            "limitations",
+            "costs",
+            "exceptions",
+            "terminology",
+            "organizations",
+            "locations",
+            "historicalEvents",
+            "knownAspects",
+            "unknownAspects",
+            "ruleConnections",
+            "openQuestions",
+        ],
         CodexTaskKind::PlanChapterDraft => &[
             "chapterTitle",
             "chapterGoal",
@@ -2058,6 +2110,8 @@ pub fn run_task(
         | CodexTaskKind::SynthesizePlotThreads
         | CodexTaskKind::AnalyzeBookEndState
         | CodexTaskKind::GlobalCountercheck
+        | CodexTaskKind::AnalyzeLoreDraft
+        | CodexTaskKind::BuildLoreSheet
         | CodexTaskKind::PlanChapterDraft
         | CodexTaskKind::DraftChapterSection
         | CodexTaskKind::ReviewChapterSection
@@ -2393,6 +2447,12 @@ mod tests {
             CodexTaskKind::GlobalCountercheck => {
                 json!({"summary":"Eine Gegenprüfung bleibt als Vorschlag offen.","contradictoryFacts":["Der Status des Zettels ist uneindeutig."],"prematureKnowledge":[],"lostOrDestroyedObjects":[],"timeAndLocationConflicts":[],"contradictoryRules":[],"unclearExceptions":[],"uncertainSources":["source-1"],"warnings":[]})
             }
+            CodexTaskKind::AnalyzeLoreDraft => {
+                json!({"understandingSummary":"Eine vorläufige Weltbeschreibung mit einer regelhaften Struktur.","confirmedStatements":["Die Notiz beschreibt ein System."],"proposedWorldRules":["Das System hat eine erkennbare Grenze."],"prerequisites":["Eine bestimmte Voraussetzung."],"effects":["Eine beobachtbare Auswirkung."],"limitations":["Die Wirkung ist nicht unbegrenzt."],"costs":["Die Anwendung hat einen Preis."],"exceptions":["Eine mögliche Ausnahme."],"terminology":["System"],"relevantOrganizations":[],"relevantLocations":[],"historicalBackground":[],"unresolvedQuestions":["Welche Bedingung gilt genau?"],"contradictions":[],"excludedContent":[{"content":"Eine einzelne Szene.","suggestedTarget":"manuscript","reason":"Das ist eine konkrete Handlung statt einer Weltregel."}],"clarificationQuestions":["Soll die Grenze immer gelten?"],"confidence":0.74,"warnings":[]})
+            }
+            CodexTaskKind::BuildLoreSheet => {
+                json!({"title":"Vorgeschlagenes Lore Sheet","premise":"Eine vorläufig strukturierte Weltbeschreibung.","categories":["world_rule"],"worldRules":["Das System hat eine erkennbare Grenze."],"prerequisites":["Eine bestimmte Voraussetzung."],"effects":["Eine beobachtbare Auswirkung."],"limitations":["Die Wirkung ist nicht unbegrenzt."],"costs":["Die Anwendung hat einen Preis."],"exceptions":["Eine mögliche Ausnahme."],"terminology":["System"],"organizations":[],"locations":[],"historicalEvents":[],"knownAspects":["Die Notiz beschreibt ein System."],"unknownAspects":["Welche Bedingung gilt genau?"],"ruleConnections":[],"openQuestions":["Soll die Grenze immer gelten?"],"warnings":[]})
+            }
             CodexTaskKind::PlanChapterDraft => {
                 json!({"chapterTitle":"Kapitel","chapterGoal":"Den Zettel einordnen.","povCharacterId":"char-1","startingState":"Der Zettel liegt bereit.","endingState":"Malik fasst eine Spur.","chapterSummary":"Malik untersucht einen Zettel.","endingConnection":"Eine neue Spur öffnet sich.","newInformation":["Der Zettel ist wichtig."],"withheldInformation":["Wer ihn hinterließ."],"assumptions":[{"type":"continuity","text":"Der Zettel bleibt erhalten."}],"beats":[{"id":"beat-1","orderIndex":0,"title":"Beobachtung","purpose":"Spur einführen.","participatingCharacterIds":["char-1"],"startingState":"Ruhe","event":"Malik findet den Zettel.","conflict":"Er versteht ihn nicht.","newInformation":["Eine Spur erscheint."],"knowledgeChanges":[{"characterId":"char-1","factEntityId":"entity-1","nextState":"suspects","reason":"Der Text ist auffällig."}],"relationshipChanges":[],"cluesUsed":["entity-1"],"loreEntityIds":["entity-1"],"endingHook":"Eine Frage bleibt.","targetWords":120}],"warnings":[]})
             }
@@ -2427,6 +2487,8 @@ mod tests {
             CodexTaskKind::SynthesizePlotThreads,
             CodexTaskKind::AnalyzeBookEndState,
             CodexTaskKind::GlobalCountercheck,
+            CodexTaskKind::AnalyzeLoreDraft,
+            CodexTaskKind::BuildLoreSheet,
         ];
         for kind in kinds {
             let result = synthetic_task_result(kind.clone());
