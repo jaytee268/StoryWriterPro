@@ -37,7 +37,7 @@ export function ProjectOnboarding({ repository, project, state, onCreated, onCon
   };
 
   const create = async () => {
-    if (!title.trim() || !author.trim()) { setError('Titel und Autor werden benötigt.'); return; }
+    if (!title.trim()) { setError('Ein Projekttitel wird benötigt.'); return; }
     setBusy(true); setError('');
     try {
       const created = await repository.createProject({ title: title.trim(), author: author.trim(), volumeTitle: volumeTitle.trim() || title.trim(), description: '' });

@@ -33,17 +33,17 @@ use crate::{
         CreateStyleReferenceInput, DatabaseInfo, DialogueMemoryParticipant, EditorPreferences,
         LoreCrafterClarification, LoreCrafterRun, LoreCrafterSourceReference, LoreEntry,
         LoreMetadata, LoreSheetDraft, LoreSheetItem, ManuscriptAnalysisArtifact,
-        ManuscriptAnalysisDraftLedgerEntry, ManuscriptAnalysisJob, ManuscriptAnalysisPageMarker,
-        ManuscriptAnalysisPhaseResult, ManuscriptAnalysisReviewAudit, ManuscriptAnalysisUnit,
-        ManuscriptImportInput, ManuscriptImportResult, ManuscriptPosition,
-        ManuscriptStructureProposal, ManuscriptStructureRun, MaterializeProvisionalEntityInput,
-        MindmapLayout, NarrativeSummary, PersistentTimelineEvent, PlotThreadLifecycle,
-        PlotThreadLifecycleProposal, Project, ProjectOnboardingState, ProjectRule,
-        ProjectRuleProposal, ProjectSourceDocument, ProjectStyle, ProjectStyleAnalysisRun,
-        ProjectStyleObservation, ProviderStatus, ProvisionalEntity, ProvisionalEntityMention,
-        ProvisionalEvent, ProvisionalMergeProposal, ProvisionalRelation,
-        ReconcileContinuityTextCorrectionInput, RelationshipMemory, RestoreSceneVersionInput,
-        ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput,
+        ManuscriptAnalysisCompletionReport, ManuscriptAnalysisDraftLedgerEntry,
+        ManuscriptAnalysisJob, ManuscriptAnalysisPageMarker, ManuscriptAnalysisPhaseResult,
+        ManuscriptAnalysisReviewAudit, ManuscriptAnalysisUnit, ManuscriptImportInput,
+        ManuscriptImportResult, ManuscriptPosition, ManuscriptStructureProposal,
+        ManuscriptStructureRun, MaterializeProvisionalEntityInput, MindmapLayout, NarrativeSummary,
+        PersistentTimelineEvent, PlotThreadLifecycle, PlotThreadLifecycleProposal, Project,
+        ProjectOnboardingState, ProjectRule, ProjectRuleProposal, ProjectSourceDocument,
+        ProjectStyle, ProjectStyleAnalysisRun, ProjectStyleObservation, ProviderStatus,
+        ProvisionalEntity, ProvisionalEntityMention, ProvisionalEvent, ProvisionalMergeProposal,
+        ProvisionalRelation, ReconcileContinuityTextCorrectionInput, RelationshipMemory,
+        RestoreSceneVersionInput, ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput,
         SaveChapterGenerationDraftLedgerInput, SaveChapterGenerationPlanInput,
         SaveChapterGenerationReviewInput, SaveChapterGenerationSectionInput,
         SaveCharacterDialogueMemoryInput, SaveCharacterExperienceInput,
@@ -52,13 +52,14 @@ use crate::{
         SaveContinuityReviewRunStatusInput, SaveContinuityStateInput,
         SaveLoreCrafterClarificationInput, SaveLoreCrafterSourceInput, SaveLoreMetadataInput,
         SaveLoreSheetDraftInput, SaveLoreSheetItemInput, SaveManuscriptAnalysisArtifactInput,
-        SaveManuscriptAnalysisDraftLedgerInput, SaveManuscriptAnalysisPhaseResultInput,
-        SaveManuscriptAnalysisReviewAuditInput, SaveManuscriptStructureProposalInput,
-        SaveMindmapLayoutInput, SaveNarrativeSummaryInput, SavePersistentTimelineEventInput,
-        SavePlotThreadLifecycleInput, SavePlotThreadLifecycleProposalInput,
-        SaveProjectOnboardingStateInput, SaveProjectRuleInput, SaveProjectRuleProposalInput,
-        SaveProjectStyleInput, SaveProjectStyleObservationInput, SaveProvisionalEntityInput,
-        SaveProvisionalEventInput, SaveProvisionalMentionInput, SaveProvisionalMergeProposalInput,
+        SaveManuscriptAnalysisCompletionReportInput, SaveManuscriptAnalysisDraftLedgerInput,
+        SaveManuscriptAnalysisPhaseResultInput, SaveManuscriptAnalysisReviewAuditInput,
+        SaveManuscriptStructureProposalInput, SaveMindmapLayoutInput, SaveNarrativeSummaryInput,
+        SavePersistentTimelineEventInput, SavePlotThreadLifecycleInput,
+        SavePlotThreadLifecycleProposalInput, SaveProjectOnboardingStateInput,
+        SaveProjectRuleInput, SaveProjectRuleProposalInput, SaveProjectStyleInput,
+        SaveProjectStyleObservationInput, SaveProvisionalEntityInput, SaveProvisionalEventInput,
+        SaveProvisionalMentionInput, SaveProvisionalMergeProposalInput,
         SaveProvisionalRelationInput, SaveRelationshipMemoryInput, SaveStoryDirectionInput,
         SaveStoryGraphEdgeInput, SaveWritingPreferencesInput, Scene, SceneInput, SceneVersion,
         StoryDirection, StoryEntity, StoryEntityInput, StoryEntityRelation, StoryGraphEdge,
@@ -1190,7 +1191,8 @@ pub(crate) fn create_project_in_db(
     input: CreateProjectInput,
 ) -> Result<Project, String> {
     required(&input.title, "Der Projekttitel")?;
-    required(&input.author, "Der Autorenname")?;
+    // The author is optional during onboarding; an empty value is retained and
+    // can be filled in later without blocking project creation.
     let transaction = db
         .unchecked_transaction()
         .map_err(|error| sql_error("Projekttransaktion konnte nicht gestartet werden", error))?;
@@ -4202,8 +4204,10 @@ pub fn create_manuscript_analysis_job(
     required(&input.import_reference, "Die Importreferenz")?;
     let db = lock_db(&state)?;
     validate_book_project(&db, &input.project_id, &input.book_id)?;
-    if let Some(existing) = db.query_row("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE project_id=?1 AND import_reference=?2", params![input.project_id, input.import_reference], manuscript_analysis_job_from_row).optional().map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geprüft werden", error))? {
+    if !input.new_version {
+        if let Some(existing) = db.query_row("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE project_id=?1 AND import_reference=?2", params![input.project_id, input.import_reference], manuscript_analysis_job_from_row).optional().map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geprüft werden", error))? {
         return Ok(existing);
+    }
     }
     let tx = db
         .unchecked_transaction()
@@ -4734,6 +4738,48 @@ pub fn list_manuscript_analysis_review_audits(
         .collect::<SqlResult<Vec<_>>>()
         .map_err(|e| sql_error("Review-Audits konnten nicht gelesen werden", e));
     result
+}
+
+fn completion_report_from_row(
+    row: &rusqlite::Row<'_>,
+) -> SqlResult<ManuscriptAnalysisCompletionReport> {
+    Ok(ManuscriptAnalysisCompletionReport {
+        id: row.get(0)?,
+        job_id: row.get(1)?,
+        project_id: row.get(2)?,
+        content_hash: row.get(3)?,
+        payload: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or(serde_json::Value::Null),
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
+    })
+}
+
+#[tauri::command]
+pub fn save_manuscript_analysis_completion_report(
+    state: State<'_, DbState>,
+    input: SaveManuscriptAnalysisCompletionReportInput,
+) -> Result<ManuscriptAnalysisCompletionReport, String> {
+    let db = lock_db(&state)?;
+    let job = load_manuscript_analysis_job(&db, &input.job_id)?;
+    if job.project_id != input.project_id {
+        return Err("Abschlussbericht gehört nicht zum Projekt.".into());
+    }
+    let id = input.id.unwrap_or_else(new_id);
+    let payload = serde_json::to_string(&input.payload)
+        .map_err(|e| format!("Abschlussbericht konnte nicht serialisiert werden: {e}"))?;
+    let stamp = now();
+    db.execute("INSERT INTO manuscript_analysis_completion_reports(id,job_id,project_id,content_hash,payload_json,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?6) ON CONFLICT(job_id) DO UPDATE SET content_hash=excluded.content_hash,payload_json=excluded.payload_json,updated_at=excluded.updated_at", params![id,input.job_id,input.project_id,input.content_hash,payload,stamp]).map_err(|e| sql_error("Abschlussbericht konnte nicht gespeichert werden", e))?;
+    db.query_row("SELECT id,job_id,project_id,content_hash,payload_json,created_at,updated_at FROM manuscript_analysis_completion_reports WHERE job_id=?1", params![input.job_id], completion_report_from_row).map_err(|e| sql_error("Abschlussbericht konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn get_manuscript_analysis_completion_report(
+    state: State<'_, DbState>,
+    job_id: String,
+) -> Result<Option<ManuscriptAnalysisCompletionReport>, String> {
+    let db = lock_db(&state)?;
+    let _job = load_manuscript_analysis_job(&db, &job_id)?;
+    db.query_row("SELECT id,job_id,project_id,content_hash,payload_json,created_at,updated_at FROM manuscript_analysis_completion_reports WHERE job_id=?1", params![job_id], completion_report_from_row).optional().map_err(|e| sql_error("Abschlussbericht konnte nicht geladen werden", e))
 }
 
 fn structure_run_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ManuscriptStructureRun> {
@@ -9125,7 +9171,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            30
+            31
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);

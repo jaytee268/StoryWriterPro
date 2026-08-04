@@ -62,7 +62,7 @@ export function App() {
   const [activeModal, setActiveModal] = useState<'bible' | 'research' | 'import' | null>(null);
   const [longformInstruction, setLongformInstruction] = useState<string>();
   const continuityReviewedText = useRef<Record<string, string>>({});
-  const [manuscriptAnalysis, setManuscriptAnalysis] = useState<{ job: ManuscriptAnalysisJob; units: ManuscriptAnalysisUnit[]; draftLedger: import('./types/domain').ManuscriptAnalysisDraftLedgerEntry[]; phaseResults: ManuscriptAnalysisPhaseResult[]; artifacts: ManuscriptAnalysisArtifact[]; reviewDetails: import('./services/manuscriptAnalysis').ManuscriptReviewArtifactDetail[]; structureRuns: ManuscriptStructureRun[]; structureProposals: ManuscriptStructureProposal[] }>();
+  const [manuscriptAnalysis, setManuscriptAnalysis] = useState<{ job: ManuscriptAnalysisJob; units: ManuscriptAnalysisUnit[]; draftLedger: import('./types/domain').ManuscriptAnalysisDraftLedgerEntry[]; phaseResults: ManuscriptAnalysisPhaseResult[]; artifacts: ManuscriptAnalysisArtifact[]; completionReport?: import('./types/domain').ManuscriptAnalysisCompletionReport; reviewDetails: import('./services/manuscriptAnalysis').ManuscriptReviewArtifactDetail[]; structureRuns: ManuscriptStructureRun[]; structureProposals: ManuscriptStructureProposal[] }>();
   const [manuscriptAnalysisError, setManuscriptAnalysisError] = useState('');
   const manuscriptAnalysisController = useRef<ManuscriptAnalysisController | undefined>(undefined);
   const [onboarding, setOnboarding] = useState<{ project?: Project; state?: ProjectOnboardingState }>();
@@ -118,7 +118,7 @@ export function App() {
     const structureRuns = await repository.listManuscriptStructureRuns(workspace.project.id);
     const latestStructureRun = structureRuns.filter((run) => run.status !== 'failed').sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
     const structureProposals = latestStructureRun ? await repository.listManuscriptStructureProposals(latestStructureRun.id) : [];
-    setManuscriptAnalysis({ job: progress.job, units: progress.units, draftLedger: progress.draftLedger, phaseResults: progress.phaseResults, artifacts: progress.artifacts, reviewDetails, structureRuns, structureProposals });
+    setManuscriptAnalysis({ job: progress.job, units: progress.units, draftLedger: progress.draftLedger, phaseResults: progress.phaseResults, artifacts: progress.artifacts, completionReport: progress.completionReport ?? undefined, reviewDetails, structureRuns, structureProposals });
   }, [workspace?.project.id]);
   useEffect(() => { void refreshManuscriptAnalysis(); }, [refreshManuscriptAnalysis]);
   const refreshVisualization = useCallback(async () => {

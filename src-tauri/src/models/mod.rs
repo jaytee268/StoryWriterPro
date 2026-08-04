@@ -517,6 +517,30 @@ pub struct CreateManuscriptAnalysisJobInput {
     #[serde(default)]
     pub page_markers: Vec<ManuscriptAnalysisPageMarker>,
     pub units: Vec<ManuscriptAnalysisUnitInput>,
+    #[serde(default)]
+    pub new_version: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveManuscriptAnalysisCompletionReportInput {
+    pub id: Option<String>,
+    pub job_id: String,
+    pub project_id: String,
+    pub content_hash: String,
+    pub payload: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManuscriptAnalysisCompletionReport {
+    pub id: String,
+    pub job_id: String,
+    pub project_id: String,
+    pub content_hash: String,
+    pub payload: serde_json::Value,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

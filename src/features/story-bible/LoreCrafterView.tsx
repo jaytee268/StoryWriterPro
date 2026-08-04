@@ -5,9 +5,9 @@ import { providerRouter } from '../../services/aiProviderService';
 import { analyzeLoreDraft, buildLoreSheet, confirmLoreCrafterRule, finishLoreCrafterReview, reviewLoreSheetItem, routeExcludedContent } from '../../services/loreCrafter';
 import type { StoryRepository } from '../../services/storyRepository';
 
-interface Props { projectId: string; repository: StoryRepository; }
+interface Props { projectId: string; repository: StoryRepository; onRunCreated?: (run: LoreCrafterRun) => void; }
 
-export function LoreCrafterView({ projectId, repository }: Props) {
+export function LoreCrafterView({ projectId, repository, onRunCreated }: Props) {
   const [notes, setNotes] = useState('');
   const [runs, setRuns] = useState<LoreCrafterRun[]>([]);
   const [run, setRun] = useState<LoreCrafterRun>();
@@ -35,7 +35,7 @@ export function LoreCrafterView({ projectId, repository }: Props) {
   const analyse = async () => {
     if (!notes.trim()) { setError('Gib zuerst freie Lore-Notizen ein.'); return; }
     setBusy('analyse'); setError(''); setMessage('Analysiert …');
-    try { const { provider } = await providerRouter.getActiveProvider(); const next = await analyzeLoreDraft(repository, provider, { projectId, originalText: notes }); await loadRun(next); setRuns(await repository.listLoreCrafterRuns(projectId)); setNotes(next.originalText); setMessage('Analyse abgeschlossen. Prüfe jetzt das Verständnis.'); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Die Lore konnte nicht analysiert werden.'); setMessage(''); } finally { setBusy(''); }
+    try { const { provider } = await providerRouter.getActiveProvider(); const next = await analyzeLoreDraft(repository, provider, { projectId, originalText: notes }); onRunCreated?.(next); const onboarding = await repository.getProjectOnboardingState(projectId); await repository.saveProjectOnboardingState({ ...onboarding, loreCrafterRunId: next.id, currentStep: onboarding.currentStep === 'lore' ? 'manuscript' : onboarding.currentStep, completedSteps: Array.from(new Set([...onboarding.completedSteps, 'lore'])) }); await loadRun(next); setRuns(await repository.listLoreCrafterRuns(projectId)); setNotes(next.originalText); setMessage('Analyse abgeschlossen. Prüfe jetzt das Verständnis.'); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Die Lore konnte nicht analysiert werden.'); setMessage(''); } finally { setBusy(''); }
   };
 
   const updateClarification = async (clarification: LoreCrafterClarification, answer: string, status: LoreCrafterClarification['status']) => {

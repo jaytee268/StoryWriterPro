@@ -101,6 +101,18 @@ describe('sequenzielle, fortsetzbare Manuskript-Continuity', () => {
     expect(units[0]?.endOffset).toBe(8);
   });
 
+  it('speichert nach dem Review einen jobgebundenen Abschlussbericht und schützt die Reihenfolge', async () => {
+    const repository = new BrowserDemoRepository();
+    const { job } = await makeJob(repository, 'completion-report');
+    const provider = fakeProvider(async () => emptyAnalysis());
+    await new ManuscriptAnalysisController(repository, job.id, provider).start();
+    await new ManuscriptAnalysisController(repository, job.id, provider).completeUserReview(true);
+    const report = await repository.getManuscriptAnalysisCompletionReport(job.id);
+    expect(report?.jobId).toBe(job.id);
+    expect(report?.payload.recognizedScenes.length).toBeGreaterThan(0);
+    expect(report?.payload.providers).toContain('codex-cli');
+  });
+
   it('blockiert die Passageanalyse bis zum Strukturreview und remappt danach die Units', async () => {
     const repository = new BrowserDemoRepository();
     const workspace = await repository.loadWorkspace(); const chapterForGate = workspace.chapters[0]!; const sceneForGate = chapterForGate.scenes[0]!; const fullText = 'Zettel wird fortgetragen.\n\nMalik wartet.'; await repository.updateScene({ ...sceneForGate, content: fullText }); for (const scene of chapterForGate.scenes.slice(1)) await repository.updateScene({ ...scene, content: '' }); const splitOffset = Array.from(fullText).indexOf('\n'); const job = await repository.createManuscriptAnalysisJob({ projectId: workspace.project.id, bookId: workspace.books[0]!.id, importReference: 'structure-gate', providerId: 'codex-cli', units: [{ id: 'structure-gate-1', chapterId: chapterForGate.id, sceneId: sceneForGate.id, orderIndex: 0, startOffset: 0, endOffset: splitOffset, content: Array.from(fullText).slice(0, splitOffset).join(''), contentHash: contentHash(Array.from(fullText).slice(0, splitOffset).join('')) }, { id: 'structure-gate-2', chapterId: chapterForGate.id, sceneId: sceneForGate.id, orderIndex: 1, startOffset: splitOffset, endOffset: Array.from(fullText).length, content: Array.from(fullText).slice(splitOffset).join(''), contentHash: contentHash(Array.from(fullText).slice(splitOffset).join('')) }] });
