@@ -1,4 +1,5 @@
 import type { ManuscriptFormat } from '../types/domain';
+import { contentHash } from '../utils/aiText';
 
 export interface ManuscriptImportChapterPreview {
   id: string;
@@ -23,6 +24,8 @@ export interface ManuscriptImportIssue {
 export interface ManuscriptImportPreview {
   fileName: string;
   format: ManuscriptFormat;
+  originalText: string;
+  originalContentHash: string;
   chapters: ManuscriptImportChapterPreview[];
   issues: ManuscriptImportIssue[];
   duplicateChapterNumbers: number[];
@@ -153,7 +156,8 @@ export function parseManuscriptText(text: string, fileName = 'Manuskript.txt', f
   const missingChapterNumbers = numbers.length > 1
     ? Array.from({ length: Math.max(...numbers) - Math.min(...numbers) + 1 }, (_, index) => Math.min(...numbers) + index).filter((number) => !numbers.includes(number))
     : [];
-  return { fileName, format, chapters, issues: chapterIssues(chapters, pageMarkersFound), duplicateChapterNumbers, missingChapterNumbers, pageMarkersFound };
+  const originalText = normalizeText(text);
+  return { fileName, format, originalText, originalContentHash: contentHash(originalText), chapters, issues: chapterIssues(chapters, pageMarkersFound), duplicateChapterNumbers, missingChapterNumbers, pageMarkersFound };
 }
 
 export function splitContinuityUnits(text: string, pageMarkers: ManuscriptPageMarker[] = [], targetWords = 300): ContinuityPassageUnit[] {

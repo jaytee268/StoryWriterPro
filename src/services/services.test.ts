@@ -28,6 +28,24 @@ describe('Runtime und Repository', () => {
   it('speichert Text mit Umlauten und Zeilenumbrüchen', async () => { const repository = new BrowserDemoRepository(); const scene = await firstScene(repository); const text = 'Äpfel „sicher“\n\nZeile zwei.'; await repository.updateScene({ ...scene, content: text }); expect((await repository.loadWorkspace()).chapters[0]?.scenes[0]?.content).toBe(text); });
   it('legt bewusst gesicherte Versionen an und stellt einen älteren Stand wieder her', async () => { const repository = new BrowserDemoRepository(); const scene = await firstScene(repository); const first = await repository.updateScene({ ...scene, content: 'Erster Stand' }); await repository.createSceneVersion({ sceneId: scene.id }); const second = await repository.updateScene({ ...first, content: 'Zweiter Stand' }); await repository.createSceneVersion({ sceneId: scene.id }); const versions = await repository.listSceneVersions(scene.id); expect(versions).toHaveLength(2); const restored = await repository.restoreSceneVersion(scene.id, versions[1]!.id); expect(restored.content).toBe('Erster Stand'); expect(second.content).toBe('Zweiter Stand'); });
   it('speichert Editor-Schrift und Layout lokal', async () => { const repository = new BrowserDemoRepository(); await repository.saveEditorPreferences({ fontFamily: 'typewriter', fontSize: 22, lineHeight: 2.1 }); expect(await repository.getEditorPreferences()).toEqual({ fontFamily: 'typewriter', fontSize: 22, lineHeight: 2.1 }); });
+  it('legt ein leeres Projekt mit persistentem Onboarding an und archiviert es', async () => {
+    const repository = new BrowserDemoRepository();
+    const project = await repository.createProject({ title: 'Neues Buch', author: 'Autorin', description: '', volumeTitle: 'Band 1', volume: 1 });
+    const initial = await repository.getProjectOnboardingState(project.id);
+    expect(initial.currentStep).toBe('project');
+    const progressed = await repository.saveProjectOnboardingState({ ...initial, currentStep: 'manuscript', completedSteps: ['project', 'lore'], skippedSteps: [], language: 'de', genre: 'Roman' });
+    expect((await repository.getProjectOnboardingState(project.id)).currentStep).toBe('manuscript');
+    expect(progressed.genre).toBe('Roman');
+    await repository.archiveProject(project.id);
+    expect(await repository.listProjects()).toEqual([]);
+  });
+  it('bewahrt den unveränderten Importtext als projektweite Quelle mit Hash', async () => {
+    const repository = new BrowserDemoRepository();
+    const project = await repository.createProject({ title: 'Importbuch', author: 'Autorin', description: '', volumeTitle: 'Band 1', volume: 1 });
+    const originalText = 'Kapitel 1\n😀 Ein Anfang.';
+    const source = await repository.createProjectSourceDocument({ projectId: project.id, sourceKind: 'external_text', title: 'manuskript.txt', content: originalText, contentHash: contentHash(originalText) });
+    expect((await repository.listProjectSourceDocuments(project.id))[0]).toMatchObject({ id: source.id, content: originalText, contentHash: contentHash(originalText) });
+  });
 });
 
 describe('Desktop-Fehler und Autosave', () => {

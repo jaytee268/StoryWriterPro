@@ -173,7 +173,6 @@ impl DbState {
         let path = data_dir.join("storymemory.sqlite3");
         let connection = Connection::open(&path)?;
         initialize_connection(&connection)?;
-        seed_if_empty(&connection)?;
         ensure_initial_scene_versions(&connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -581,6 +580,17 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
         ))?;
         connection.execute("INSERT INTO schema_migrations (version) VALUES (24)", [])?;
     }
+    let has_project_onboarding: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 25",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_project_onboarding == 0 {
+        connection.execute_batch(include_str!(
+            "../../../migrations/025_project_onboarding.sql"
+        ))?;
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (25)", [])?;
+    }
     Ok(())
 }
 
@@ -736,7 +746,7 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            24
+            25
         );
         assert_eq!(
             connection
@@ -998,7 +1008,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                24
+                25
             );
             // Running startup migrations again must not change the assignment
             // or fail on the ALTER TABLE statement.

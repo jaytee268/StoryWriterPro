@@ -35,28 +35,29 @@ use crate::{
         ManuscriptAnalysisArtifact, ManuscriptAnalysisDraftLedgerEntry, ManuscriptAnalysisJob,
         ManuscriptAnalysisPageMarker, ManuscriptAnalysisPhaseResult, ManuscriptAnalysisReviewAudit,
         ManuscriptAnalysisUnit, ManuscriptImportInput, ManuscriptImportResult, ManuscriptPosition,
-        NarrativeSummary, PlotThreadLifecycle, PlotThreadLifecycleProposal, Project, ProjectRule,
-        ProjectRuleProposal, ProjectSourceDocument, ProjectStyle, ProjectStyleAnalysisRun,
-        ProjectStyleObservation, ProviderStatus, ReconcileContinuityTextCorrectionInput,
-        RelationshipMemory, RestoreSceneVersionInput, ReviewBibleProposalInput,
-        ReviewCharacterMemoryProposalInput, SaveChapterGenerationDraftLedgerInput,
-        SaveChapterGenerationPlanInput, SaveChapterGenerationReviewInput,
-        SaveChapterGenerationSectionInput, SaveCharacterDialogueMemoryInput,
-        SaveCharacterExperienceInput, SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput,
-        SaveCharacterSceneStateInput, SaveCharacterVoicePatternInput, SaveContinuityFindingInput,
-        SaveContinuityReviewInput, SaveContinuityReviewRunStatusInput, SaveContinuityStateInput,
+        NarrativeSummary, PlotThreadLifecycle, PlotThreadLifecycleProposal, Project,
+        ProjectOnboardingState, ProjectRule, ProjectRuleProposal, ProjectSourceDocument,
+        ProjectStyle, ProjectStyleAnalysisRun, ProjectStyleObservation, ProviderStatus,
+        ReconcileContinuityTextCorrectionInput, RelationshipMemory, RestoreSceneVersionInput,
+        ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput,
+        SaveChapterGenerationDraftLedgerInput, SaveChapterGenerationPlanInput,
+        SaveChapterGenerationReviewInput, SaveChapterGenerationSectionInput,
+        SaveCharacterDialogueMemoryInput, SaveCharacterExperienceInput,
+        SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput, SaveCharacterSceneStateInput,
+        SaveCharacterVoicePatternInput, SaveContinuityFindingInput, SaveContinuityReviewInput,
+        SaveContinuityReviewRunStatusInput, SaveContinuityStateInput,
         SaveLoreCrafterClarificationInput, SaveLoreCrafterSourceInput, SaveLoreMetadataInput,
         SaveLoreSheetDraftInput, SaveLoreSheetItemInput, SaveManuscriptAnalysisArtifactInput,
         SaveManuscriptAnalysisDraftLedgerInput, SaveManuscriptAnalysisPhaseResultInput,
         SaveManuscriptAnalysisReviewAuditInput, SaveNarrativeSummaryInput,
-        SavePlotThreadLifecycleInput, SavePlotThreadLifecycleProposalInput, SaveProjectRuleInput,
-        SaveProjectRuleProposalInput, SaveProjectStyleInput, SaveProjectStyleObservationInput,
-        SaveRelationshipMemoryInput, SaveStoryDirectionInput, SaveWritingPreferencesInput, Scene,
-        SceneInput, SceneVersion, StoryDirection, StoryEntity, StoryEntityInput,
-        StoryEntityRelation, StorySourceReference, StyleReference, UpdateChapterInput,
-        UpdateLoreCrafterRunInput, UpdateManuscriptAnalysisJobInput,
-        UpdateManuscriptAnalysisUnitInput, UpdateStoryEntityInput, UpdateStyleReferenceInput,
-        WorkspaceSnapshot, WritingPreferences,
+        SavePlotThreadLifecycleInput, SavePlotThreadLifecycleProposalInput,
+        SaveProjectOnboardingStateInput, SaveProjectRuleInput, SaveProjectRuleProposalInput,
+        SaveProjectStyleInput, SaveProjectStyleObservationInput, SaveRelationshipMemoryInput,
+        SaveStoryDirectionInput, SaveWritingPreferencesInput, Scene, SceneInput, SceneVersion,
+        StoryDirection, StoryEntity, StoryEntityInput, StoryEntityRelation, StorySourceReference,
+        StyleReference, UpdateChapterInput, UpdateLoreCrafterRunInput,
+        UpdateManuscriptAnalysisJobInput, UpdateManuscriptAnalysisUnitInput,
+        UpdateStoryEntityInput, UpdateStyleReferenceInput, WorkspaceSnapshot, WritingPreferences,
     },
 };
 use chrono::Utc;
@@ -139,7 +140,10 @@ fn sql_error(context: &str, error: impl std::fmt::Display) -> String {
 
 fn project_from_db(db: &Connection, project_id: &str) -> Result<Project, String> {
     db.query_row(
-        "SELECT id, title, author, description, created_at, updated_at FROM projects WHERE id=?1",
+        "SELECT id, title, author, description, created_at, updated_at,
+                COALESCE((SELECT status FROM project_workflow_state WHERE project_id=projects.id), 'active'),
+                (SELECT last_opened_at FROM project_workflow_state WHERE project_id=projects.id)
+         FROM projects WHERE id=?1",
         params![project_id],
         |row| {
             Ok(Project {
@@ -152,6 +156,8 @@ fn project_from_db(db: &Connection, project_id: &str) -> Result<Project, String>
                 word_count: 0,
                 open_warnings: 0,
                 bible_progress: 0,
+                status: row.get(6)?,
+                last_opened_at: row.get(7)?,
             })
         },
     )
@@ -981,22 +987,26 @@ pub fn review_lore_sheet_item(
     }
     db.query_row("SELECT id,draft_id,run_id,project_id,item_type,title,content,confidence,source_reference_id,target_entity_id,target_rule_id,structured_json,status,created_at,updated_at FROM lore_sheet_items WHERE id=?1 AND project_id=?2", params![id, project_id], lore_item_from_row).map_err(|error| sql_error("Lore-Sheet-Eintrag konnte nicht geladen werden", error))
 }
-#[tauri::command]
-pub fn load_workspace(state: State<'_, DbState>) -> Result<WorkspaceSnapshot, String> {
-    let db = lock_db(&state)?;
-    let project_id: String = db
+fn load_workspace_for_project(
+    db: &Connection,
+    project_id: &str,
+) -> Result<WorkspaceSnapshot, String> {
+    let project_status: String = db
         .query_row(
-            "SELECT id FROM projects ORDER BY updated_at DESC, created_at DESC LIMIT 1",
-            [],
+            "SELECT COALESCE(status, 'active') FROM project_workflow_state WHERE project_id=?1",
+            params![project_id],
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| sql_error("Workspace konnte nicht geladen werden", error))?
-        .ok_or_else(|| "Keine lokale StoryMemory-Datenbank mit Projekt gefunden.".to_string())?;
-    let books = load_books(&db, &project_id)?;
-    let chapters = load_chapters(&db, &books)?;
-    let entities = load_entities(&db, &project_id)?;
-    let mut project = project_from_db(&db, &project_id)?;
+        .map_err(|error| sql_error("Projektstatus konnte nicht geladen werden", error))?
+        .unwrap_or_else(|| "active".into());
+    if project_status == "archived" {
+        return Err("Das ausgewählte Projekt ist archiviert.".into());
+    }
+    let books = load_books(db, project_id)?;
+    let chapters = load_chapters(db, &books)?;
+    let entities = load_entities(db, project_id)?;
+    let mut project = project_from_db(db, project_id)?;
     project.word_count = word_count(&chapters);
     project.open_warnings = entities
         .iter()
@@ -1019,6 +1029,153 @@ pub fn load_workspace(state: State<'_, DbState>) -> Result<WorkspaceSnapshot, St
         chapters,
         entities,
     })
+}
+
+#[tauri::command]
+pub fn load_workspace(state: State<'_, DbState>) -> Result<WorkspaceSnapshot, String> {
+    let db = lock_db(&state)?;
+    let project_id: String = db
+        .query_row(
+            "SELECT project_id FROM project_workflow_state WHERE status='active' ORDER BY last_opened_at DESC, updated_at DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| sql_error("Workspace konnte nicht geladen werden", error))?
+        .ok_or_else(|| "Keine aktive StoryMemory-Projekt gefunden.".to_string())?;
+    db.execute(
+        "UPDATE project_workflow_state SET last_opened_at=?2, updated_at=?2 WHERE project_id=?1",
+        params![project_id, now()],
+    )
+    .map_err(|error| sql_error("Letztes Projekt konnte nicht gespeichert werden", error))?;
+    load_workspace_for_project(&db, &project_id)
+}
+
+#[tauri::command]
+pub fn load_project_workspace(
+    state: State<'_, DbState>,
+    project_id: String,
+) -> Result<WorkspaceSnapshot, String> {
+    let db = lock_db(&state)?;
+    let changed = db.execute("UPDATE project_workflow_state SET last_opened_at=?2, updated_at=?2 WHERE project_id=?1 AND status='active'", params![project_id, now()]).map_err(|error| sql_error("Projekt konnte nicht geöffnet werden", error))?;
+    if changed == 0 {
+        return Err("Das Projekt wurde nicht gefunden oder ist archiviert.".into());
+    }
+    load_workspace_for_project(&db, &project_id)
+}
+
+#[tauri::command]
+pub fn list_projects(state: State<'_, DbState>) -> Result<Vec<Project>, String> {
+    let db = lock_db(&state)?;
+    let mut statement = db
+        .prepare("SELECT id FROM projects ORDER BY COALESCE((SELECT last_opened_at FROM project_workflow_state WHERE project_id=projects.id), updated_at) DESC, created_at DESC")
+        .map_err(|error| sql_error("Projekte konnten nicht geladen werden", error))?;
+    let ids = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| sql_error("Projektliste konnte nicht gelesen werden", error))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|error| sql_error("Projektliste konnte nicht gelesen werden", error))?;
+    ids.into_iter()
+        .map(|id| {
+            let books = load_books(&db, &id)?;
+            let chapters = load_chapters(&db, &books)?;
+            let entities = load_entities(&db, &id)?;
+            let mut project = project_from_db(&db, &id)?;
+            project.word_count = word_count(&chapters);
+            project.open_warnings = entities
+                .iter()
+                .filter(|entity| entity.status == "contradicted")
+                .count() as i64;
+            project.bible_progress = if entities.is_empty() {
+                0
+            } else {
+                ((entities
+                    .iter()
+                    .filter(|entity| entity.status == "confirmed")
+                    .count() as f64
+                    / entities.len() as f64)
+                    * 100.0)
+                    .round() as i64
+            };
+            Ok(project)
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub fn archive_project(state: State<'_, DbState>, project_id: String) -> Result<Project, String> {
+    let db = lock_db(&state)?;
+    let changed = db.execute("UPDATE project_workflow_state SET status='archived', updated_at=?2 WHERE project_id=?1", params![project_id, now()]).map_err(|error| sql_error("Projekt konnte nicht archiviert werden", error))?;
+    if changed == 0 {
+        return Err("Das Projekt wurde nicht gefunden.".into());
+    }
+    project_from_db(&db, &project_id)
+}
+
+fn onboarding_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ProjectOnboardingState> {
+    Ok(ProjectOnboardingState {
+        project_id: row.get(0)?,
+        current_step: row.get(1)?,
+        completed_steps: serde_json::from_str(&row.get::<_, String>(2)?).unwrap_or_default(),
+        skipped_steps: serde_json::from_str(&row.get::<_, String>(3)?).unwrap_or_default(),
+        language: row.get(4)?,
+        genre: row.get(5)?,
+        lore_crafter_run_id: row.get(6)?,
+        import_id: row.get(7)?,
+        updated_at: row.get(8)?,
+    })
+}
+
+#[tauri::command]
+pub fn get_project_onboarding_state(
+    state: State<'_, DbState>,
+    project_id: String,
+) -> Result<ProjectOnboardingState, String> {
+    let db = lock_db(&state)?;
+    project_from_db(&db, &project_id)?;
+    db.query_row(
+        "SELECT project_id,current_step,completed_steps_json,skipped_steps_json,language,genre,lore_crafter_run_id,import_id,updated_at FROM project_onboarding_state WHERE project_id=?1",
+        params![project_id],
+        onboarding_from_row,
+    )
+    .map_err(|error| sql_error("Onboardingstatus konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn save_project_onboarding_state(
+    state: State<'_, DbState>,
+    input: SaveProjectOnboardingStateInput,
+) -> Result<ProjectOnboardingState, String> {
+    if !matches!(
+        input.current_step.as_str(),
+        "project" | "lore" | "manuscript" | "summary" | "completed"
+    ) {
+        return Err("Ungültiger Onboarding-Schritt.".into());
+    }
+    let db = lock_db(&state)?;
+    project_from_db(&db, &input.project_id)?;
+    let timestamp = now();
+    db.execute(
+        "INSERT INTO project_onboarding_state(project_id,current_step,completed_steps_json,skipped_steps_json,language,genre,lore_crafter_run_id,import_id,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(project_id) DO UPDATE SET current_step=excluded.current_step,completed_steps_json=excluded.completed_steps_json,skipped_steps_json=excluded.skipped_steps_json,language=excluded.language,genre=excluded.genre,lore_crafter_run_id=excluded.lore_crafter_run_id,import_id=excluded.import_id,updated_at=excluded.updated_at",
+        params![
+            input.project_id,
+            input.current_step,
+            serde_json::to_string(&input.completed_steps).unwrap_or_else(|_| "[]".into()),
+            serde_json::to_string(&input.skipped_steps).unwrap_or_else(|_| "[]".into()),
+            input.language,
+            input.genre,
+            input.lore_crafter_run_id,
+            input.import_id,
+            timestamp,
+        ],
+    )
+    .map_err(|error| sql_error("Onboardingstatus konnte nicht gespeichert werden", error))?;
+    db.query_row(
+        "SELECT project_id,current_step,completed_steps_json,skipped_steps_json,language,genre,lore_crafter_run_id,import_id,updated_at FROM project_onboarding_state WHERE project_id=?1",
+        params![input.project_id],
+        onboarding_from_row,
+    )
+    .map_err(|error| sql_error("Onboardingstatus konnte nicht geladen werden", error))
 }
 
 pub(crate) fn create_project_in_db(
@@ -1045,6 +1202,8 @@ pub(crate) fn create_project_in_db(
     };
     transaction.execute("INSERT INTO projects (id, title, author, description, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)", params![project_id, input.title.trim(), input.author.trim(), description, timestamp]).map_err(|error| sql_error("Projekt konnte nicht gespeichert werden", error))?;
     transaction.execute("INSERT INTO books (id, project_id, title, volume, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)", params![book_id, project_id, book_title, input.volume.max(1), timestamp]).map_err(|error| sql_error("Band konnte nicht gespeichert werden", error))?;
+    transaction.execute("INSERT INTO project_workflow_state(project_id,status,last_opened_at,updated_at) VALUES(?1,'active',?2,?2)", params![project_id, timestamp]).map_err(|error| sql_error("Projektstatus konnte nicht gespeichert werden", error))?;
+    transaction.execute("INSERT INTO project_onboarding_state(project_id,current_step,completed_steps_json,skipped_steps_json) VALUES(?1,'project','[]','[]')", params![project_id]).map_err(|error| sql_error("Onboardingstatus konnte nicht gespeichert werden", error))?;
     transaction.commit().map_err(|error| {
         sql_error(
             "Projekttransaktion konnte nicht abgeschlossen werden",
@@ -1841,7 +2000,16 @@ pub fn create_project_source_document(
     let db = lock_db(&state)?;
     project_from_db(&db, &input.project_id)?;
     let stamp = now();
-    let id: String = db.query_row("SELECT id FROM project_source_documents WHERE project_id=?1 AND content_hash=?2 AND source_kind=?3 ORDER BY updated_at DESC LIMIT 1", params![input.project_id, input.content_hash, input.source_kind], |row| row.get(0)).optional().map_err(|e| sql_error("Quelldokument konnte nicht geprüft werden", e))?.unwrap_or_else(new_id);
+    let existing: Option<(String, String)> = db.query_row("SELECT id,content FROM project_source_documents WHERE project_id=?1 AND content_hash=?2 AND source_kind=?3 ORDER BY updated_at DESC LIMIT 1", params![input.project_id, input.content_hash, input.source_kind], |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(|e| sql_error("Quelldokument konnte nicht geprüft werden", e))?;
+    if let Some((_, existing_content)) = &existing {
+        if existing_content != &input.content {
+            return Err(
+                "Ein unveränderliches Quelldokument mit diesem Hash enthält bereits anderen Text."
+                    .into(),
+            );
+        }
+    }
+    let id = existing.map(|value| value.0).unwrap_or_else(new_id);
     db.execute("INSERT INTO project_source_documents(id,project_id,source_kind,title,content,content_hash,origin_id,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,COALESCE((SELECT created_at FROM project_source_documents WHERE id=?1),?8),?8) ON CONFLICT(id) DO UPDATE SET title=excluded.title,content=excluded.content,content_hash=excluded.content_hash,origin_id=excluded.origin_id,updated_at=excluded.updated_at", params![id,input.project_id,input.source_kind,input.title,input.content,input.content_hash,input.origin_id,stamp]).map_err(|e| sql_error("Quelldokument konnte nicht gespeichert werden", e))?;
     db.query_row("SELECT id,project_id,source_kind,title,content,content_hash,origin_id,created_at,updated_at FROM project_source_documents WHERE id=?1", params![id], project_source_document_from_row).map_err(|e| sql_error("Quelldokument konnte nicht geladen werden", e))
 }
@@ -7770,7 +7938,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            24
+            25
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);

@@ -4,10 +4,11 @@ import { BookOpen, BrainCircuit, FileText, Gauge, MessageCircle, PanelLeftClose,
 import { useAppStore } from './stores/useAppStore';
 import { demoEvents, mindEdges, mindNodes } from './services/mockData';
 import { createStoryRepository, type RuntimeMode, type StoryRepository } from './services/storyRepository';
-import type { AiProviderSettings, AppView, BibleProposal, BibleUpdateRun, CharacterMemoryProposal, CharacterMemoryUpdateRun, ChatMessage, Chapter, CreateStyleReferenceInput, ManuscriptAnalysisArtifact, ManuscriptAnalysisJob, ManuscriptAnalysisPhaseResult, ManuscriptAnalysisUnit, PendingSourceNavigation, ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput, Scene, StoryEntity, StorySourceReference, StyleReference, UpdateChapterInput, WorkspaceSnapshot } from './types/domain';
+import type { AiProviderSettings, AppView, BibleProposal, BibleUpdateRun, CharacterMemoryProposal, CharacterMemoryUpdateRun, ChatMessage, Chapter, CreateStyleReferenceInput, ManuscriptAnalysisArtifact, ManuscriptAnalysisJob, ManuscriptAnalysisPhaseResult, ManuscriptAnalysisUnit, PendingSourceNavigation, Project, ProjectOnboardingState, ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput, Scene, StoryEntity, StorySourceReference, StyleReference, UpdateChapterInput, WorkspaceSnapshot } from './types/domain';
 import { DeterministicProjectContextBuilder } from './services/contextBuilder';
 import { changedRange } from './services/bibleExtractor';
 import { Dashboard } from './features/projects/Dashboard';
+import { ProjectOnboarding } from './features/projects/ProjectOnboarding';
 import { EditorView, type EditorSaveController } from './features/editor/EditorView';
 import { ChatPanel } from './features/chat/ChatPanel';
 import { StoryBibleView } from './features/story-bible/StoryBibleView';
@@ -26,7 +27,7 @@ import { createManuscriptAnalysisUnits, loadManuscriptAnalysisProgress, Manuscri
 
 const repository: StoryRepository = createStoryRepository();
 const longformRepository = createLongformRepository();
-type LoadState = { status: 'loading' } | { status: 'ready'; workspace: WorkspaceSnapshot } | { status: 'error'; message: string; detail?: string };
+type LoadState = { status: 'loading' } | { status: 'empty'; projects: Project[] } | { status: 'ready'; workspace: WorkspaceSnapshot; projects?: Project[] } | { status: 'error'; message: string; detail?: string };
 export type SaveStatus = 'saved' | 'dirty' | 'saving' | 'error';
 
 const navItems: { view: AppView; label: string; description: string; icon: typeof BookOpen }[] = [
@@ -65,16 +66,33 @@ export function App() {
   const [manuscriptAnalysis, setManuscriptAnalysis] = useState<{ job: ManuscriptAnalysisJob; units: ManuscriptAnalysisUnit[]; phaseResults: ManuscriptAnalysisPhaseResult[]; artifacts: ManuscriptAnalysisArtifact[] }>();
   const [manuscriptAnalysisError, setManuscriptAnalysisError] = useState('');
   const manuscriptAnalysisController = useRef<ManuscriptAnalysisController | undefined>(undefined);
+  const [onboarding, setOnboarding] = useState<{ project?: Project; state?: ProjectOnboardingState }>();
 
-  const loadWorkspace = useCallback(async () => {
+  const loadWorkspace = useCallback(async (projectId?: string) => {
     setLoadState({ status: 'loading' });
-    try { setLoadState({ status: 'ready', workspace: await repository.loadWorkspace() }); }
+    try {
+      const projects = await repository.listProjects();
+      if (!projects.length) { setLoadState({ status: 'empty', projects }); return; }
+      const active = projectId ?? projects.find((item) => item.status !== 'archived')?.id;
+      if (!active) { setLoadState({ status: 'empty', projects }); return; }
+      setLoadState({ status: 'ready', workspace: await repository.loadWorkspace(active), projects });
+    }
     catch (error) { setLoadState({ status: 'error', message: error instanceof Error ? error.message : 'Der Workspace konnte nicht geladen werden.', detail: error instanceof Error ? error.stack : undefined }); }
   }, []);
   useEffect(() => { void loadWorkspace(); }, [loadWorkspace]);
   useEffect(() => { void providerRouter.getSettings().then(setProviderSettings).catch(() => setProviderSettings(defaultAiProviderSettings)); }, []);
 
-  const workspace = loadState.status === 'ready' ? loadState.workspace : undefined;
+  const workspace = loadState.status === 'ready' ? loadState.workspace : (undefined as unknown as WorkspaceSnapshot);
+  const projects = loadState.status === 'ready' ? loadState.projects : loadState.status === 'empty' ? loadState.projects : [];
+  const activeProjectId = loadState.status === 'ready' ? loadState.workspace.project.id : undefined;
+  useEffect(() => {
+    if (!activeProjectId) return;
+    let cancelled = false;
+    void repository.getProjectOnboardingState(activeProjectId).then((state) => {
+      if (!cancelled && state.currentStep !== 'completed') setOnboarding({ state });
+    }).catch((error) => { if (!cancelled) setProviderNotice(error instanceof Error ? `Onboardingstatus konnte nicht geladen werden: ${error.message}` : 'Onboardingstatus konnte nicht geladen werden.'); });
+    return () => { cancelled = true; };
+  }, [activeProjectId]);
   useEffect(() => {
     if (!workspace?.project.id || activeMemoryRun) return;
     let cancelled = false;
@@ -371,13 +389,13 @@ export function App() {
 
   const renderView = () => {
     if (!workspace) return null;
-    if (view === 'dashboard') return <Dashboard project={workspace.project} onOpen={() => void requestViewChange('editor')} onImport={() => void openImport()} />;
+    if (view === 'dashboard') return <Dashboard project={workspace.project} projects={projects} onOpen={() => void requestViewChange('editor')} onSelectProject={(id) => void loadWorkspace(id)} onCreateProject={() => setOnboarding({})} onArchive={(id) => void repository.archiveProject(id).then(() => loadWorkspace()).catch((error) => setViewError(error instanceof Error ? error.message : 'Projekt konnte nicht archiviert werden.'))} onImport={() => void openImport()} />;
     if (view === 'editor') return <EditorView projectId={workspace.project.id} chapters={workspace.chapters} scene={currentScene} chapter={currentChapter} pendingSourceNavigation={pendingSourceNavigation} onSourceNavigationConsumed={() => setPendingSourceNavigation(undefined)} onBack={() => void requestViewChange('dashboard')} onSelectScene={(id) => void requestSceneChange(id)} onSave={saveScene} onCreateChapter={createChapter} onUpdateChapter={updateChapter} onCreateScene={createScene} onListVersions={listSceneVersions} onCreateVersion={createSceneVersion} onRestoreVersion={restoreSceneVersion} onGetEditorPreferences={getEditorPreferences} onSaveEditorPreferences={saveEditorPreferences} onBibleUpdate={runBibleUpdate} bibleUpdateBusy={Boolean(bibleUpdateProvider)} onCancelBibleUpdate={cancelBibleUpdate} onOpenAssistant={() => setAssistantOpen(true)} onSaveStateChange={setSaveStatus} onRegisterSaveController={registerSaveController} onCreateStyleReference={createStyleReference} />;
     if (view === 'bible' || view === 'characters' || view === 'threads') return <StoryBibleView entities={workspace.entities} projectId={workspace.project.id} chapters={workspace.chapters} repository={repository} activeRun={activeReviewRun} proposals={reviewProposals} activeMemoryRun={activeMemoryRun} memoryProposals={memoryProposals} onEntityChanged={replaceEntity} onOpenSourceReference={openSourceReference} onOpenStyleReference={openStyleReference} onReview={reviewProposal} onCompleteReview={completeBibleReview} onMemoryReview={reviewCharacterMemory} onCompleteMemoryReview={completeCharacterMemoryReview} onCloseReview={() => { setActiveReviewRun(undefined); setReviewProposals([]); setActiveMemoryRun(undefined); setMemoryProposals([]); }} initialFilter={view === 'characters' ? 'character' : view === 'threads' ? 'plot_thread' : undefined} />;
     if (view === 'timeline') return <TimelineView events={demoEvents} />;
     if (view === 'mindmap') return <MindmapView nodes={mindNodes} edges={mindEdges} />;
     if (view === 'settings') return <SettingsView mode={repository.mode} project={workspace.project} settings={providerSettings} onSettingsChange={setProviderSettings} onReload={loadWorkspace} />;
-    return <Dashboard project={workspace.project} onOpen={() => void requestViewChange('editor')} onImport={() => void openImport()} />;
+    return <Dashboard project={workspace.project} projects={projects} onOpen={() => void requestViewChange('editor')} onSelectProject={(id) => void loadWorkspace(id)} onCreateProject={() => setOnboarding({})} onImport={() => void openImport()} />;
   };
 
   const project = workspace?.project;
@@ -393,13 +411,14 @@ export function App() {
     </aside>
     <main className="main-area">
       <header className="topbar simple-topbar"><div className="topbar-title"><button className="sidebar-toggle" onClick={() => setSidebarOpen((open) => !open)} aria-label={sidebarOpen ? 'Sidebar einklappen' : 'Sidebar öffnen'} title={sidebarOpen ? 'Sidebar einklappen' : 'Sidebar öffnen'}>{sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}</button><div className="topbar-copy"><span className="eyebrow">{view === 'dashboard' ? 'START' : project?.title ?? 'STORYMEMORY'}</span><strong>{topLabel}</strong></div></div><div className="topbar-actions"><span className={`save-state save-state-${saveStatus}`}><span className={`status-dot status-dot-${saveStatus}`} /> {saveLabel[saveStatus]}</span><button className="assistant-button" onClick={() => setAssistantOpen(true)}><MessageCircle size={18} /> Assistent öffnen</button></div></header>
-      <div className="content-scroll">{manuscriptAnalysis && <ManuscriptAnalysisProgress job={manuscriptAnalysis.job} units={manuscriptAnalysis.units} phaseResults={manuscriptAnalysis.phaseResults} artifacts={manuscriptAnalysis.artifacts} error={manuscriptAnalysisError} onResume={() => void startManuscriptAnalysis(manuscriptAnalysis.job.id)} onRetry={() => void retryManuscriptAnalysis()} onPause={() => void pauseManuscriptAnalysis()} onCancel={() => void cancelManuscriptAnalysis()} onCompleteReview={() => void completeManuscriptAnalysisReview()} />}{providerNotice && <div className="provider-notice" role="status"><span>{providerNotice}</span><button className="text-button" onClick={() => setProviderNotice('')}>Ausblenden</button></div>}{viewError && <div className="save-error workspace-save-error" role="alert"><strong>Speichern erforderlich</strong><span>{viewError}</span><button className="text-button" onClick={() => void retryEditorSave()}>Erneut versuchen</button></div>}{loadState.status === 'loading' && <LoadingView mode={repository.mode} />}{loadState.status === 'error' && <ErrorView message={loadState.message} detail={loadState.detail} onRetry={() => void loadWorkspace()} />}{loadState.status === 'ready' && renderView()}</div>
+      <div className="content-scroll">{manuscriptAnalysis && <ManuscriptAnalysisProgress job={manuscriptAnalysis.job} units={manuscriptAnalysis.units} phaseResults={manuscriptAnalysis.phaseResults} artifacts={manuscriptAnalysis.artifacts} error={manuscriptAnalysisError} onResume={() => void startManuscriptAnalysis(manuscriptAnalysis.job.id)} onRetry={() => void retryManuscriptAnalysis()} onPause={() => void pauseManuscriptAnalysis()} onCancel={() => void cancelManuscriptAnalysis()} onCompleteReview={() => void completeManuscriptAnalysisReview()} />}{providerNotice && <div className="provider-notice" role="status"><span>{providerNotice}</span><button className="text-button" onClick={() => setProviderNotice('')}>Ausblenden</button></div>}{viewError && <div className="save-error workspace-save-error" role="alert"><strong>Speichern erforderlich</strong><span>{viewError}</span><button className="text-button" onClick={() => void retryEditorSave()}>Erneut versuchen</button></div>}{loadState.status === 'loading' && <LoadingView mode={repository.mode} />}{loadState.status === 'error' && <ErrorView message={loadState.message} detail={loadState.detail} onRetry={() => void loadWorkspace()} />}{loadState.status === 'empty' && !onboarding && <ProjectOnboarding repository={repository} onCreated={(project, state) => { setOnboarding({ project, state }); void loadWorkspace(project.id); }} onContinue={() => undefined} onOpenLore={() => undefined} onOpenImport={() => undefined} />}{loadState.status === 'ready' && onboarding && <ProjectOnboarding repository={repository} project={onboarding.project ?? workspace.project} state={onboarding.state} onCreated={(project, state) => setOnboarding({ project, state })} onContinue={(state) => { setOnboarding((current) => current ? { ...current, state } : current); if (state.currentStep === 'completed') setOnboarding(undefined); }} onOpenLore={() => { setOnboarding(undefined); void requestViewChange('bible'); }} onOpenImport={() => { setOnboarding(undefined); void openImport(); }} />}{loadState.status === 'ready' && !onboarding && renderView()}</div>
     </main>
     {assistantOpen && <div className="assistant-drawer"><button className="drawer-close" onClick={() => setAssistantOpen(false)} aria-label="Assistent schließen"><X size={20} /></button>{workspace && <ChatPanel messages={messages} onMessagesChange={setMessages} contextBuilder={contextBuilder} contextRequest={{ projectId: workspace.project.id, currentChapterId: currentChapter?.id, currentSceneId: currentScene?.id }} onOpenSourceReference={(reference) => void openSourceReference(reference)} providerRouter={providerRouter} onLongformRequest={(instruction) => { setLongformInstruction(instruction); setAssistantOpen(false); }} />}</div>}
     {resumeMemoryReview && !activeMemoryRun && <div className="provider-notice" role="status"><span>Ein offener Character-Memory-Review wartet auf deine Entscheidung.</span><button className="primary-button" onClick={() => { setActiveMemoryRun(resumeMemoryReview.run); setMemoryProposals(resumeMemoryReview.proposals); setResumeMemoryReview(undefined); void requestViewChange('bible'); }}>Review fortsetzen</button><button className="text-button" onClick={() => setResumeMemoryReview(undefined)}>Später</button></div>}
     {longformInstruction && workspace && <div className="longform-overlay"><LongformDraftView project={workspace.project} chapters={workspace.chapters} entities={workspace.entities} repository={longformRepository} instruction={longformInstruction} activeProvider={providerSettings.activeProvider} onClose={() => setLongformInstruction(undefined)} onAccepted={async () => { setLongformInstruction(undefined); await loadWorkspace(); await requestViewChange('editor'); }} /></div>}
     {activeModal && activeModal !== 'import' && <Modal type={activeModal} onClose={() => setActiveModal(null)} />}
-    {activeModal === 'import' && workspace?.books[0] && <ManuscriptImportModal projectId={workspace.project.id} bookId={workspace.books[0].id} repository={repository} onClose={() => setActiveModal(null)} onImported={async (result, ...args) => { const unitsByChapter = args[1] ?? []; const pageMarkersByChapter = args[2] ?? []; const units = createManuscriptAnalysisUnits(result.chapters, unitsByChapter, result.scenes); const pageMarkers = pageMarkersByChapter.flat(); const job = await repository.createManuscriptAnalysisJob({ projectId: workspace.project.id, bookId: workspace.books[0].id, importReference: contentHash(result.chapters.map((chapter) => `${chapter.id}\n${chapter.scenes.map((scene) => canonicalizeSceneForAi(scene).text).join('\n')}`).join('\n')), providerId: providerSettings.activeProvider, pageMarkers, units }); setSelectedSceneId(result.scenes[0]?.id ?? ''); setActiveModal(null); await refreshManuscriptAnalysis(job.id); await startManuscriptAnalysis(job.id); await loadWorkspace(); await requestViewChange('editor'); }} />}
+    {activeModal === 'import' && workspace?.books[0] && <ManuscriptImportModal projectId={workspace.project.id} bookId={workspace.books[0].id} repository={repository} onClose={() => setActiveModal(null)} onImported={async (result, ...args) => { const currentWorkspace = workspace!; const unitsByChapter = args[1] ?? []; const pageMarkersByChapter = args[2] ?? []; const sourceDocument = args[3]; const units = createManuscriptAnalysisUnits(result.chapters, unitsByChapter, result.scenes); const pageMarkers = pageMarkersByChapter.flat(); const job = await repository.createManuscriptAnalysisJob({ projectId: currentWorkspace.project.id, bookId: currentWorkspace.books[0]!.id, importReference: sourceDocument?.contentHash ?? contentHash(result.chapters.map((chapter) => `${chapter.id}\n${chapter.scenes.map((scene) => canonicalizeSceneForAi(scene).text).join('\n')}`).join('\n')), providerId: providerSettings.activeProvider, pageMarkers, units }); const currentOnboarding = await repository.getProjectOnboardingState(currentWorkspace.project.id); await repository.saveProjectOnboardingState({ ...currentOnboarding, currentStep: 'summary', completedSteps: Array.from(new Set([...currentOnboarding.completedSteps, 'manuscript'])), importId: job.id }); setSelectedSceneId(result.scenes[0]?.id ?? ''); setActiveModal(null); await refreshManuscriptAnalysis(job.id); await loadWorkspace(currentWorkspace.project.id); setProviderNotice('Import gespeichert. Prüfe jetzt die Struktur, bevor du die Analyse startest.'); }} />}
+    {onboarding && loadState.status !== 'ready' && <div />}
     {closePrompt && <ClosePrompt message={closePrompt} onRetry={() => void finishClose(false)} onForceClose={() => void finishClose(true)} onCancel={() => setClosePrompt('')} />}
   </div>;
 }

@@ -1033,6 +1033,45 @@ pub struct Project {
     pub word_count: i64,
     pub open_warnings: i64,
     pub bible_progress: i64,
+    pub status: String,
+    pub last_opened_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectOnboardingState {
+    pub project_id: String,
+    pub current_step: String,
+    pub completed_steps: Vec<String>,
+    pub skipped_steps: Vec<String>,
+    pub language: String,
+    pub genre: String,
+    pub lore_crafter_run_id: Option<String>,
+    pub import_id: Option<String>,
+    pub updated_at: String,
+}
+
+fn default_language() -> String {
+    "de".into()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProjectOnboardingStateInput {
+    pub project_id: String,
+    pub current_step: String,
+    #[serde(default)]
+    pub completed_steps: Vec<String>,
+    #[serde(default)]
+    pub skipped_steps: Vec<String>,
+    #[serde(default = "default_language")]
+    pub language: String,
+    #[serde(default)]
+    pub genre: String,
+    #[serde(default)]
+    pub lore_crafter_run_id: Option<String>,
+    #[serde(default)]
+    pub import_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

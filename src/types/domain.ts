@@ -7,7 +7,10 @@ export type CorrectionKind = 'spelling' | 'grammar' | 'punctuation' | 'capitaliz
 export type SceneStatus = 'draft' | 'revised' | 'final';
 export type ManuscriptFont = 'serif' | 'sans' | 'typewriter';
 export interface EditorPreferences { fontFamily: ManuscriptFont; fontSize: number; lineHeight: number; }
-export interface Project { id: string; title: string; author: string; description: string; updatedAt: string; createdAt?: string; wordCount: number; openWarnings: number; bibleProgress: number; }
+export interface Project { id: string; title: string; author: string; description: string; updatedAt: string; createdAt?: string; wordCount: number; openWarnings: number; bibleProgress: number; status?: 'active' | 'archived'; lastOpenedAt?: string; }
+export type ProjectOnboardingStep = 'project' | 'lore' | 'manuscript' | 'summary' | 'completed';
+export interface ProjectOnboardingState { projectId: string; currentStep: ProjectOnboardingStep; completedSteps: string[]; skippedSteps: string[]; language: string; genre: string; loreCrafterRunId?: string; importId?: string; updatedAt: string; }
+export type SaveProjectOnboardingStateInput = Omit<ProjectOnboardingState, 'updatedAt'>;
 export interface Book { id: string; projectId: string; title: string; volume: number; createdAt?: string; updatedAt?: string; }
 export interface Chapter { id: string; bookId: string; title: string; orderIndex: number; scenes: Scene[]; createdAt?: string; updatedAt?: string; }
 export interface Scene { id: string; chapterId: string; title: string; orderIndex: number; content: string; pov: string; location: string; storyTime: string; status: SceneStatus; goal: string; notes: string; isImplicit?: boolean; createdAt?: string; updatedAt?: string; }
