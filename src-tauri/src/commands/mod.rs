@@ -26,34 +26,37 @@ use crate::{
         ContinuityReviewRun, ContinuityReviewSettings, ContinuityStateLedgerEntry,
         CreateBibleUpdateRunInput, CreateChapterGenerationJobInput, CreateChapterInput,
         CreateCharacterMemoryUpdateRunInput, CreateLoreCrafterRunInput, CreateLoreEntryInput,
-        CreateManuscriptAnalysisJobInput, CreateProjectInput, CreateProjectStyleAnalysisRunInput,
-        CreateSceneInput, CreateSceneVersionInput, CreateSourceReferenceInput,
-        CreateStoryEntityInput, CreateStoryEntityRelationInput, CreateStyleReferenceInput,
-        DatabaseInfo, DialogueMemoryParticipant, EditorPreferences, LoreCrafterClarification,
-        LoreCrafterRun, LoreCrafterSourceReference, LoreEntry, LoreMetadata, LoreSheetDraft,
-        LoreSheetItem, ManuscriptAnalysisDraftLedgerEntry, ManuscriptAnalysisJob,
-        ManuscriptAnalysisPageMarker, ManuscriptAnalysisUnit, ManuscriptImportInput,
-        ManuscriptImportResult, ManuscriptPosition, NarrativeSummary, PlotThreadLifecycle,
-        PlotThreadLifecycleProposal, Project, ProjectRule, ProjectRuleProposal, ProjectStyle,
-        ProjectStyleAnalysisRun, ProjectStyleObservation, ProviderStatus,
-        ReconcileContinuityTextCorrectionInput, RelationshipMemory, RestoreSceneVersionInput,
-        ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput,
-        SaveChapterGenerationDraftLedgerInput, SaveChapterGenerationPlanInput,
-        SaveChapterGenerationReviewInput, SaveChapterGenerationSectionInput,
-        SaveCharacterDialogueMemoryInput, SaveCharacterExperienceInput,
-        SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput, SaveCharacterSceneStateInput,
-        SaveCharacterVoicePatternInput, SaveContinuityFindingInput, SaveContinuityReviewInput,
-        SaveContinuityReviewRunStatusInput, SaveContinuityStateInput,
+        CreateManuscriptAnalysisJobInput, CreateProjectInput, CreateProjectSourceDocumentInput,
+        CreateProjectSourceReferenceInput, CreateProjectStyleAnalysisRunInput, CreateSceneInput,
+        CreateSceneVersionInput, CreateSourceReferenceInput, CreateStoryEntityInput,
+        CreateStoryEntityRelationInput, CreateStyleReferenceInput, DatabaseInfo,
+        DialogueMemoryParticipant, EditorPreferences, LoreCrafterClarification, LoreCrafterRun,
+        LoreCrafterSourceReference, LoreEntry, LoreMetadata, LoreSheetDraft, LoreSheetItem,
+        ManuscriptAnalysisArtifact, ManuscriptAnalysisDraftLedgerEntry, ManuscriptAnalysisJob,
+        ManuscriptAnalysisPageMarker, ManuscriptAnalysisPhaseResult, ManuscriptAnalysisReviewAudit,
+        ManuscriptAnalysisUnit, ManuscriptImportInput, ManuscriptImportResult, ManuscriptPosition,
+        NarrativeSummary, PlotThreadLifecycle, PlotThreadLifecycleProposal, Project, ProjectRule,
+        ProjectRuleProposal, ProjectSourceDocument, ProjectStyle, ProjectStyleAnalysisRun,
+        ProjectStyleObservation, ProviderStatus, ReconcileContinuityTextCorrectionInput,
+        RelationshipMemory, RestoreSceneVersionInput, ReviewBibleProposalInput,
+        ReviewCharacterMemoryProposalInput, SaveChapterGenerationDraftLedgerInput,
+        SaveChapterGenerationPlanInput, SaveChapterGenerationReviewInput,
+        SaveChapterGenerationSectionInput, SaveCharacterDialogueMemoryInput,
+        SaveCharacterExperienceInput, SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput,
+        SaveCharacterSceneStateInput, SaveCharacterVoicePatternInput, SaveContinuityFindingInput,
+        SaveContinuityReviewInput, SaveContinuityReviewRunStatusInput, SaveContinuityStateInput,
         SaveLoreCrafterClarificationInput, SaveLoreCrafterSourceInput, SaveLoreMetadataInput,
-        SaveLoreSheetDraftInput, SaveLoreSheetItemInput, SaveManuscriptAnalysisDraftLedgerInput,
-        SaveNarrativeSummaryInput, SavePlotThreadLifecycleInput,
-        SavePlotThreadLifecycleProposalInput, SaveProjectRuleInput, SaveProjectRuleProposalInput,
-        SaveProjectStyleInput, SaveProjectStyleObservationInput, SaveRelationshipMemoryInput,
-        SaveStoryDirectionInput, SaveWritingPreferencesInput, Scene, SceneInput, SceneVersion,
-        StoryDirection, StoryEntity, StoryEntityInput, StoryEntityRelation, StorySourceReference,
-        StyleReference, UpdateChapterInput, UpdateLoreCrafterRunInput,
-        UpdateManuscriptAnalysisJobInput, UpdateManuscriptAnalysisUnitInput,
-        UpdateStoryEntityInput, UpdateStyleReferenceInput, WorkspaceSnapshot, WritingPreferences,
+        SaveLoreSheetDraftInput, SaveLoreSheetItemInput, SaveManuscriptAnalysisArtifactInput,
+        SaveManuscriptAnalysisDraftLedgerInput, SaveManuscriptAnalysisPhaseResultInput,
+        SaveManuscriptAnalysisReviewAuditInput, SaveNarrativeSummaryInput,
+        SavePlotThreadLifecycleInput, SavePlotThreadLifecycleProposalInput, SaveProjectRuleInput,
+        SaveProjectRuleProposalInput, SaveProjectStyleInput, SaveProjectStyleObservationInput,
+        SaveRelationshipMemoryInput, SaveStoryDirectionInput, SaveWritingPreferencesInput, Scene,
+        SceneInput, SceneVersion, StoryDirection, StoryEntity, StoryEntityInput,
+        StoryEntityRelation, StorySourceReference, StyleReference, UpdateChapterInput,
+        UpdateLoreCrafterRunInput, UpdateManuscriptAnalysisJobInput,
+        UpdateManuscriptAnalysisUnitInput, UpdateStoryEntityInput, UpdateStyleReferenceInput,
+        WorkspaceSnapshot, WritingPreferences,
     },
 };
 use chrono::Utc;
@@ -659,7 +662,9 @@ fn lore_source_from_row(row: &rusqlite::Row<'_>) -> SqlResult<LoreCrafterSourceR
         excerpt: row.get(3)?,
         start_offset: row.get(4)?,
         end_offset: row.get(5)?,
-        created_at: row.get(6)?,
+        source_document_id: row.get(6)?,
+        source_reference_id: row.get(7)?,
+        created_at: row.get(8)?,
     })
 }
 
@@ -686,10 +691,22 @@ pub fn save_lore_crafter_source(
             "Die Lore-Quelle passt nicht zu den Unicode-Positionen des Originaltexts.".into(),
         );
     }
-    if let Some(existing) = db.query_row("SELECT id, run_id, project_id, excerpt, start_offset, end_offset, created_at FROM lore_crafter_sources WHERE run_id=?1 AND excerpt=?2 AND start_offset=?3 AND end_offset=?4 LIMIT 1", params![input.run_id, input.excerpt, input.start_offset, input.end_offset], lore_source_from_row).optional().map_err(|error| sql_error("Lore-Crafter-Quelle konnte nicht geprüft werden", error))? { return Ok(existing); }
+    if let Some(existing) = db.query_row("SELECT id, run_id, project_id, excerpt, start_offset, end_offset, source_document_id, source_reference_id, created_at FROM lore_crafter_sources WHERE run_id=?1 AND excerpt=?2 AND start_offset=?3 AND end_offset=?4 LIMIT 1", params![input.run_id, input.excerpt, input.start_offset, input.end_offset], lore_source_from_row).optional().map_err(|error| sql_error("Lore-Crafter-Quelle konnte nicht geprüft werden", error))? { return Ok(existing); }
+    let run_hash: String = db
+        .query_row(
+            "SELECT content_hash FROM lore_crafter_runs WHERE id=?1",
+            params![input.run_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| sql_error("Lore-Crafter-Hash konnte nicht geladen werden", e))?;
+    let document_id: String = db.query_row("SELECT id FROM project_source_documents WHERE project_id=?1 AND content_hash=?2 AND source_kind='lore_crafter' ORDER BY updated_at DESC LIMIT 1", params![input.project_id, run_hash], |row| row.get(0)).optional().map_err(|e| sql_error("Lore-Crafter-Quelldokument konnte nicht geprüft werden", e))?.unwrap_or_else(new_id);
+    let stamp = now();
+    db.execute("INSERT INTO project_source_documents(id,project_id,source_kind,title,content,content_hash,origin_id,created_at,updated_at) VALUES(?1,?2,'lore_crafter','Lore-Crafter-Originaltext',(SELECT original_text FROM lore_crafter_runs WHERE id=?3),?4,?3,?5,?5) ON CONFLICT(id) DO NOTHING", params![document_id,input.project_id,input.run_id,run_hash,stamp]).map_err(|e| sql_error("Lore-Crafter-Quelldokument konnte nicht gespeichert werden", e))?;
+    let reference_id = new_id();
+    db.execute("INSERT INTO project_source_references(id,project_id,source_document_id,excerpt,start_offset,end_offset,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)", params![reference_id,input.project_id,document_id,input.excerpt,input.start_offset,input.end_offset,stamp]).map_err(|e| sql_error("Lore-Crafter-Quellenreferenz konnte nicht gespeichert werden", e))?;
     let id = new_id();
-    db.execute("INSERT INTO lore_crafter_sources (id, run_id, project_id, excerpt, start_offset, end_offset, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7)", params![id, input.run_id, input.project_id, input.excerpt, input.start_offset, input.end_offset, now()]).map_err(|error| sql_error("Lore-Crafter-Quelle konnte nicht gespeichert werden", error))?;
-    db.query_row("SELECT id, run_id, project_id, excerpt, start_offset, end_offset, created_at FROM lore_crafter_sources WHERE id=?1", params![id], lore_source_from_row).map_err(|error| sql_error("Gespeicherte Lore-Crafter-Quelle konnte nicht geladen werden", error))
+    db.execute("INSERT INTO lore_crafter_sources (id, run_id, project_id, excerpt, start_offset, end_offset, source_document_id, source_reference_id, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![id, input.run_id, input.project_id, input.excerpt, input.start_offset, input.end_offset, document_id, reference_id, stamp]).map_err(|error| sql_error("Lore-Crafter-Quelle konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT id, run_id, project_id, excerpt, start_offset, end_offset, source_document_id, source_reference_id, created_at FROM lore_crafter_sources WHERE id=?1", params![id], lore_source_from_row).map_err(|error| sql_error("Gespeicherte Lore-Crafter-Quelle konnte nicht geladen werden", error))
 }
 
 #[tauri::command]
@@ -699,7 +716,7 @@ pub fn list_lore_crafter_sources(
 ) -> Result<Vec<LoreCrafterSourceReference>, String> {
     let db = lock_db(&state)?;
     let run = load_lore_crafter_run(&db, &run_id)?;
-    let mut statement = db.prepare("SELECT id, run_id, project_id, excerpt, start_offset, end_offset, created_at FROM lore_crafter_sources WHERE run_id=?1 AND project_id=?2 ORDER BY start_offset").map_err(|error| sql_error("Lore-Crafter-Quellen konnten nicht geladen werden", error))?;
+    let mut statement = db.prepare("SELECT id, run_id, project_id, excerpt, start_offset, end_offset, source_document_id, source_reference_id, created_at FROM lore_crafter_sources WHERE run_id=?1 AND project_id=?2 ORDER BY start_offset").map_err(|error| sql_error("Lore-Crafter-Quellen konnten nicht geladen werden", error))?;
     let result = statement
         .query_map(params![run_id, run.project_id], lore_source_from_row)
         .map_err(|error| sql_error("Lore-Crafter-Quellen konnten nicht geladen werden", error))?
@@ -821,9 +838,12 @@ fn lore_item_from_row(row: &rusqlite::Row<'_>) -> SqlResult<LoreSheetItem> {
         source_reference_id: row.get(8)?,
         target_entity_id: row.get(9)?,
         target_rule_id: row.get(10)?,
-        status: row.get(11)?,
-        created_at: row.get(12)?,
-        updated_at: row.get(13)?,
+        structured: row
+            .get::<_, Option<String>>(11)?
+            .and_then(|value| serde_json::from_str(&value).ok()),
+        status: row.get(12)?,
+        created_at: row.get(13)?,
+        updated_at: row.get(14)?,
     })
 }
 
@@ -855,7 +875,7 @@ pub fn save_lore_sheet_items(
     }
     for input in &inputs {
         if let Some(source_id) = &input.source_reference_id {
-            let valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM lore_crafter_sources WHERE id=?1 AND run_id=?2 AND project_id=?3)", params![source_id, draft.0, draft.1], |row| row.get(0)).map_err(|error| sql_error("Lore-Sheet-Quelle konnte nicht geprüft werden", error))?;
+            let valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM project_source_references WHERE id=?1 AND project_id=?2) OR EXISTS(SELECT 1 FROM lore_crafter_sources WHERE id=?1 AND run_id=?3 AND project_id=?2)", params![source_id, draft.1, draft.0], |row| row.get(0)).map_err(|error| sql_error("Lore-Sheet-Quelle konnte nicht geprüft werden", error))?;
             if !valid {
                 return Err("Eine Lore-Sheet-Quelle gehört nicht zum Projekt.".into());
             }
@@ -893,7 +913,7 @@ pub fn save_lore_sheet_items(
     let stamp = now();
     for input in inputs {
         let id = input.id.unwrap_or_else(new_id);
-        transaction.execute("INSERT INTO lore_sheet_items (id,draft_id,run_id,project_id,item_type,title,content,confidence,source_reference_id,target_entity_id,target_rule_id,status,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13) ON CONFLICT(id) DO UPDATE SET title=excluded.title, content=excluded.content, confidence=excluded.confidence, source_reference_id=excluded.source_reference_id, target_entity_id=excluded.target_entity_id, target_rule_id=excluded.target_rule_id, status=excluded.status, updated_at=excluded.updated_at", params![id, input.draft_id, input.run_id, input.project_id, input.item_type, input.title, input.content, input.confidence, input.source_reference_id, input.target_entity_id, input.target_rule_id, input.status.unwrap_or_else(|| "proposed".into()), stamp]).map_err(|error| sql_error("Lore-Sheet-Eintrag konnte nicht gespeichert werden", error))?;
+        transaction.execute("INSERT INTO lore_sheet_items (id,draft_id,run_id,project_id,item_type,title,content,confidence,source_reference_id,target_entity_id,target_rule_id,structured_json,status,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?14) ON CONFLICT(id) DO UPDATE SET title=excluded.title, content=excluded.content, confidence=excluded.confidence, source_reference_id=excluded.source_reference_id, target_entity_id=excluded.target_entity_id, target_rule_id=excluded.target_rule_id, structured_json=excluded.structured_json, status=excluded.status, updated_at=excluded.updated_at", params![id, input.draft_id, input.run_id, input.project_id, input.item_type, input.title, input.content, input.confidence, input.source_reference_id, input.target_entity_id, input.target_rule_id, input.structured.map(|value| value.to_string()), input.status.unwrap_or_else(|| "proposed".into()), stamp]).map_err(|error| sql_error("Lore-Sheet-Eintrag konnte nicht gespeichert werden", error))?;
     }
     transaction.commit().map_err(|error| {
         sql_error(
@@ -909,7 +929,7 @@ fn list_lore_sheet_items_for_db(
     draft_id: &str,
     project_id: &str,
 ) -> Result<Vec<LoreSheetItem>, String> {
-    let mut statement = db.prepare("SELECT id,draft_id,run_id,project_id,item_type,title,content,confidence,source_reference_id,target_entity_id,target_rule_id,status,created_at,updated_at FROM lore_sheet_items WHERE draft_id=?1 AND project_id=?2 ORDER BY created_at").map_err(|error| sql_error("Lore-Sheet-Einträge konnten nicht geladen werden", error))?;
+    let mut statement = db.prepare("SELECT id,draft_id,run_id,project_id,item_type,title,content,confidence,source_reference_id,target_entity_id,target_rule_id,structured_json,status,created_at,updated_at FROM lore_sheet_items WHERE draft_id=?1 AND project_id=?2 ORDER BY created_at").map_err(|error| sql_error("Lore-Sheet-Einträge konnten nicht geladen werden", error))?;
     let result = statement
         .query_map(params![draft_id, project_id], lore_item_from_row)
         .map_err(|error| sql_error("Lore-Sheet-Einträge konnten nicht geladen werden", error))?
@@ -959,7 +979,7 @@ pub fn review_lore_sheet_item(
             "Der Lore-Sheet-Eintrag gehört nicht zum Projekt oder wurde nicht gefunden.".into(),
         );
     }
-    db.query_row("SELECT id,draft_id,run_id,project_id,item_type,title,content,confidence,source_reference_id,target_entity_id,target_rule_id,status,created_at,updated_at FROM lore_sheet_items WHERE id=?1 AND project_id=?2", params![id, project_id], lore_item_from_row).map_err(|error| sql_error("Lore-Sheet-Eintrag konnte nicht geladen werden", error))
+    db.query_row("SELECT id,draft_id,run_id,project_id,item_type,title,content,confidence,source_reference_id,target_entity_id,target_rule_id,structured_json,status,created_at,updated_at FROM lore_sheet_items WHERE id=?1 AND project_id=?2", params![id, project_id], lore_item_from_row).map_err(|error| sql_error("Lore-Sheet-Eintrag konnte nicht geladen werden", error))
 }
 #[tauri::command]
 pub fn load_workspace(state: State<'_, DbState>) -> Result<WorkspaceSnapshot, String> {
@@ -1659,11 +1679,26 @@ fn source_from_row(row: &rusqlite::Row<'_>) -> SqlResult<StorySourceReference> {
         proposal_id: row.get(3)?,
         chapter_id: row.get(4)?,
         scene_id: row.get(5)?,
-        excerpt: row.get(6)?,
-        start_offset: row.get(7)?,
-        end_offset: row.get(8)?,
-        created_at: row.get(9)?,
+        source_document_id: row.get(6)?,
+        excerpt: row.get(7)?,
+        start_offset: row.get(8)?,
+        end_offset: row.get(9)?,
+        created_at: row.get(10)?,
     })
+}
+
+fn sync_manuscript_artifact(
+    db: &Connection,
+    artifact_type: &str,
+    artifact_id: &str,
+    status: &str,
+) -> Result<(), String> {
+    db.execute(
+        "UPDATE manuscript_analysis_artifacts SET review_status=?1, explicitly_skipped=0, updated_at=?2 WHERE artifact_type=?3 AND artifact_id=?4",
+        params![status, now(), artifact_type, artifact_id],
+    )
+    .map_err(|error| sql_error("Analyseartefakt konnte nicht aktualisiert werden", error))?;
+    Ok(())
 }
 
 fn insert_source_reference_if_missing_tx(
@@ -1716,13 +1751,19 @@ fn insert_source_reference_if_missing_tx(
 }
 
 fn load_source_reference(db: &Connection, id: &str) -> Result<StorySourceReference, String> {
-    db.query_row(
-        "SELECT id, project_id, entity_id, proposal_id, chapter_id, scene_id, excerpt, start_offset, end_offset, created_at
+    let manuscript = db.query_row(
+        "SELECT id, project_id, entity_id, proposal_id, chapter_id, scene_id, NULL AS source_document_id, excerpt, start_offset, end_offset, created_at
          FROM story_source_references WHERE id=?1",
-        params![id],
-        source_from_row,
-    )
-    .map_err(|error| sql_error("Gespeicherte Quellenreferenz konnte nicht geladen werden", error))
+        params![id], source_from_row,
+    ).optional().map_err(|error| sql_error("Gespeicherte Quellenreferenz konnte nicht geladen werden", error))?;
+    if let Some(source) = manuscript {
+        return Ok(source);
+    }
+    db.query_row(
+        "SELECT id, project_id, entity_id, proposal_id, chapter_id, scene_id, source_document_id, excerpt, start_offset, end_offset, created_at
+         FROM project_source_references WHERE id=?1",
+        params![id], source_from_row,
+    ).map_err(|error| sql_error("Gespeicherte Quellenreferenz konnte nicht geladen werden", error))
 }
 
 #[tauri::command]
@@ -1762,13 +1803,89 @@ pub fn list_source_references(
     entity_id: Option<String>,
 ) -> Result<Vec<StorySourceReference>, String> {
     let db = lock_db(&state)?;
-    let mut statement = db.prepare("SELECT id, project_id, entity_id, proposal_id, chapter_id, scene_id, excerpt, start_offset, end_offset, created_at FROM story_source_references WHERE project_id=?1 AND (?2 IS NULL OR entity_id=?2) ORDER BY created_at DESC").map_err(|error| sql_error("Quellen konnten nicht geladen werden", error))?;
+    let mut statement = db.prepare("SELECT id, project_id, entity_id, proposal_id, chapter_id, scene_id, NULL AS source_document_id, excerpt, start_offset, end_offset, created_at FROM story_source_references WHERE project_id=?1 AND (?2 IS NULL OR entity_id=?2) UNION ALL SELECT id, project_id, entity_id, proposal_id, chapter_id, scene_id, source_document_id, excerpt, start_offset, end_offset, created_at FROM project_source_references WHERE project_id=?1 AND (?2 IS NULL OR entity_id=?2) ORDER BY created_at DESC").map_err(|error| sql_error("Quellen konnten nicht geladen werden", error))?;
     let result = statement
         .query_map(params![project_id, entity_id], source_from_row)
         .map_err(|error| sql_error("Quellen konnten nicht geladen werden", error))?
         .collect::<SqlResult<Vec<_>>>()
         .map_err(|error| sql_error("Quellen konnten nicht geladen werden", error));
     result
+}
+
+fn project_source_document_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ProjectSourceDocument> {
+    Ok(ProjectSourceDocument {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        source_kind: row.get(2)?,
+        title: row.get(3)?,
+        content: row.get(4)?,
+        content_hash: row.get(5)?,
+        origin_id: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+    })
+}
+
+#[tauri::command]
+pub fn create_project_source_document(
+    state: State<'_, DbState>,
+    input: CreateProjectSourceDocumentInput,
+) -> Result<ProjectSourceDocument, String> {
+    if !matches!(
+        input.source_kind.as_str(),
+        "lore_crafter" | "research" | "author_note" | "external_text"
+    ) || input.content.chars().count() > 200_000
+    {
+        return Err("Ungültiges oder zu großes Quelldokument.".into());
+    }
+    let db = lock_db(&state)?;
+    project_from_db(&db, &input.project_id)?;
+    let stamp = now();
+    let id: String = db.query_row("SELECT id FROM project_source_documents WHERE project_id=?1 AND content_hash=?2 AND source_kind=?3 ORDER BY updated_at DESC LIMIT 1", params![input.project_id, input.content_hash, input.source_kind], |row| row.get(0)).optional().map_err(|e| sql_error("Quelldokument konnte nicht geprüft werden", e))?.unwrap_or_else(new_id);
+    db.execute("INSERT INTO project_source_documents(id,project_id,source_kind,title,content,content_hash,origin_id,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,COALESCE((SELECT created_at FROM project_source_documents WHERE id=?1),?8),?8) ON CONFLICT(id) DO UPDATE SET title=excluded.title,content=excluded.content,content_hash=excluded.content_hash,origin_id=excluded.origin_id,updated_at=excluded.updated_at", params![id,input.project_id,input.source_kind,input.title,input.content,input.content_hash,input.origin_id,stamp]).map_err(|e| sql_error("Quelldokument konnte nicht gespeichert werden", e))?;
+    db.query_row("SELECT id,project_id,source_kind,title,content,content_hash,origin_id,created_at,updated_at FROM project_source_documents WHERE id=?1", params![id], project_source_document_from_row).map_err(|e| sql_error("Quelldokument konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn list_project_source_documents(
+    state: State<'_, DbState>,
+    project_id: String,
+) -> Result<Vec<ProjectSourceDocument>, String> {
+    let db = lock_db(&state)?;
+    let mut statement = db.prepare("SELECT id,project_id,source_kind,title,content,content_hash,origin_id,created_at,updated_at FROM project_source_documents WHERE project_id=?1 ORDER BY updated_at DESC").map_err(|e| sql_error("Quelldokumente konnten nicht geladen werden", e))?;
+    let result = statement
+        .query_map(params![project_id], project_source_document_from_row)
+        .map_err(|e| sql_error("Quelldokumente konnten nicht gelesen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Quelldokumente konnten nicht gelesen werden", e));
+    result
+}
+
+#[tauri::command]
+pub fn create_project_source_reference(
+    state: State<'_, DbState>,
+    input: CreateProjectSourceReferenceInput,
+) -> Result<StorySourceReference, String> {
+    let db = lock_db(&state)?;
+    let document: ProjectSourceDocument = db.query_row("SELECT id,project_id,source_kind,title,content,content_hash,origin_id,created_at,updated_at FROM project_source_documents WHERE id=?1 AND project_id=?2", params![input.source_document_id, input.project_id], project_source_document_from_row).map_err(|e| sql_error("Quelldokument konnte nicht geprüft werden", e))?;
+    let chars: Vec<char> = document.content.chars().collect();
+    if input.start_offset < 0
+        || input.end_offset <= input.start_offset
+        || input.end_offset as usize > chars.len()
+        || chars[input.start_offset as usize..input.end_offset as usize]
+            .iter()
+            .collect::<String>()
+            != input.excerpt
+    {
+        return Err("Die Quelle passt nicht zu den Unicode-Positionen des Quelldokuments.".into());
+    }
+    if let Some(entity_id) = &input.entity_id {
+        project_entity_exists(&db, &input.project_id, entity_id, None)?;
+    }
+    let id = new_id();
+    let stamp = now();
+    db.execute("INSERT INTO project_source_references(id,project_id,source_document_id,entity_id,proposal_id,excerpt,start_offset,end_offset,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![id,input.project_id,input.source_document_id,input.entity_id,input.proposal_id,input.excerpt,input.start_offset,input.end_offset,stamp]).map_err(|e| sql_error("Projektweite Quellenreferenz konnte nicht gespeichert werden", e))?;
+    db.query_row("SELECT id,project_id,entity_id,proposal_id,chapter_id,scene_id,source_document_id,excerpt,start_offset,end_offset,created_at FROM project_source_references WHERE id=?1", params![id], |row| Ok(StorySourceReference { id: row.get(0)?, project_id: row.get(1)?, entity_id: row.get(2)?, proposal_id: row.get(3)?, chapter_id: row.get(4)?, scene_id: row.get(5)?, source_document_id: row.get(6)?, excerpt: row.get(7)?, start_offset: row.get(8)?, end_offset: row.get(9)?, created_at: row.get(10)? })).map_err(|e| sql_error("Projektweite Quellenreferenz konnte nicht geladen werden", e))
 }
 
 fn run_from_row(row: &rusqlite::Row<'_>) -> SqlResult<BibleUpdateRun> {
@@ -2072,6 +2189,18 @@ pub(crate) fn review_bible_proposal_in_db(
     transaction
         .commit()
         .map_err(|error| sql_error("Review konnte nicht abgeschlossen werden", error))?;
+    sync_manuscript_artifact(
+        db,
+        "bible_proposal",
+        &proposal.id,
+        if input.review_status == "rejected" {
+            "rejected"
+        } else if input.review_status == "accepted" || input.review_status == "edited" {
+            "confirmed"
+        } else {
+            "uncertain"
+        },
+    )?;
     load_proposal(db, &proposal.id)
 }
 
@@ -2894,6 +3023,18 @@ pub fn review_narrative_summary(
     if changed == 0 {
         return Err("Zusammenfassung nicht gefunden.".into());
     }
+    sync_manuscript_artifact(
+        &db,
+        "narrative_summary",
+        &id,
+        if status == "rejected" {
+            "rejected"
+        } else if status == "confirmed" {
+            "confirmed"
+        } else {
+            "uncertain"
+        },
+    )?;
     db.query_row("SELECT id,project_id,scope_type,scope_id,content_hash,summary,important_events_json,open_threads_json,character_changes_json,status,author_confirmed,created_at,updated_at FROM narrative_summaries WHERE id=?1", params![id], narrative_summary_from_row).map_err(|e| sql_error("Zusammenfassung konnte nicht geladen werden", e))
 }
 
@@ -3155,7 +3296,7 @@ fn validate_rule_input(db: &Connection, input: &SaveProjectRuleInput) -> Result<
         }
     }
     for id in &input.source_reference_ids {
-        let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2)", params![id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Regelquelle konnte nicht geprüft werden", error))?;
+        let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2 UNION ALL SELECT 1 FROM project_source_references WHERE id=?1 AND project_id=?2)", params![id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Regelquelle konnte nicht geprüft werden", error))?;
         if !exists {
             return Err("Eine Regelquelle gehört nicht zum Projekt.".into());
         }
@@ -3301,7 +3442,7 @@ pub fn save_project_rule_proposal(
         project_entity_exists(&db, &input.project_id, id, None)?;
     }
     for id in &input.source_reference_ids {
-        let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2)", params![id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Regelquelle konnte nicht geprüft werden", error))?;
+        let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2 UNION ALL SELECT 1 FROM project_source_references WHERE id=?1 AND project_id=?2)", params![id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Regelquelle konnte nicht geprüft werden", error))?;
         if !exists {
             return Err("Eine Regelquelle gehört nicht zum Projekt.".into());
         }
@@ -3406,6 +3547,16 @@ pub fn review_project_rule_proposal(
     transaction
         .commit()
         .map_err(|error| sql_error("Regelreview konnte nicht abgeschlossen werden", error))?;
+    sync_manuscript_artifact(
+        &db,
+        "project_rule_proposal",
+        &id,
+        if review_status == "rejected" {
+            "rejected"
+        } else {
+            "confirmed"
+        },
+    )?;
     db.query_row("SELECT id, project_id, target_rule_id, title, statement, scope, prerequisites_json, effects_json, exceptions_json, connected_lore_ids_json, source_reference_ids_json, evidence_excerpt, chapter_id, scene_id, start_offset, end_offset, confidence, reason, review_status, reviewed_at, created_at FROM project_rule_proposals WHERE id=?1", params![id], rule_proposal_from_row).map_err(|error| sql_error("Regelreview konnte nicht geladen werden", error))
 }
 
@@ -3462,7 +3613,7 @@ fn validate_continuity_input(
         validate_scene_project(db, &input.project_id, scene_id)?;
     }
     if let Some(source_id) = &input.source_reference_id {
-        let ok: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2)", params![source_id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Quelle konnte nicht geprüft werden", error))?;
+        let ok: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2 UNION ALL SELECT 1 FROM project_source_references WHERE id=?1 AND project_id=?2)", params![source_id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Quelle konnte nicht geprüft werden", error))?;
         if !ok {
             return Err("Die Quelle gehört nicht zum Projekt.".into());
         }
@@ -3936,6 +4087,25 @@ pub fn get_manuscript_analysis_job(
     db.query_row("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE id=?1", params![id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geladen werden", error))
 }
 
+fn load_manuscript_analysis_job(
+    db: &Connection,
+    id: &str,
+) -> Result<ManuscriptAnalysisJob, String> {
+    db.query_row("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE id=?1", params![id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geladen werden", error))
+}
+
+fn load_manuscript_analysis_job_for_project(
+    db: &Connection,
+    id: &str,
+    project_id: &str,
+) -> Result<ManuscriptAnalysisJob, String> {
+    let job = load_manuscript_analysis_job(db, id)?;
+    if job.project_id != project_id {
+        return Err("Der Analysejob gehört nicht zum Projekt.".into());
+    }
+    Ok(job)
+}
+
 #[tauri::command]
 pub fn list_manuscript_analysis_units(
     state: State<'_, DbState>,
@@ -4037,7 +4207,7 @@ pub fn replace_manuscript_analysis_draft_ledger(
             project_entity_exists(&tx, &entry.project_id, related, None)?;
         }
         if let Some(source_id) = &entry.source_reference_id {
-            let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2)", params![source_id, entry.project_id], |row| row.get(0)).map_err(|error| sql_error("Import-Draft-Quelle konnte nicht geprüft werden", error))?;
+            let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2 UNION ALL SELECT 1 FROM project_source_references WHERE id=?1 AND project_id=?2)", params![source_id, entry.project_id], |row| row.get(0)).map_err(|error| sql_error("Import-Draft-Quelle konnte nicht geprüft werden", error))?;
             if !valid {
                 return Err("Die Import-Draft-Quelle gehört nicht zum Projekt.".into());
             }
@@ -4069,7 +4239,7 @@ pub fn review_manuscript_analysis_draft_ledger(
         let source_id = draft.source_reference_id.clone().ok_or_else(|| {
             "Ein bestätigter Importzustand benötigt eine Source Reference.".to_string()
         })?;
-        let source_valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2)", params![source_id, draft.project_id], |row| row.get(0)).map_err(|error| sql_error("Import-Draft-Quelle konnte nicht geprüft werden", error))?;
+        let source_valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2 UNION ALL SELECT 1 FROM project_source_references WHERE id=?1 AND project_id=?2)", params![source_id, draft.project_id], |row| row.get(0)).map_err(|error| sql_error("Import-Draft-Quelle konnte nicht geprüft werden", error))?;
         if !source_valid {
             return Err("Die Import-Draft-Quelle gehört nicht zum Projekt.".into());
         }
@@ -4083,6 +4253,203 @@ pub fn review_manuscript_analysis_draft_ledger(
     )
     .map_err(|error| sql_error("Import-Draft-Ledger konnte nicht geprüft werden", error))?;
     db.query_row("SELECT id, job_id, unit_id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, chapter_id, scene_id, start_offset, end_offset, source_excerpt, source_reference_id, confidence, status, created_at, updated_at FROM manuscript_analysis_draft_ledger WHERE id=?1", params![id], manuscript_analysis_draft_from_row).map_err(|error| sql_error("Import-Draft-Ledger konnte nicht geladen werden", error))
+}
+
+fn phase_result_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ManuscriptAnalysisPhaseResult> {
+    Ok(ManuscriptAnalysisPhaseResult {
+        id: row.get(0)?,
+        job_id: row.get(1)?,
+        project_id: row.get(2)?,
+        phase: row.get(3)?,
+        result_kind: row.get(4)?,
+        payload: serde_json::from_str(&row.get::<_, String>(5)?).unwrap_or(serde_json::Value::Null),
+        content_hash: row.get(6)?,
+        provider_id: row.get(7)?,
+        prompt_version: row.get(8)?,
+        review_status: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+    })
+}
+
+#[tauri::command]
+pub fn save_manuscript_analysis_phase_result(
+    state: State<'_, DbState>,
+    input: SaveManuscriptAnalysisPhaseResultInput,
+) -> Result<ManuscriptAnalysisPhaseResult, String> {
+    if !matches!(
+        input.review_status.as_deref().unwrap_or("pending"),
+        "pending" | "confirmed" | "rejected" | "uncertain" | "skipped"
+    ) || input.payload.to_string().chars().count() > 500_000
+    {
+        return Err("Ungültiges oder zu großes Phasenergebnis.".into());
+    }
+    let db = lock_db(&state)?;
+    let job = load_manuscript_analysis_job_for_project(&db, &input.job_id, &input.project_id)?;
+    let id = input.id.clone().unwrap_or_else(new_id);
+    let stamp = now();
+    db.execute("INSERT INTO manuscript_analysis_phase_results(id,job_id,project_id,phase,result_kind,payload_json,content_hash,provider_id,prompt_version,review_status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,COALESCE((SELECT created_at FROM manuscript_analysis_phase_results WHERE id=?1),?11),?11) ON CONFLICT(id) DO UPDATE SET payload_json=excluded.payload_json,content_hash=excluded.content_hash,provider_id=excluded.provider_id,prompt_version=excluded.prompt_version,review_status=excluded.review_status,updated_at=excluded.updated_at", params![id,input.job_id,job.project_id,input.phase,input.result_kind,input.payload.to_string(),input.content_hash,input.provider_id,input.prompt_version,input.review_status.unwrap_or_else(|| "pending".into()),stamp]).map_err(|e| sql_error("Strukturiertes Phasenergebnis konnte nicht gespeichert werden", e))?;
+    db.query_row("SELECT id,job_id,project_id,phase,result_kind,payload_json,content_hash,provider_id,prompt_version,review_status,created_at,updated_at FROM manuscript_analysis_phase_results WHERE id=?1", params![id], phase_result_from_row).map_err(|e| sql_error("Strukturiertes Phasenergebnis konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn list_manuscript_analysis_phase_results(
+    state: State<'_, DbState>,
+    job_id: String,
+    phase: Option<String>,
+) -> Result<Vec<ManuscriptAnalysisPhaseResult>, String> {
+    let db = lock_db(&state)?;
+    let job = load_manuscript_analysis_job(&db, &job_id)?;
+    let mut statement = db.prepare("SELECT id,job_id,project_id,phase,result_kind,payload_json,content_hash,provider_id,prompt_version,review_status,created_at,updated_at FROM manuscript_analysis_phase_results WHERE job_id=?1 AND project_id=?2 AND (?3 IS NULL OR phase=?3) ORDER BY updated_at").map_err(|e| sql_error("Phasenergebnisse konnten nicht geladen werden", e))?;
+    let result = statement
+        .query_map(
+            params![job_id, job.project_id, phase],
+            phase_result_from_row,
+        )
+        .map_err(|e| sql_error("Phasenergebnisse konnten nicht gelesen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Phasenergebnisse konnten nicht gelesen werden", e));
+    result
+}
+
+fn artifact_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ManuscriptAnalysisArtifact> {
+    Ok(ManuscriptAnalysisArtifact {
+        id: row.get(0)?,
+        job_id: row.get(1)?,
+        project_id: row.get(2)?,
+        phase: row.get(3)?,
+        unit_id: row.get(4)?,
+        artifact_type: row.get(5)?,
+        artifact_id: row.get(6)?,
+        review_status: row.get(7)?,
+        explicitly_skipped: row.get::<_, i64>(8)? != 0,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
+    })
+}
+
+#[tauri::command]
+pub fn save_manuscript_analysis_artifacts(
+    state: State<'_, DbState>,
+    job_id: String,
+    artifacts: Vec<SaveManuscriptAnalysisArtifactInput>,
+) -> Result<Vec<ManuscriptAnalysisArtifact>, String> {
+    let db = lock_db(&state)?;
+    let job = load_manuscript_analysis_job(&db, &job_id)?;
+    let tx = db
+        .unchecked_transaction()
+        .map_err(|e| sql_error("Analyseartefakte konnten nicht gestartet werden", e))?;
+    let stamp = now();
+    for input in artifacts {
+        if input.job_id != job_id
+            || input.project_id != job.project_id
+            || input.artifact_id.trim().is_empty()
+            || !matches!(
+                input.review_status.as_deref().unwrap_or("pending"),
+                "pending" | "confirmed" | "rejected" | "uncertain" | "skipped"
+            )
+        {
+            return Err("Ein Analyseartefakt ist ungültig oder projektfremd.".into());
+        }
+        let id = input.id.unwrap_or_else(new_id);
+        tx.execute("INSERT INTO manuscript_analysis_artifacts(id,job_id,project_id,phase,unit_id,artifact_type,artifact_id,review_status,explicitly_skipped,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,COALESCE((SELECT created_at FROM manuscript_analysis_artifacts WHERE id=?1),?10),?10) ON CONFLICT(job_id,artifact_type,artifact_id) DO UPDATE SET phase=excluded.phase,unit_id=excluded.unit_id,review_status=excluded.review_status,explicitly_skipped=excluded.explicitly_skipped,updated_at=excluded.updated_at", params![id,input.job_id,input.project_id,input.phase,input.unit_id,input.artifact_type,input.artifact_id,input.review_status.unwrap_or_else(|| "pending".into()),input.explicitly_skipped.unwrap_or(false) as i64,stamp]).map_err(|e| sql_error("Analyseartefakt konnte nicht gespeichert werden", e))?;
+    }
+    tx.commit()
+        .map_err(|e| sql_error("Analyseartefakte konnten nicht abgeschlossen werden", e))?;
+    let mut statement = db.prepare("SELECT id,job_id,project_id,phase,unit_id,artifact_type,artifact_id,review_status,explicitly_skipped,created_at,updated_at FROM manuscript_analysis_artifacts WHERE job_id=?1 AND project_id=?2 ORDER BY created_at").map_err(|e| sql_error("Analyseartefakte konnten nicht geladen werden", e))?;
+    let result = statement
+        .query_map(params![job_id, job.project_id], artifact_from_row)
+        .map_err(|e| sql_error("Analyseartefakte konnten nicht gelesen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Analyseartefakte konnten nicht gelesen werden", e));
+    result
+}
+
+#[tauri::command]
+pub fn list_manuscript_analysis_artifacts(
+    state: State<'_, DbState>,
+    job_id: String,
+) -> Result<Vec<ManuscriptAnalysisArtifact>, String> {
+    let db = lock_db(&state)?;
+    let job = load_manuscript_analysis_job(&db, &job_id)?;
+    let mut statement = db.prepare("SELECT id,job_id,project_id,phase,unit_id,artifact_type,artifact_id,review_status,explicitly_skipped,created_at,updated_at FROM manuscript_analysis_artifacts WHERE job_id=?1 AND project_id=?2 ORDER BY created_at").map_err(|e| sql_error("Analyseartefakte konnten nicht geladen werden", e))?;
+    let result = statement
+        .query_map(params![job_id, job.project_id], artifact_from_row)
+        .map_err(|e| sql_error("Analyseartefakte konnten nicht gelesen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Analyseartefakte konnten nicht gelesen werden", e));
+    result
+}
+
+#[tauri::command]
+pub fn review_manuscript_analysis_artifact(
+    state: State<'_, DbState>,
+    id: String,
+    status: String,
+    explicitly_skipped: Option<bool>,
+) -> Result<ManuscriptAnalysisArtifact, String> {
+    if !matches!(
+        status.as_str(),
+        "pending" | "confirmed" | "rejected" | "uncertain" | "skipped"
+    ) {
+        return Err("Ungültiger Artefaktstatus.".into());
+    }
+    let db = lock_db(&state)?;
+    let changed = db.execute("UPDATE manuscript_analysis_artifacts SET review_status=?1,explicitly_skipped=?2,updated_at=?3 WHERE id=?4", params![status,explicitly_skipped.unwrap_or(status == "skipped") as i64,now(),id]).map_err(|e| sql_error("Artefaktreview konnte nicht gespeichert werden", e))?;
+    if changed == 0 {
+        return Err("Analyseartefakt nicht gefunden.".into());
+    }
+    db.query_row("SELECT id,job_id,project_id,phase,unit_id,artifact_type,artifact_id,review_status,explicitly_skipped,created_at,updated_at FROM manuscript_analysis_artifacts WHERE id=?1", params![id], artifact_from_row).map_err(|e| sql_error("Artefakt konnte nicht geladen werden", e))
+}
+
+fn audit_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ManuscriptAnalysisReviewAudit> {
+    Ok(ManuscriptAnalysisReviewAudit {
+        id: row.get(0)?,
+        job_id: row.get(1)?,
+        project_id: row.get(2)?,
+        action: row.get(3)?,
+        artifact_ids: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or_default(),
+        artifact_types: serde_json::from_str(&row.get::<_, String>(5)?).unwrap_or_default(),
+        note: row.get(6)?,
+        created_at: row.get(7)?,
+    })
+}
+
+#[tauri::command]
+pub fn save_manuscript_analysis_review_audit(
+    state: State<'_, DbState>,
+    input: SaveManuscriptAnalysisReviewAuditInput,
+) -> Result<ManuscriptAnalysisReviewAudit, String> {
+    if !matches!(
+        input.action.as_str(),
+        "skip_open_artifacts" | "complete_review"
+    ) || input.note.trim().is_empty()
+    {
+        return Err("Ungültiger Review-Audit.".into());
+    }
+    let db = lock_db(&state)?;
+    let job = load_manuscript_analysis_job(&db, &input.job_id)?;
+    let ids = serde_json::to_string(&input.artifact_ids).unwrap_or_else(|_| "[]".into());
+    let types = serde_json::to_string(&input.artifact_types).unwrap_or_else(|_| "[]".into());
+    let id = input.id.unwrap_or_else(new_id);
+    db.execute("INSERT INTO manuscript_analysis_review_audits(id,job_id,project_id,action,artifact_ids_json,artifact_types_json,note,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)", params![id,input.job_id,job.project_id,input.action,ids,types,input.note,now()]).map_err(|e| sql_error("Review-Audit konnte nicht gespeichert werden", e))?;
+    db.query_row("SELECT id,job_id,project_id,action,artifact_ids_json,artifact_types_json,note,created_at FROM manuscript_analysis_review_audits WHERE id=?1", params![id], audit_from_row).map_err(|e| sql_error("Review-Audit konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn list_manuscript_analysis_review_audits(
+    state: State<'_, DbState>,
+    job_id: String,
+) -> Result<Vec<ManuscriptAnalysisReviewAudit>, String> {
+    let db = lock_db(&state)?;
+    let job = load_manuscript_analysis_job(&db, &job_id)?;
+    let mut statement = db.prepare("SELECT id,job_id,project_id,action,artifact_ids_json,artifact_types_json,note,created_at FROM manuscript_analysis_review_audits WHERE job_id=?1 AND project_id=?2 ORDER BY created_at").map_err(|e| sql_error("Review-Audits konnten nicht geladen werden", e))?;
+    let result = statement
+        .query_map(params![job_id, job.project_id], audit_from_row)
+        .map_err(|e| sql_error("Review-Audits konnten nicht gelesen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Review-Audits konnten nicht gelesen werden", e));
+    result
 }
 
 #[tauri::command]
@@ -4158,14 +4525,14 @@ pub fn save_continuity_review_findings(
             return Err("Ungültiger Status der Kontinuitätswarnung.".into());
         }
         if let Some(source_id) = &input.source_reference_id {
-            let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2)", params![source_id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Finding-Quelle konnte nicht geprüft werden", error))?;
+            let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2 UNION ALL SELECT 1 FROM project_source_references WHERE id=?1 AND project_id=?2)", params![source_id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Finding-Quelle konnte nicht geprüft werden", error))?;
             if !valid {
                 return Err("Die Finding-Quelle gehört nicht zum Projekt.".into());
             }
         }
         for counter in &input.counter_evidence {
             if let Some(source_id) = &counter.source_reference_id {
-                let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2)", params![source_id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Gegenquelle konnte nicht geprüft werden", error))?;
+                let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2 UNION ALL SELECT 1 FROM project_source_references WHERE id=?1 AND project_id=?2)", params![source_id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Gegenquelle konnte nicht geprüft werden", error))?;
                 if !valid {
                     return Err("Die Gegenquelle gehört nicht zum Projekt.".into());
                 }
@@ -4237,6 +4604,16 @@ pub fn review_continuity_finding(
         return Err("Diese Kontinuitätswarnung wurde bereits entschieden.".into());
     }
     db.execute("UPDATE continuity_review_findings SET review_status=?2, user_decision=?3, updated_at=?4 WHERE id=?1", params![id, review_status, user_decision, now()]).map_err(|error| sql_error("Entscheidung konnte nicht gespeichert werden", error))?;
+    sync_manuscript_artifact(
+        &db,
+        "continuity_finding",
+        &id,
+        if review_status == "dismissed" {
+            "rejected"
+        } else {
+            "confirmed"
+        },
+    )?;
     db.query_row("SELECT id, run_id, project_id, chapter_id, scene_id, finding_type, severity, subject_entity_id, related_entity_ids_json, related_state_ids_json, related_rule_ids_json, objective_conflict, lore_explanations_json, evidence_excerpt, source_reference_id, counter_evidence_json, counter_evidence_structured_json, confidence, start_offset, end_offset, reason, review_status, user_decision, created_at, updated_at FROM continuity_review_findings WHERE id=?1", params![id], continuity_finding_from_row).map_err(|error| sql_error("Entscheidung konnte nicht geladen werden", error))
 }
 
@@ -4440,6 +4817,16 @@ pub fn apply_continuity_finding_decision(
             error,
         )
     })?;
+    sync_manuscript_artifact(
+        &db,
+        "continuity_finding",
+        &input.finding_id,
+        if input.status == "dismissed" {
+            "rejected"
+        } else {
+            "confirmed"
+        },
+    )?;
     db.query_row("SELECT id, finding_id, project_id, status, decision_kind, rule_id, rule_proposal_id, open_question_entity_id, source_reference_id, exception_reason, content_hash, payload_json, created_at, updated_at FROM continuity_review_decisions WHERE finding_id=?1", params![input.finding_id], continuity_decision_from_row).map_err(|error| sql_error("Gespeicherte Continuity-Entscheidung konnte nicht geladen werden", error))
 }
 
@@ -4647,6 +5034,16 @@ pub fn review_plot_thread_lifecycle_proposal(
             error,
         )
     })?;
+    sync_manuscript_artifact(
+        &db,
+        "plot_thread_proposal",
+        &id,
+        if review_status == "rejected" {
+            "rejected"
+        } else {
+            "confirmed"
+        },
+    )?;
     db.query_row("SELECT id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, source_reference_id, start_offset, end_offset, reason, confidence, review_status, reviewed_at, created_at FROM plot_thread_lifecycle_proposals WHERE id=?1", params![id], lifecycle_proposal_from_row).map_err(|error| sql_error("Handlungsstrangreview konnte nicht geladen werden", error))
 }
 
@@ -5757,6 +6154,18 @@ pub fn review_character_memory_proposal(
     })?;
     tx.commit()
         .map_err(|e| sql_error("Review-Transaktion konnte nicht abgeschlossen werden", e))?;
+    sync_manuscript_artifact(
+        &db,
+        "character_memory_proposal",
+        &input.proposal_id,
+        if status == "rejected" {
+            "rejected"
+        } else if status == "accepted" || status == "edited" {
+            "confirmed"
+        } else {
+            "uncertain"
+        },
+    )?;
     db.query_row("SELECT id,run_id,project_id,scene_id,proposal_kind,subject_character_id,related_character_id,target_entity_id,payload_json,classification,confidence,evidence_excerpt,start_offset,end_offset,reason,review_status,reviewed_at,analyzed_content_hash,accepted_memory_id,accepted_memory_kind,created_at FROM character_memory_proposals WHERE id=?1",params![input.proposal_id],memory_proposal_from_row).map_err(|e|sql_error("Geprüfter Character-Memory-Vorschlag konnte nicht geladen werden",e))
 }
 fn apply_memory_payload(
@@ -7361,7 +7770,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            23
+            24
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);

@@ -207,12 +207,50 @@ pub struct StorySourceReference {
     pub project_id: String,
     pub entity_id: Option<String>,
     pub proposal_id: Option<String>,
-    pub chapter_id: String,
-    pub scene_id: String,
+    pub chapter_id: Option<String>,
+    pub scene_id: Option<String>,
+    pub source_document_id: Option<String>,
     pub excerpt: String,
     pub start_offset: Option<i64>,
     pub end_offset: Option<i64>,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSourceDocument {
+    pub id: String,
+    pub project_id: String,
+    pub source_kind: String,
+    pub title: String,
+    pub content: String,
+    pub content_hash: String,
+    pub origin_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateProjectSourceDocumentInput {
+    pub project_id: String,
+    pub source_kind: String,
+    pub title: String,
+    pub content: String,
+    pub content_hash: String,
+    pub origin_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateProjectSourceReferenceInput {
+    pub project_id: String,
+    pub source_document_id: String,
+    pub entity_id: Option<String>,
+    pub proposal_id: Option<String>,
+    pub excerpt: String,
+    pub start_offset: i64,
+    pub end_offset: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -588,6 +626,93 @@ pub struct SaveManuscriptAnalysisDraftLedgerInput {
     pub source_reference_id: Option<String>,
     pub confidence: f64,
     pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManuscriptAnalysisPhaseResult {
+    pub id: String,
+    pub job_id: String,
+    pub project_id: String,
+    pub phase: String,
+    pub result_kind: String,
+    pub payload: serde_json::Value,
+    pub content_hash: String,
+    pub provider_id: String,
+    pub prompt_version: String,
+    pub review_status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveManuscriptAnalysisPhaseResultInput {
+    pub id: Option<String>,
+    pub job_id: String,
+    pub project_id: String,
+    pub phase: String,
+    pub result_kind: String,
+    pub payload: serde_json::Value,
+    pub content_hash: String,
+    pub provider_id: String,
+    pub prompt_version: String,
+    pub review_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManuscriptAnalysisArtifact {
+    pub id: String,
+    pub job_id: String,
+    pub project_id: String,
+    pub phase: String,
+    pub unit_id: Option<String>,
+    pub artifact_type: String,
+    pub artifact_id: String,
+    pub review_status: String,
+    pub explicitly_skipped: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveManuscriptAnalysisArtifactInput {
+    pub id: Option<String>,
+    pub job_id: String,
+    pub project_id: String,
+    pub phase: String,
+    pub unit_id: Option<String>,
+    pub artifact_type: String,
+    pub artifact_id: String,
+    pub review_status: Option<String>,
+    pub explicitly_skipped: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManuscriptAnalysisReviewAudit {
+    pub id: String,
+    pub job_id: String,
+    pub project_id: String,
+    pub action: String,
+    pub artifact_ids: Vec<String>,
+    pub artifact_types: Vec<String>,
+    pub note: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveManuscriptAnalysisReviewAuditInput {
+    pub id: Option<String>,
+    pub job_id: String,
+    pub project_id: String,
+    pub action: String,
+    pub artifact_ids: Vec<String>,
+    pub artifact_types: Vec<String>,
+    pub note: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1120,6 +1245,8 @@ pub struct LoreCrafterSourceReference {
     pub excerpt: String,
     pub start_offset: i64,
     pub end_offset: i64,
+    pub source_document_id: Option<String>,
+    pub source_reference_id: Option<String>,
     pub created_at: String,
 }
 
@@ -1189,6 +1316,7 @@ pub struct SaveLoreSheetItemInput {
     pub item_type: String,
     pub title: String,
     pub content: String,
+    pub structured: Option<serde_json::Value>,
     pub confidence: f64,
     pub source_reference_id: Option<String>,
     pub target_entity_id: Option<String>,
@@ -1206,6 +1334,7 @@ pub struct LoreSheetItem {
     pub item_type: String,
     pub title: String,
     pub content: String,
+    pub structured: Option<serde_json::Value>,
     pub confidence: f64,
     pub source_reference_id: Option<String>,
     pub target_entity_id: Option<String>,
