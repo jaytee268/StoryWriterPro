@@ -6,6 +6,7 @@ import { providerRouter, type StoryAiProvider as Provider } from './aiProviderSe
 import { runContinuityReview } from './continuityReview';
 import { DeterministicProjectContextBuilder } from './contextBuilder';
 import { validateManuscriptStructure, localStructureHints } from './manuscriptStructure';
+import { matchPriorProvisionalEntity, provisionalEntityId } from './provisionalGraph';
 
 const activeJobs = new Map<string, Promise<void>>();
 const PHASES: ManuscriptAnalysisPhase[] = ['structure', 'passage_continuity', 'bible_extraction', 'character_memory', 'scene_or_chapter_synthesis', 'narrative_summaries', 'plot_thread_synthesis', 'book_end_state', 'global_countercheck', 'user_review', 'completed'];
@@ -230,6 +231,7 @@ export class ManuscriptAnalysisController {
       await this.repository.updateManuscriptAnalysisJob({ id: this.jobId, status: 'running', currentPhase: 'passage_continuity', currentUnitId: unit.id, errorMessage: undefined });
       await this.repository.updateManuscriptAnalysisUnit({ id: unit.id, status: 'running', requestedProvider: provider.id, actualProvider: undefined, promptVersion: PROMPT_VERSION, inputHash: currentHash, errorMessage: undefined, errorCode: undefined, content: currentContent, contentHash: currentHash });
       try {
+        await this.resolveProvisionalEntities(workspace, job, unit, currentContent, units[index - 1]?.content.slice(-2000) ?? '', provider);
         const allDraftEntries = await this.repository.listManuscriptAnalysisDraftLedger(this.jobId);
         const orderByUnit = new Map(units.map((candidate) => [candidate.id, candidate.orderIndex]));
         const draftLedger = allDraftEntries.filter((entry) => (orderByUnit.get(entry.unitId) ?? Number.MAX_SAFE_INTEGER) < unit.orderIndex && entry.status !== 'superseded').map(draftEntryToLedger);
@@ -251,6 +253,26 @@ export class ManuscriptAnalysisController {
         const message = errorText(error); await this.repository.updateManuscriptAnalysisUnit({ id: unit.id, status: 'failed', actualProvider: provider.id, errorCode: errorCode(error), errorMessage: message }); throw error;
       }
     }
+  }
+
+  private async resolveProvisionalEntities(workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, job: ManuscriptAnalysisJob, unit: ManuscriptAnalysisUnit, passageText: string, previousContext: string, provider: Provider): Promise<void> {
+    if (typeof provider.resolveManuscriptEntityMentions !== 'function') return;
+    const previousEntities = await this.repository.listProvisionalEntities(job.id);
+    const previousMentions = await this.repository.listProvisionalEntityMentions(job.id);
+    const result = await provider.resolveManuscriptEntityMentions({ projectId: workspace.project.id, jobId: job.id, unit, passageText, previousContext, confirmedEntities: workspace.entities, previousProvisionalEntities: previousEntities, previousAliases: previousEntities.flatMap((entity) => entity.aliases.map((alias) => ({ id: `${entity.id}:${alias}`, provisionalEntityId: entity.id, alias, confidence: entity.confidence, reviewStatus: 'proposed' as const, createdAt: entity.createdAt }))) }, 120);
+    const idByTemporary = new Map<string, string>();
+    for (const entity of result.entities) {
+      const existing = matchPriorProvisionalEntity(entity.canonicalName, entity.aliases, previousEntities);
+      const id = existing?.id ?? provisionalEntityId(job.id, entity.temporaryId);
+      idByTemporary.set(entity.temporaryId, id);
+      await this.repository.saveProvisionalEntity({ id, jobId: job.id, projectId: workspace.project.id, entityType: entity.entityType, canonicalName: entity.canonicalName, aliases: entity.aliases, description: entity.description, confidence: entity.confidence, existingEntityId: entity.existingEntityId && workspace.entities.some((candidate) => candidate.id === entity.existingEntityId && candidate.projectId === workspace.project.id) ? entity.existingEntityId : undefined, reviewStatus: 'proposed' });
+    }
+    const mentions = result.mentions.map((mention) => ({ jobId: job.id, projectId: workspace.project.id, passageUnitId: unit.id, chapterId: unit.chapterId, sceneId: unit.sceneId, startOffset: unit.startOffset + mention.startOffset, endOffset: unit.startOffset + mention.endOffset, excerpt: mention.excerpt, mentionText: mention.mentionText, resolvedProvisionalEntityId: mention.temporaryEntityId ? idByTemporary.get(mention.temporaryEntityId) : undefined, alternativeEntityIds: mention.alternativeTemporaryIds.map((id) => idByTemporary.get(id)).filter((id): id is string => Boolean(id)), confidence: mention.confidence, resolutionReason: mention.resolutionReason }));
+    if (mentions.length) await this.repository.saveProvisionalMentions(mentions);
+    for (const relation of result.relations) { const source = idByTemporary.get(relation.sourceTemporaryId); const target = idByTemporary.get(relation.targetTemporaryId); if (source && target) await this.repository.saveProvisionalRelation({ jobId: job.id, projectId: workspace.project.id, sourceProvisionalEntityId: source, targetProvisionalEntityId: target, relationType: relation.relationType, label: relation.label, confidence: relation.confidence, reviewStatus: 'proposed' }); }
+    for (const event of result.events) { const participants = event.participantTemporaryIds.map((id) => idByTemporary.get(id)).filter((id): id is string => Boolean(id)); await this.repository.saveProvisionalEvent({ jobId: job.id, projectId: workspace.project.id, passageUnitId: unit.id, chapterId: unit.chapterId, sceneId: unit.sceneId, title: event.title, summary: event.summary, participantEntityIds: participants, startOffset: unit.startOffset + event.startOffset, endOffset: unit.startOffset + event.endOffset, confidence: event.confidence, reviewStatus: 'proposed', sourceReferenceId: undefined }); }
+    for (const merge of result.mergeProposals) { const left = idByTemporary.get(merge.leftTemporaryId); if (!left) continue; await this.repository.saveProvisionalMergeProposal({ jobId: job.id, projectId: workspace.project.id, leftProvisionalEntityId: left, rightProvisionalEntityId: merge.rightTemporaryId ? idByTemporary.get(merge.rightTemporaryId) : undefined, existingEntityId: merge.existingEntityId && workspace.entities.some((entity) => entity.id === merge.existingEntityId && entity.projectId === workspace.project.id) ? merge.existingEntityId : undefined, reason: merge.reason, confidence: merge.confidence, reviewStatus: 'proposed' }); }
+    void previousMentions;
   }
 
   private async runBible(job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, units: ManuscriptAnalysisUnit[], provider: Provider, timeout: number): Promise<void> {

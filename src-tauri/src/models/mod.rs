@@ -805,6 +805,189 @@ pub struct SaveManuscriptStructureProposalInput {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProvisionalEntity {
+    pub id: String,
+    pub job_id: String,
+    pub project_id: String,
+    pub entity_type: String,
+    pub canonical_name: String,
+    pub aliases: Vec<String>,
+    pub description: String,
+    pub first_source_reference_id: Option<String>,
+    pub last_source_reference_id: Option<String>,
+    pub confidence: f64,
+    pub review_status: String,
+    pub existing_entity_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvisionalEntityMention {
+    pub id: String,
+    pub job_id: String,
+    pub project_id: String,
+    pub passage_unit_id: String,
+    pub chapter_id: String,
+    pub scene_id: String,
+    pub start_offset: i64,
+    pub end_offset: i64,
+    pub excerpt: String,
+    pub mention_text: String,
+    pub resolved_provisional_entity_id: Option<String>,
+    pub alternative_entity_ids: Vec<String>,
+    pub confidence: f64,
+    pub resolution_reason: String,
+    pub created_at: String,
+}
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvisionalAlias {
+    pub id: String,
+    pub provisional_entity_id: String,
+    pub alias: String,
+    pub source_reference_id: Option<String>,
+    pub confidence: f64,
+    pub review_status: String,
+    pub created_at: String,
+}
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvisionalMergeProposal {
+    pub id: String,
+    pub job_id: String,
+    pub project_id: String,
+    pub left_provisional_entity_id: String,
+    pub right_provisional_entity_id: Option<String>,
+    pub existing_entity_id: Option<String>,
+    pub reason: String,
+    pub confidence: f64,
+    pub review_status: String,
+    pub created_at: String,
+}
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvisionalRelation {
+    pub id: String,
+    pub job_id: String,
+    pub project_id: String,
+    pub source_provisional_entity_id: String,
+    pub target_provisional_entity_id: String,
+    pub relation_type: String,
+    pub label: String,
+    pub confidence: f64,
+    pub review_status: String,
+    pub source_reference_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvisionalEvent {
+    pub id: String,
+    pub job_id: String,
+    pub project_id: String,
+    pub passage_unit_id: String,
+    pub chapter_id: String,
+    pub scene_id: String,
+    pub title: String,
+    pub summary: String,
+    pub participant_entity_ids: Vec<String>,
+    pub start_offset: i64,
+    pub end_offset: i64,
+    pub confidence: f64,
+    pub review_status: String,
+    pub source_reference_id: Option<String>,
+    pub created_at: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProvisionalEntityInput {
+    pub id: Option<String>,
+    pub job_id: String,
+    pub project_id: String,
+    pub entity_type: String,
+    pub canonical_name: String,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub description: String,
+    pub first_source_reference_id: Option<String>,
+    pub last_source_reference_id: Option<String>,
+    pub confidence: f64,
+    pub review_status: Option<String>,
+    pub existing_entity_id: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProvisionalMentionInput {
+    pub id: Option<String>,
+    pub job_id: String,
+    pub project_id: String,
+    pub passage_unit_id: String,
+    pub chapter_id: String,
+    pub scene_id: String,
+    pub start_offset: i64,
+    pub end_offset: i64,
+    pub excerpt: String,
+    pub mention_text: String,
+    pub resolved_provisional_entity_id: Option<String>,
+    #[serde(default)]
+    pub alternative_entity_ids: Vec<String>,
+    pub confidence: f64,
+    #[serde(default)]
+    pub resolution_reason: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProvisionalMergeProposalInput {
+    pub id: Option<String>,
+    pub job_id: String,
+    pub project_id: String,
+    pub left_provisional_entity_id: String,
+    pub right_provisional_entity_id: Option<String>,
+    pub existing_entity_id: Option<String>,
+    pub reason: String,
+    pub confidence: f64,
+    pub review_status: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProvisionalRelationInput {
+    pub id: Option<String>,
+    pub job_id: String,
+    pub project_id: String,
+    pub source_provisional_entity_id: String,
+    pub target_provisional_entity_id: String,
+    pub relation_type: String,
+    #[serde(default)]
+    pub label: String,
+    pub confidence: f64,
+    pub review_status: Option<String>,
+    pub source_reference_id: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProvisionalEventInput {
+    pub id: Option<String>,
+    pub job_id: String,
+    pub project_id: String,
+    pub passage_unit_id: String,
+    pub chapter_id: String,
+    pub scene_id: String,
+    pub title: String,
+    pub summary: String,
+    #[serde(default)]
+    pub participant_entity_ids: Vec<String>,
+    pub start_offset: i64,
+    pub end_offset: i64,
+    pub confidence: f64,
+    pub review_status: Option<String>,
+    pub source_reference_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ContinuityReviewFinding {
     pub id: String,
     pub run_id: String,

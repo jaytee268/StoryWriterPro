@@ -39,14 +39,16 @@ use crate::{
         ManuscriptStructureProposal, ManuscriptStructureRun, NarrativeSummary, PlotThreadLifecycle,
         PlotThreadLifecycleProposal, Project, ProjectOnboardingState, ProjectRule,
         ProjectRuleProposal, ProjectSourceDocument, ProjectStyle, ProjectStyleAnalysisRun,
-        ProjectStyleObservation, ProviderStatus, ReconcileContinuityTextCorrectionInput,
-        RelationshipMemory, RestoreSceneVersionInput, ReviewBibleProposalInput,
-        ReviewCharacterMemoryProposalInput, SaveChapterGenerationDraftLedgerInput,
-        SaveChapterGenerationPlanInput, SaveChapterGenerationReviewInput,
-        SaveChapterGenerationSectionInput, SaveCharacterDialogueMemoryInput,
-        SaveCharacterExperienceInput, SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput,
-        SaveCharacterSceneStateInput, SaveCharacterVoicePatternInput, SaveContinuityFindingInput,
-        SaveContinuityReviewInput, SaveContinuityReviewRunStatusInput, SaveContinuityStateInput,
+        ProjectStyleObservation, ProviderStatus, ProvisionalEntity, ProvisionalEntityMention,
+        ProvisionalEvent, ProvisionalMergeProposal, ProvisionalRelation,
+        ReconcileContinuityTextCorrectionInput, RelationshipMemory, RestoreSceneVersionInput,
+        ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput,
+        SaveChapterGenerationDraftLedgerInput, SaveChapterGenerationPlanInput,
+        SaveChapterGenerationReviewInput, SaveChapterGenerationSectionInput,
+        SaveCharacterDialogueMemoryInput, SaveCharacterExperienceInput,
+        SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput, SaveCharacterSceneStateInput,
+        SaveCharacterVoicePatternInput, SaveContinuityFindingInput, SaveContinuityReviewInput,
+        SaveContinuityReviewRunStatusInput, SaveContinuityStateInput,
         SaveLoreCrafterClarificationInput, SaveLoreCrafterSourceInput, SaveLoreMetadataInput,
         SaveLoreSheetDraftInput, SaveLoreSheetItemInput, SaveManuscriptAnalysisArtifactInput,
         SaveManuscriptAnalysisDraftLedgerInput, SaveManuscriptAnalysisPhaseResultInput,
@@ -54,7 +56,9 @@ use crate::{
         SaveNarrativeSummaryInput, SavePlotThreadLifecycleInput,
         SavePlotThreadLifecycleProposalInput, SaveProjectOnboardingStateInput,
         SaveProjectRuleInput, SaveProjectRuleProposalInput, SaveProjectStyleInput,
-        SaveProjectStyleObservationInput, SaveRelationshipMemoryInput, SaveStoryDirectionInput,
+        SaveProjectStyleObservationInput, SaveProvisionalEntityInput, SaveProvisionalEventInput,
+        SaveProvisionalMentionInput, SaveProvisionalMergeProposalInput,
+        SaveProvisionalRelationInput, SaveRelationshipMemoryInput, SaveStoryDirectionInput,
         SaveWritingPreferencesInput, Scene, SceneInput, SceneVersion, StoryDirection, StoryEntity,
         StoryEntityInput, StoryEntityRelation, StorySourceReference, StyleReference,
         UpdateChapterInput, UpdateLoreCrafterRunInput, UpdateManuscriptAnalysisJobInput,
@@ -4930,6 +4934,257 @@ pub fn apply_manuscript_structure(
     Ok(result)
 }
 
+fn provisional_entity_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ProvisionalEntity> {
+    Ok(ProvisionalEntity {
+        id: row.get(0)?,
+        job_id: row.get(1)?,
+        project_id: row.get(2)?,
+        entity_type: row.get(3)?,
+        canonical_name: row.get(4)?,
+        aliases: serde_json::from_str(&row.get::<_, String>(5)?).unwrap_or_default(),
+        description: row.get(6)?,
+        first_source_reference_id: row.get(7)?,
+        last_source_reference_id: row.get(8)?,
+        confidence: row.get(9)?,
+        review_status: row.get(10)?,
+        existing_entity_id: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
+    })
+}
+fn provisional_mention_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ProvisionalEntityMention> {
+    Ok(ProvisionalEntityMention {
+        id: row.get(0)?,
+        job_id: row.get(1)?,
+        project_id: row.get(2)?,
+        passage_unit_id: row.get(3)?,
+        chapter_id: row.get(4)?,
+        scene_id: row.get(5)?,
+        start_offset: row.get(6)?,
+        end_offset: row.get(7)?,
+        excerpt: row.get(8)?,
+        mention_text: row.get(9)?,
+        resolved_provisional_entity_id: row.get(10)?,
+        alternative_entity_ids: serde_json::from_str(&row.get::<_, String>(11)?)
+            .unwrap_or_default(),
+        confidence: row.get(12)?,
+        resolution_reason: row.get(13)?,
+        created_at: row.get(14)?,
+    })
+}
+fn provisional_merge_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ProvisionalMergeProposal> {
+    Ok(ProvisionalMergeProposal {
+        id: row.get(0)?,
+        job_id: row.get(1)?,
+        project_id: row.get(2)?,
+        left_provisional_entity_id: row.get(3)?,
+        right_provisional_entity_id: row.get(4)?,
+        existing_entity_id: row.get(5)?,
+        reason: row.get(6)?,
+        confidence: row.get(7)?,
+        review_status: row.get(8)?,
+        created_at: row.get(9)?,
+    })
+}
+
+#[tauri::command]
+pub fn list_provisional_entities(
+    state: State<'_, DbState>,
+    job_id: String,
+) -> Result<Vec<ProvisionalEntity>, String> {
+    let db = lock_db(&state)?;
+    let job = load_manuscript_analysis_job(&db, &job_id)?;
+    let mut statement = db.prepare("SELECT id,job_id,project_id,entity_type,canonical_name,aliases_json,description,first_source_reference_id,last_source_reference_id,confidence,review_status,existing_entity_id,created_at,updated_at FROM provisional_entities WHERE job_id=?1 AND project_id=?2 ORDER BY created_at").map_err(|e| sql_error("Provisorische Entitäten konnten nicht geladen werden", e))?;
+    let result = statement
+        .query_map(params![job_id, job.project_id], provisional_entity_from_row)
+        .map_err(|e| sql_error("Provisorische Entitäten konnten nicht gelesen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Provisorische Entitäten konnten nicht gelesen werden", e));
+    result
+}
+
+#[tauri::command]
+pub fn save_provisional_entity(
+    state: State<'_, DbState>,
+    input: SaveProvisionalEntityInput,
+) -> Result<ProvisionalEntity, String> {
+    if !(0.0..=1.0).contains(&input.confidence) || input.canonical_name.trim().is_empty() {
+        return Err("Ungültige provisorische Entität.".into());
+    }
+    let db = lock_db(&state)?;
+    let job = load_manuscript_analysis_job(&db, &input.job_id)?;
+    if job.project_id != input.project_id {
+        return Err("Provisorische Entität gehört nicht zum Projekt.".into());
+    }
+    let aliases = serde_json::to_string(&input.aliases).unwrap_or_else(|_| "[]".into());
+    let id = input.id.unwrap_or_else(new_id);
+    let stamp = now();
+    db.execute("INSERT INTO provisional_entities(id,job_id,project_id,entity_type,canonical_name,aliases_json,description,first_source_reference_id,last_source_reference_id,confidence,review_status,existing_entity_id,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,COALESCE(?11,'proposed'),?12,?13,?13) ON CONFLICT(id) DO UPDATE SET canonical_name=excluded.canonical_name,aliases_json=excluded.aliases_json,description=excluded.description,confidence=excluded.confidence,review_status=excluded.review_status,existing_entity_id=excluded.existing_entity_id,last_source_reference_id=excluded.last_source_reference_id,updated_at=excluded.updated_at", params![id,input.job_id,input.project_id,input.entity_type,input.canonical_name.trim(),aliases,input.description,input.first_source_reference_id,input.last_source_reference_id,input.confidence,input.review_status,input.existing_entity_id,stamp]).map_err(|e| sql_error("Provisorische Entität konnte nicht gespeichert werden", e))?;
+    db.query_row("SELECT id,job_id,project_id,entity_type,canonical_name,aliases_json,description,first_source_reference_id,last_source_reference_id,confidence,review_status,existing_entity_id,created_at,updated_at FROM provisional_entities WHERE id=?1", params![id], provisional_entity_from_row).map_err(|e| sql_error("Provisorische Entität konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn list_provisional_entity_mentions(
+    state: State<'_, DbState>,
+    job_id: String,
+) -> Result<Vec<ProvisionalEntityMention>, String> {
+    let db = lock_db(&state)?;
+    let job = load_manuscript_analysis_job(&db, &job_id)?;
+    let mut statement = db.prepare("SELECT id,job_id,project_id,passage_unit_id,chapter_id,scene_id,start_offset,end_offset,excerpt,mention_text,resolved_provisional_entity_id,alternative_entity_ids_json,confidence,resolution_reason,created_at FROM provisional_entity_mentions WHERE job_id=?1 AND project_id=?2 ORDER BY chapter_id,start_offset").map_err(|e| sql_error("Erwähnungen konnten nicht geladen werden", e))?;
+    let result = statement
+        .query_map(
+            params![job_id, job.project_id],
+            provisional_mention_from_row,
+        )
+        .map_err(|e| sql_error("Erwähnungen konnten nicht gelesen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Erwähnungen konnten nicht gelesen werden", e));
+    result
+}
+
+#[tauri::command]
+pub fn save_provisional_mentions(
+    state: State<'_, DbState>,
+    mentions: Vec<SaveProvisionalMentionInput>,
+) -> Result<Vec<ProvisionalEntityMention>, String> {
+    let mut db = lock_db(&state)?;
+    if mentions.is_empty() {
+        return Ok(Vec::new());
+    }
+    let job = load_manuscript_analysis_job(&db, &mentions[0].job_id)?;
+    if mentions.iter().any(|item| {
+        item.job_id != job.id
+            || item.project_id != job.project_id
+            || item.start_offset < 0
+            || item.end_offset < item.start_offset
+            || !(0.0..=1.0).contains(&item.confidence)
+    }) {
+        return Err("Ungültige provisorische Erwähnung.".into());
+    }
+    let transaction = db
+        .transaction()
+        .map_err(|e| sql_error("Erwähnungen konnten nicht gespeichert werden", e))?;
+    for input in mentions {
+        let id = input.id.unwrap_or_else(new_id);
+        let alternatives =
+            serde_json::to_string(&input.alternative_entity_ids).unwrap_or_else(|_| "[]".into());
+        transaction.execute("INSERT INTO provisional_entity_mentions(id,job_id,project_id,passage_unit_id,chapter_id,scene_id,start_offset,end_offset,excerpt,mention_text,resolved_provisional_entity_id,alternative_entity_ids_json,confidence,resolution_reason,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)", params![id,input.job_id,input.project_id,input.passage_unit_id,input.chapter_id,input.scene_id,input.start_offset,input.end_offset,input.excerpt,input.mention_text,input.resolved_provisional_entity_id,alternatives,input.confidence,input.resolution_reason,now()]).map_err(|e| sql_error("Provisorische Erwähnung konnte nicht gespeichert werden", e))?;
+    }
+    transaction
+        .commit()
+        .map_err(|e| sql_error("Erwähnungen konnten nicht gespeichert werden", e))?;
+    drop(db);
+    list_provisional_entity_mentions(state, job.id)
+}
+
+#[tauri::command]
+pub fn list_provisional_merge_proposals(
+    state: State<'_, DbState>,
+    job_id: String,
+) -> Result<Vec<ProvisionalMergeProposal>, String> {
+    let db = lock_db(&state)?;
+    let job = load_manuscript_analysis_job(&db, &job_id)?;
+    let mut statement = db.prepare("SELECT id,job_id,project_id,left_provisional_entity_id,right_provisional_entity_id,existing_entity_id,reason,confidence,review_status,created_at FROM provisional_merge_proposals WHERE job_id=?1 AND project_id=?2 ORDER BY created_at").map_err(|e| sql_error("Merge-Vorschläge konnten nicht geladen werden", e))?;
+    let result = statement
+        .query_map(params![job_id, job.project_id], provisional_merge_from_row)
+        .map_err(|e| sql_error("Merge-Vorschläge konnten nicht gelesen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Merge-Vorschläge konnten nicht gelesen werden", e));
+    result
+}
+
+#[tauri::command]
+pub fn save_provisional_merge_proposal(
+    state: State<'_, DbState>,
+    input: SaveProvisionalMergeProposalInput,
+) -> Result<ProvisionalMergeProposal, String> {
+    if !(0.0..=1.0).contains(&input.confidence) {
+        return Err("Ungültige Merge-Confidence.".into());
+    }
+    let db = lock_db(&state)?;
+    let job = load_manuscript_analysis_job(&db, &input.job_id)?;
+    if job.project_id != input.project_id {
+        return Err("Merge-Vorschlag gehört nicht zum Projekt.".into());
+    }
+    let id = input.id.unwrap_or_else(new_id);
+    db.execute("INSERT INTO provisional_merge_proposals(id,job_id,project_id,left_provisional_entity_id,right_provisional_entity_id,existing_entity_id,reason,confidence,review_status) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,COALESCE(?9,'proposed')) ON CONFLICT(id) DO UPDATE SET reason=excluded.reason,confidence=excluded.confidence,review_status=excluded.review_status", params![id,input.job_id,input.project_id,input.left_provisional_entity_id,input.right_provisional_entity_id,input.existing_entity_id,input.reason,input.confidence,input.review_status]).map_err(|e| sql_error("Merge-Vorschlag konnte nicht gespeichert werden", e))?;
+    db.query_row("SELECT id,job_id,project_id,left_provisional_entity_id,right_provisional_entity_id,existing_entity_id,reason,confidence,review_status,created_at FROM provisional_merge_proposals WHERE id=?1", params![id], provisional_merge_from_row).map_err(|e| sql_error("Merge-Vorschlag konnte nicht geladen werden", e))
+}
+
+fn provisional_relation_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ProvisionalRelation> {
+    Ok(ProvisionalRelation {
+        id: row.get(0)?,
+        job_id: row.get(1)?,
+        project_id: row.get(2)?,
+        source_provisional_entity_id: row.get(3)?,
+        target_provisional_entity_id: row.get(4)?,
+        relation_type: row.get(5)?,
+        label: row.get(6)?,
+        confidence: row.get(7)?,
+        review_status: row.get(8)?,
+        source_reference_id: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+    })
+}
+fn provisional_event_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ProvisionalEvent> {
+    Ok(ProvisionalEvent {
+        id: row.get(0)?,
+        job_id: row.get(1)?,
+        project_id: row.get(2)?,
+        passage_unit_id: row.get(3)?,
+        chapter_id: row.get(4)?,
+        scene_id: row.get(5)?,
+        title: row.get(6)?,
+        summary: row.get(7)?,
+        participant_entity_ids: serde_json::from_str(&row.get::<_, String>(8)?).unwrap_or_default(),
+        start_offset: row.get(9)?,
+        end_offset: row.get(10)?,
+        confidence: row.get(11)?,
+        review_status: row.get(12)?,
+        source_reference_id: row.get(13)?,
+        created_at: row.get(14)?,
+    })
+}
+
+#[tauri::command]
+pub fn save_provisional_relation(
+    state: State<'_, DbState>,
+    input: SaveProvisionalRelationInput,
+) -> Result<ProvisionalRelation, String> {
+    let db = lock_db(&state)?;
+    let job = load_manuscript_analysis_job(&db, &input.job_id)?;
+    if job.project_id != input.project_id || !(0.0..=1.0).contains(&input.confidence) {
+        return Err("Ungültige provisorische Beziehung.".into());
+    }
+    let id = input.id.unwrap_or_else(new_id);
+    let stamp = now();
+    db.execute("INSERT INTO provisional_relations(id,job_id,project_id,source_provisional_entity_id,target_provisional_entity_id,relation_type,label,confidence,review_status,source_reference_id,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,COALESCE(?9,'proposed'),?10,?11,?11) ON CONFLICT(id) DO UPDATE SET label=excluded.label,confidence=excluded.confidence,review_status=excluded.review_status,updated_at=excluded.updated_at", params![id,input.job_id,input.project_id,input.source_provisional_entity_id,input.target_provisional_entity_id,input.relation_type,input.label,input.confidence,input.review_status,input.source_reference_id,stamp]).map_err(|e| sql_error("Provisorische Beziehung konnte nicht gespeichert werden", e))?;
+    db.query_row("SELECT id,job_id,project_id,source_provisional_entity_id,target_provisional_entity_id,relation_type,label,confidence,review_status,source_reference_id,created_at,updated_at FROM provisional_relations WHERE id=?1", params![id], provisional_relation_from_row).map_err(|e| sql_error("Provisorische Beziehung konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn save_provisional_event(
+    state: State<'_, DbState>,
+    input: SaveProvisionalEventInput,
+) -> Result<ProvisionalEvent, String> {
+    let db = lock_db(&state)?;
+    let job = load_manuscript_analysis_job(&db, &input.job_id)?;
+    if job.project_id != input.project_id
+        || input.start_offset < 0
+        || input.end_offset < input.start_offset
+        || !(0.0..=1.0).contains(&input.confidence)
+    {
+        return Err("Ungültiges provisorisches Ereignis.".into());
+    }
+    let id = input.id.unwrap_or_else(new_id);
+    let participants =
+        serde_json::to_string(&input.participant_entity_ids).unwrap_or_else(|_| "[]".into());
+    let stamp = now();
+    db.execute("INSERT INTO provisional_events(id,job_id,project_id,passage_unit_id,chapter_id,scene_id,title,summary,participant_entity_ids_json,start_offset,end_offset,confidence,review_status,source_reference_id,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,COALESCE(?13,'proposed'),?14,?15)", params![id,input.job_id,input.project_id,input.passage_unit_id,input.chapter_id,input.scene_id,input.title,input.summary,participants,input.start_offset,input.end_offset,input.confidence,input.review_status,input.source_reference_id,stamp]).map_err(|e| sql_error("Provisorisches Ereignis konnte nicht gespeichert werden", e))?;
+    db.query_row("SELECT id,job_id,project_id,passage_unit_id,chapter_id,scene_id,title,summary,participant_entity_ids_json,start_offset,end_offset,confidence,review_status,source_reference_id,created_at FROM provisional_events WHERE id=?1", params![id], provisional_event_from_row).map_err(|e| sql_error("Provisorisches Ereignis konnte nicht geladen werden", e))
+}
+
 #[tauri::command]
 pub fn list_continuity_review_runs(
     state: State<'_, DbState>,
@@ -8248,7 +8503,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            26
+            27
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);

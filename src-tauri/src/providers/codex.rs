@@ -89,6 +89,7 @@ pub enum CodexTaskKind {
     ReviewCompleteChapter,
     AnalyzeContinuityPassage,
     AnalyzeManuscriptStructure,
+    ResolveManuscriptEntityMentions,
     AnalyzeNarrativeSummaries,
     SynthesizePlotThreads,
     AnalyzeBookEndState,
@@ -366,6 +367,7 @@ const CHARACTER_MEMORY_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/dra
 const STYLE_ANALYSIS_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["observations","overallSummary","warnings"],"properties":{"observations":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["observationType","observationText","recommendation","confidence","evidence"],"properties":{"observationType":{"type":"string"},"observationText":{"type":"string","maxLength":4000},"recommendation":{"type":"string","maxLength":2000},"confidence":{"type":"number","minimum":0,"maximum":1},"evidence":{"type":"array","maxItems":10,"items":{"type":"string"}}}}},"overallSummary":{"type":"string","maxLength":6000},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
 const SUMMARY_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["summary","importantEvents","openThreads","characterChanges","knowledgeChanges","relationshipEffects","warnings"],"properties":{"summary":{"type":"string","maxLength":8000},"importantEvents":{"type":"array","items":{"type":"string","maxLength":1000}},"openThreads":{"type":"array","items":{"type":"string","maxLength":1000}},"characterChanges":{"type":"array","items":{"type":"string","maxLength":1000}},"knowledgeChanges":{"type":"array","items":{"type":"string","maxLength":1000}},"relationshipEffects":{"type":"array","items":{"type":"string","maxLength":1000}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
 const STRUCTURE_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["scenes","warnings"],"properties":{"scenes":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["temporaryId","chapterId","startOffset","endOffset","title","povCharacterName","povEntityId","location","storyTime","participatingCharacterNames","goal","conflict","importantEvents","transitionType","boundaryReason","confidence","evidenceExcerpt"],"properties":{"temporaryId":{"type":"string"},"chapterId":{"type":"string"},"startOffset":{"type":"integer","minimum":0},"endOffset":{"type":"integer","minimum":0},"title":{"type":"string"},"povCharacterName":{"type":["string","null"]},"povEntityId":{"type":["string","null"]},"location":{"type":"string"},"storyTime":{"type":"string"},"participatingCharacterNames":{"type":"array","items":{"type":"string"}},"goal":{"type":"string"},"conflict":{"type":"string"},"importantEvents":{"type":"array","items":{"type":"string"}},"transitionType":{"enum":["location_change","time_jump","pov_change","character_group_change","flashback_start","flashback_end","dream_start","dream_end","action_break","narrative_transition","chapter_continuation"]},"boundaryReason":{"type":"string"},"confidence":{"type":"number","minimum":0,"maximum":1},"evidenceExcerpt":{"type":"string"}}}},"warnings":{"type":"array","items":{"type":"string"}}}}"#;
+const ENTITY_RESOLUTION_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["entities","mentions","relations","events","mergeProposals","warnings"],"properties":{"entities":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["temporaryId","entityType","canonicalName","aliases","description","confidence","existingEntityId"],"properties":{"temporaryId":{"type":"string"},"entityType":{"enum":["character","place","organization","object","event","fact","clue","secret","plot_thread","open_question","world_rule_candidate","author_note"]},"canonicalName":{"type":"string"},"aliases":{"type":"array","items":{"type":"string"}},"description":{"type":"string"},"confidence":{"type":"number","minimum":0,"maximum":1},"existingEntityId":{"type":["string","null"]}}}},"mentions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["mentionText","startOffset","endOffset","temporaryEntityId","alternativeTemporaryIds","confidence","resolutionReason","excerpt"],"properties":{"mentionText":{"type":"string"},"startOffset":{"type":"integer","minimum":0},"endOffset":{"type":"integer","minimum":0},"temporaryEntityId":{"type":["string","null"]},"alternativeTemporaryIds":{"type":"array","items":{"type":"string"}},"confidence":{"type":"number","minimum":0,"maximum":1},"resolutionReason":{"type":"string"},"excerpt":{"type":"string"}}}},"relations":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["sourceTemporaryId","targetTemporaryId","relationType","label","confidence"],"properties":{"sourceTemporaryId":{"type":"string"},"targetTemporaryId":{"type":"string"},"relationType":{"type":"string"},"label":{"type":"string"},"confidence":{"type":"number","minimum":0,"maximum":1}}}},"events":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["title","summary","participantTemporaryIds","startOffset","endOffset","confidence","excerpt"],"properties":{"title":{"type":"string"},"summary":{"type":"string"},"participantTemporaryIds":{"type":"array","items":{"type":"string"}},"startOffset":{"type":"integer","minimum":0},"endOffset":{"type":"integer","minimum":0},"confidence":{"type":"number","minimum":0,"maximum":1},"excerpt":{"type":"string"}}}},"mergeProposals":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["leftTemporaryId","rightTemporaryId","existingEntityId","reason","confidence"],"properties":{"leftTemporaryId":{"type":"string"},"rightTemporaryId":{"type":["string","null"]},"existingEntityId":{"type":["string","null"]},"reason":{"type":"string"},"confidence":{"type":"number","minimum":0,"maximum":1}}}},"warnings":{"type":"array","items":{"type":"string"}}}}"#;
 const PLOT_THREAD_SYNTHESIS_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["summary","openQuestions","threadGoals","developments","closureCandidates","partiallyResolved","reopened","threadProposals","warnings"],"properties":{"summary":{"type":"string"},"openQuestions":{"type":"array","items":{"type":"string"}},"threadGoals":{"type":"array","items":{"type":"string"}},"developments":{"type":"array","items":{"type":"string"}},"closureCandidates":{"type":"array","items":{"type":"string"}},"partiallyResolved":{"type":"array","items":{"type":"string"}},"reopened":{"type":"array","items":{"type":"string"}},"threadProposals":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["entityId","proposedStatus","evidenceExcerpt","reason","confidence","sourceReferenceId"],"properties":{"entityId":{"type":"string"},"proposedStatus":{"enum":["open","closure_candidate","partially_resolved","reopened","abandoned"]},"evidenceExcerpt":{"type":"string"},"reason":{"type":"string"},"confidence":{"type":"number","minimum":0,"maximum":1},"sourceReferenceId":{"type":["string","null"]}}}},"warnings":{"type":"array","items":{"type":"string"}}}}"#;
 const BOOK_END_STATE_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["summary","characterEndStates","knowledgeStates","falseBeliefs","relationships","objectOwners","injuries","locations","openActions","unresolvedThreads","endStateProposals","warnings"],"properties":{"summary":{"type":"string"},"characterEndStates":{"type":"array","items":{"type":"string"}},"knowledgeStates":{"type":"array","items":{"type":"string"}},"falseBeliefs":{"type":"array","items":{"type":"string"}},"relationships":{"type":"array","items":{"type":"string"}},"objectOwners":{"type":"array","items":{"type":"string"}},"injuries":{"type":"array","items":{"type":"string"}},"locations":{"type":"array","items":{"type":"string"}},"openActions":{"type":"array","items":{"type":"string"}},"unresolvedThreads":{"type":"array","items":{"type":"string"}},"endStateProposals":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["category","entityId","statement","confidence","evidenceExcerpt","sourceReferenceId"],"properties":{"category":{"type":"string"},"entityId":{"type":["string","null"]},"statement":{"type":"string"},"confidence":{"type":"number","minimum":0,"maximum":1},"evidenceExcerpt":{"type":["string","null"]},"sourceReferenceId":{"type":["string","null"]}}}},"warnings":{"type":"array","items":{"type":"string"}}}}"#;
 const GLOBAL_COUNTERCHECK_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["summary","contradictoryFacts","prematureKnowledge","lostOrDestroyedObjects","timeAndLocationConflicts","contradictoryRules","unclearExceptions","uncertainSources","countercheckFindings","warnings"],"properties":{"summary":{"type":"string"},"contradictoryFacts":{"type":"array","items":{"type":"string"}},"prematureKnowledge":{"type":"array","items":{"type":"string"}},"lostOrDestroyedObjects":{"type":"array","items":{"type":"string"}},"timeAndLocationConflicts":{"type":"array","items":{"type":"string"}},"contradictoryRules":{"type":"array","items":{"type":"string"}},"unclearExceptions":{"type":"array","items":{"type":"string"}},"uncertainSources":{"type":"array","items":{"type":"string"}},"countercheckFindings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["severity","category","objectiveConflict","reason","confidence","evidenceExcerpt","sourceReferenceId"],"properties":{"severity":{"enum":["info","warning","critical"]},"category":{"type":"string"},"objectiveConflict":{"type":"string"},"reason":{"type":"string"},"confidence":{"type":"number","minimum":0,"maximum":1},"evidenceExcerpt":{"type":["string","null"]},"sourceReferenceId":{"type":["string","null"]}}}},"warnings":{"type":"array","items":{"type":"string"}}}}"#;
@@ -403,6 +405,7 @@ fn schema_for_task(kind: &CodexTaskKind) -> &'static str {
         CodexTaskKind::ReviewChapterSection | CodexTaskKind::ReviewCompleteChapter => REVIEW_SCHEMA,
         CodexTaskKind::AnalyzeContinuityPassage => continuity_schema(),
         CodexTaskKind::AnalyzeManuscriptStructure => STRUCTURE_SCHEMA,
+        CodexTaskKind::ResolveManuscriptEntityMentions => ENTITY_RESOLUTION_SCHEMA,
         _ => CHAT_SCHEMA,
     }
 }
@@ -419,6 +422,7 @@ fn prompt_for(kind: &CodexTaskKind) -> (&'static str, &'static str) {
         CodexTaskKind::ReviewChapterSection | CodexTaskKind::ReviewCompleteChapter => ("storymemory-review-v1", "Prüfe den Entwurf ausschließlich auf strukturierte Issues. Verändere den Text nicht."),
         CodexTaskKind::AnalyzeContinuityPassage => ("storymemory-continuity-v1", "Analysiere ausschließlich request.json als projektspezifischen Continuity-Pass. Semantische Paraphrasen müssen gleich behandelt werden; verwende keine Schlüsselwortregeln als Entscheidung. Nutze nur bestätigte Story-Bible-Einträge und bestätigte Projektregeln als Kanon. Berücksichtige continuityDecisions als bereits getroffene, lokale Autorentscheidungen; eine accepted_exception gilt nur für ihren verknüpften Finding-/Quellenkontext und niemals global. Liefere Beobachtungen, Zustandsänderungsvorschläge, objektive Konflikte, Erklärungslücken, passende bestätigte Regeln, unbestätigte neue Regelvorschläge und Plot-Thread-Kandidaten. Nimm niemals Kanonänderungen oder Ledger-Zustände automatisch vor. Schlage für Handlungsstränge höchstens closure_candidate, partially_resolved, reopened, open oder abandoned vor; resolved ist ausschließlich eine Nutzerentscheidung. Laktoseintoleranz, medizinische Ausnahmen und produktspezifische Ausnahmen sind mögliche Erklärungen, keine automatischen harten Fehler. Liefere ausschließlich JSON nach output-schema.json. Offsets sind Unicode-Zeichenpositionen im passage.text."),
         CodexTaskKind::AnalyzeManuscriptStructure => ("storymemory-structure-v1", "Analysiere ausschließlich den vollständigen Kapiteltext aus request.json und schlage semantische Szenengrenzen vor. Lokale Absatz- oder Seitenhinweise sind nur Hinweise, niemals alleinige Begründungen. Liefere mindestens eine lückenlose, nicht überlappende Szene, falls keine belastbare Grenze erkennbar ist. Verändere keinen Manuskripttext. Alle Offsets sind Unicode-Codepoints relativ zum vollständigen chapter.content. Liefere ausschließlich JSON nach output-schema.json."),
+        CodexTaskKind::ResolveManuscriptEntityMentions => ("storymemory-entity-resolution-v1", "Löse Entitätserwähnungen ausschließlich chronologisch auf. Verwende nur bestätigte Entitäten und provisorische Entitäten aus früheren Einheiten. Spätere Informationen dürfen nicht verwendet werden. Unsichere Pronomen, Umschreibungen und Duplikate bleiben unresolved oder werden als Merge-Vorschlag geliefert. Alle Offsets sind Unicode-Codepoints relativ zum passage.text. Verändere keinen Kanon."),
         CodexTaskKind::AnalyzeNarrativeSummaries => ("storymemory-narrative-summary-v1", "Erzeuge ausschließlich die narrative Buchzusammenfassung. Liefere keine Plot-Lifecycle-Entscheidungen oder Endzustände."),
         CodexTaskKind::SynthesizePlotThreads => ("storymemory-plot-thread-v1", "Synthetisiere offene Handlungsstränge. Liefere niemals resolved; closure_candidate ist nur ein Vorschlag für Nutzerreview."),
         CodexTaskKind::AnalyzeBookEndState => ("storymemory-book-end-state-v1", "Ermittle ausschließlich vorgeschlagene Figuren-, Wissens-, Beziehungs-, Orts- und Gegenstands-Endzustände."),
@@ -791,6 +795,11 @@ fn result_matches_task(value: &Value, task: &CodexTaskKind) -> bool {
         }
         CodexTaskKind::AnalyzeManuscriptStructure => {
             object.contains_key("scenes") && object.contains_key("warnings")
+        }
+        CodexTaskKind::ResolveManuscriptEntityMentions => {
+            object.contains_key("entities")
+                && object.contains_key("mentions")
+                && object.contains_key("warnings")
         }
     }
 }
@@ -1756,6 +1765,14 @@ fn validate_longform_result_for_task(
             "evidence",
         ],
         CodexTaskKind::AnalyzeManuscriptStructure => &["scenes", "warnings"],
+        CodexTaskKind::ResolveManuscriptEntityMentions => &[
+            "entities",
+            "mentions",
+            "relations",
+            "events",
+            "mergeProposals",
+            "warnings",
+        ],
         _ => &[],
     };
     for field in required {
@@ -2111,6 +2128,9 @@ pub fn run_task(
             validate_continuity_result(&raw, &input.request_json)?
         }
         CodexTaskKind::AnalyzeManuscriptStructure => {
+            validate_longform_result_for_task(&raw, &input.task_kind)?
+        }
+        CodexTaskKind::ResolveManuscriptEntityMentions => {
             validate_longform_result_for_task(&raw, &input.task_kind)?
         }
         CodexTaskKind::AnalyzeProjectStyle
@@ -2479,6 +2499,9 @@ mod tests {
             CodexTaskKind::AnalyzeManuscriptStructure => {
                 json!({"scenes":[{"temporaryId":"scene-1","chapterId":"synthetic-chapter","startOffset":0,"endOffset":8,"title":"Zettel","povCharacterName":"Malik","povEntityId":"char-1","location":"Zimmer","storyTime":"Abend","participatingCharacterNames":["Malik"],"goal":"Zettel verstehen","conflict":"Herkunft offen","importantEvents":["Malik findet den Zettel."],"transitionType":"chapter_continuation","boundaryReason":"Kapitelbeginn","confidence":0.8,"evidenceExcerpt":"😀 Zettel"}],"warnings":[]})
             }
+            CodexTaskKind::ResolveManuscriptEntityMentions => {
+                json!({"entities":[{"temporaryId":"entity-1","entityType":"object","canonicalName":"Zettel","aliases":["Notiz"],"description":"Ein beschrifteter Zettel.","confidence":0.82,"existingEntityId":null}],"mentions":[{"mentionText":"Zettel","startOffset":0,"endOffset":8,"temporaryEntityId":"entity-1","alternativeTemporaryIds":[],"confidence":0.82,"resolutionReason":"Direkte Benennung.","excerpt":"😀 Zettel"}],"relations":[],"events":[],"mergeProposals":[],"warnings":[]})
+            }
         }
     }
 
@@ -2498,6 +2521,7 @@ mod tests {
             CodexTaskKind::ReviewCompleteChapter,
             CodexTaskKind::AnalyzeContinuityPassage,
             CodexTaskKind::AnalyzeManuscriptStructure,
+            CodexTaskKind::ResolveManuscriptEntityMentions,
             CodexTaskKind::AnalyzeNarrativeSummaries,
             CodexTaskKind::SynthesizePlotThreads,
             CodexTaskKind::AnalyzeBookEndState,
