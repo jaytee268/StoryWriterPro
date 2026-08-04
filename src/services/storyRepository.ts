@@ -123,6 +123,7 @@ export interface StoryRepository {
   saveManuscriptAnalysisArtifacts(jobId: string, artifacts: SaveManuscriptAnalysisArtifactInput[]): Promise<ManuscriptAnalysisArtifact[]>;
   listManuscriptAnalysisArtifacts(jobId: string): Promise<ManuscriptAnalysisArtifact[]>;
   reviewManuscriptAnalysisArtifact(id: string, status: ManuscriptAnalysisArtifactReviewStatus, explicitlySkipped?: boolean): Promise<ManuscriptAnalysisArtifact>;
+  reviewManuscriptAnalysisArtifactDecision(id: string, status: ManuscriptAnalysisArtifactReviewStatus, explicitlySkipped?: boolean): Promise<ManuscriptAnalysisArtifact>;
   saveManuscriptAnalysisReviewAudit(input: SaveManuscriptAnalysisReviewAuditInput): Promise<ManuscriptAnalysisReviewAudit>;
   listManuscriptAnalysisReviewAudits(jobId: string): Promise<ManuscriptAnalysisReviewAudit[]>;
   listManuscriptStructureRuns(projectId: string, chapterId?: string): Promise<ManuscriptStructureRun[]>;
@@ -226,8 +227,9 @@ const manuscriptAnalysisJobSchema = z.object({ id: z.string(), projectId: z.stri
 const manuscriptAnalysisUnitSchema = z.object({ id: z.string(), jobId: z.string(), projectId: z.string(), chapterId: z.string(), sceneId: z.string(), orderIndex: z.number(), pageNumber: z.number().nullable().optional(), startOffset: z.number(), endOffset: z.number(), content: z.string(), contentHash: z.string(), status: z.enum(['pending', 'running', 'completed', 'failed', 'stale', 'skipped']), retryCount: z.number(), continuityRunId: z.string().nullable().optional(), requestedProvider: z.string().nullable().optional(), actualProvider: z.string().nullable().optional(), promptVersion: z.string().nullable().optional(), inputHash: z.string().nullable().optional(), outputHash: z.string().nullable().optional(), errorCode: z.string().nullable().optional(), errorMessage: z.string().nullable().optional(), createdAt: z.string(), updatedAt: z.string(), completedAt: z.string().nullable().optional() }).transform((v) => ({ ...v, pageNumber: v.pageNumber ?? undefined, continuityRunId: v.continuityRunId ?? undefined, requestedProvider: v.requestedProvider ?? undefined, actualProvider: v.actualProvider ?? undefined, promptVersion: v.promptVersion ?? undefined, inputHash: v.inputHash ?? undefined, outputHash: v.outputHash ?? undefined, errorCode: v.errorCode ?? undefined, errorMessage: v.errorMessage ?? undefined, completedAt: v.completedAt ?? undefined }));
 const manuscriptAnalysisDraftLedgerSchema = z.object({ id: z.string(), jobId: z.string(), unitId: z.string(), projectId: z.string(), entityId: z.string(), relatedEntityId: z.string().nullable().optional(), stateKind: z.enum(['item_existence', 'item_availability', 'ownership', 'location', 'physical_condition', 'injury', 'property', 'knowledge', 'relationship', 'promise', 'goal', 'open_action']), previousState: z.string(), newState: z.string(), chapterId: z.string(), sceneId: z.string(), startOffset: z.number().nullable().optional(), endOffset: z.number().nullable().optional(), sourceExcerpt: z.string().default(''), sourceReferenceId: z.string().nullable().optional(), confidence: z.number().min(0).max(1), status: z.enum(['proposed', 'confirmed', 'rejected', 'uncertain', 'superseded']), createdAt: z.string(), updatedAt: z.string() }).transform((v) => ({ ...v, relatedEntityId: v.relatedEntityId ?? undefined, startOffset: v.startOffset ?? undefined, endOffset: v.endOffset ?? undefined, sourceReferenceId: v.sourceReferenceId ?? undefined }));
 const manuscriptAnalysisPhaseResultSchema = z.object({ id: z.string(), jobId: z.string(), projectId: z.string(), phase: manuscriptAnalysisPhase, resultKind: z.string(), payload: z.record(z.string(), z.unknown()), contentHash: z.string(), providerId: z.string(), promptVersion: z.string(), reviewStatus: z.enum(['pending', 'confirmed', 'rejected', 'uncertain', 'skipped']), createdAt: z.string(), updatedAt: z.string() });
-const manuscriptAnalysisArtifactSchema = z.object({ id: z.string(), jobId: z.string(), projectId: z.string(), phase: manuscriptAnalysisPhase, unitId: z.string().nullable().optional(), artifactType: z.enum(['bible_proposal', 'character_memory_proposal', 'continuity_finding', 'import_draft_state', 'project_rule_proposal', 'plot_thread_proposal', 'narrative_summary', 'book_end_state_proposal', 'global_countercheck_finding']), artifactId: z.string(), reviewStatus: z.enum(['pending', 'confirmed', 'rejected', 'uncertain', 'skipped']), explicitlySkipped: z.boolean(), createdAt: z.string(), updatedAt: z.string() }).transform((v) => ({ ...v, unitId: v.unitId ?? undefined }));
-const manuscriptAnalysisReviewAuditSchema = z.object({ id: z.string(), jobId: z.string(), projectId: z.string(), action: z.enum(['skip_open_artifacts', 'complete_review']), artifactIds: z.array(z.string()), artifactTypes: z.array(z.enum(['bible_proposal', 'character_memory_proposal', 'continuity_finding', 'import_draft_state', 'project_rule_proposal', 'plot_thread_proposal', 'narrative_summary', 'book_end_state_proposal', 'global_countercheck_finding'])), note: z.string(), createdAt: z.string() });
+const manuscriptReviewArtifactTypes = ['bible_proposal', 'character_memory_proposal', 'continuity_finding', 'import_draft_state', 'project_rule_proposal', 'plot_thread_proposal', 'narrative_summary', 'book_end_state_proposal', 'global_countercheck_finding', 'timeline_event', 'story_graph_edge', 'provisional_entity', 'provisional_merge'] as const;
+const manuscriptAnalysisArtifactSchema = z.object({ id: z.string(), jobId: z.string(), projectId: z.string(), phase: manuscriptAnalysisPhase, unitId: z.string().nullable().optional(), artifactType: z.enum(manuscriptReviewArtifactTypes), artifactId: z.string(), reviewStatus: z.enum(['pending', 'confirmed', 'rejected', 'uncertain', 'skipped']), explicitlySkipped: z.boolean(), createdAt: z.string(), updatedAt: z.string() }).transform((v) => ({ ...v, unitId: v.unitId ?? undefined }));
+const manuscriptAnalysisReviewAuditSchema = z.object({ id: z.string(), jobId: z.string(), projectId: z.string(), action: z.enum(['skip_open_artifacts', 'complete_review']), artifactIds: z.array(z.string()), artifactTypes: z.array(z.enum(manuscriptReviewArtifactTypes)), note: z.string(), createdAt: z.string() });
 const manuscriptStructureRunSchema = z.object({ id: z.string(), projectId: z.string(), chapterId: z.string(), contentHash: z.string(), providerId: z.string(), promptVersion: z.string(), status: z.enum(['pending', 'running', 'completed', 'failed', 'reviewed']), errorMessage: z.string().nullable().optional(), createdAt: z.string(), updatedAt: z.string() }).transform((v) => ({ ...v, errorMessage: v.errorMessage ?? undefined }));
 const manuscriptStructureProposalSchema = z.object({ id: z.string(), runId: z.string(), projectId: z.string(), chapterId: z.string(), temporaryId: z.string(), startOffset: z.number().int().nonnegative(), endOffset: z.number().int().nonnegative(), title: z.string(), povCharacterName: z.string().nullable().optional(), povEntityId: z.string().nullable().optional(), location: z.string(), storyTime: z.string(), participatingCharacterNames: z.array(z.string()), goal: z.string(), conflict: z.string(), importantEvents: z.array(z.string()), transitionType: z.enum(['location_change', 'time_jump', 'pov_change', 'character_group_change', 'flashback_start', 'flashback_end', 'dream_start', 'dream_end', 'action_break', 'narrative_transition', 'chapter_continuation']), boundaryReason: z.string(), confidence: z.number().min(0).max(1), evidenceExcerpt: z.string(), reviewStatus: z.enum(['proposed', 'accepted', 'edited', 'rejected', 'uncertain']), manualChanges: z.record(z.unknown()).optional(), createdAt: z.string(), updatedAt: z.string() }).transform((v) => ({ ...v, povCharacterName: v.povCharacterName ?? undefined, povEntityId: v.povEntityId ?? undefined }));
 const provisionalEntitySchema = z.object({ id: z.string(), jobId: z.string(), projectId: z.string(), entityType: z.enum(['character', 'place', 'organization', 'object', 'event', 'fact', 'clue', 'secret', 'plot_thread', 'open_question', 'world_rule_candidate', 'author_note']), canonicalName: z.string(), aliases: z.array(z.string()), description: z.string(), firstSourceReferenceId: z.string().nullable().optional(), lastSourceReferenceId: z.string().nullable().optional(), confidence: z.number().min(0).max(1), reviewStatus: z.enum(['proposed', 'accepted', 'rejected', 'uncertain', 'merged']), existingEntityId: z.string().nullable().optional(), createdAt: z.string(), updatedAt: z.string() }).transform((v) => ({ ...v, firstSourceReferenceId: v.firstSourceReferenceId ?? undefined, lastSourceReferenceId: v.lastSourceReferenceId ?? undefined, existingEntityId: v.existingEntityId ?? undefined }));
@@ -395,6 +397,34 @@ function applyBrowserCharacterMemoryReview(state: BrowserState, input: ReviewCha
   return reviewed;
 }
 
+function applyBrowserDraftLedgerReview(state: BrowserState, id: string, status: ManuscriptAnalysisDraftLedgerStatus): ManuscriptAnalysisDraftLedgerEntry {
+  const entry = state.manuscriptAnalysisDraftLedger.find((item) => item.id === id);
+  if (!entry) throw new Error('Import-Draft-Ledger-Eintrag nicht gefunden.');
+  if (status === 'confirmed') {
+    const source = entry.sourceReferenceId ? state.sources.find((item) => item.id === entry.sourceReferenceId && item.projectId === entry.projectId) : undefined;
+    if (!source) throw new Error('Ein bestätigter Importzustand benötigt eine gültige Source Reference.');
+    if (!state.entities.some((item) => item.id === entry.entityId && item.projectId === entry.projectId)) throw new Error('Die Zustandsentität gehört nicht zum Projekt.');
+    const existing = state.continuityLedger.find((item) => item.projectId === entry.projectId && item.reason?.includes(`draft:${entry.id}`));
+    const stamp = now();
+    const canonical: ContinuityStateLedgerEntry = { id: existing?.id ?? crypto.randomUUID(), projectId: entry.projectId, entityId: entry.entityId, relatedEntityId: entry.relatedEntityId, stateKind: entry.stateKind, previousState: entry.previousState, newState: entry.newState, reason: `Import-Draft bestätigt; job:${entry.jobId}; unit:${entry.unitId}; draft:${entry.id}`, evidenceExcerpt: entry.sourceExcerpt, chapterId: entry.chapterId, sceneId: entry.sceneId, startOffset: entry.startOffset, endOffset: entry.endOffset, sourceReferenceId: source.id, status: 'confirmed', confidence: entry.confidence, authorConfirmed: true, createdAt: existing?.createdAt ?? stamp, updatedAt: stamp };
+    state.continuityLedger = [canonical, ...state.continuityLedger.filter((item) => item.id !== canonical.id)];
+  }
+  const saved = { ...entry, status, updatedAt: now() };
+  state.manuscriptAnalysisDraftLedger = state.manuscriptAnalysisDraftLedger.map((item) => item.id === id ? saved : item);
+  return saved;
+}
+
+function applyBrowserRuleProposalReview(state: BrowserState, id: string, confirmed: boolean, uncertain: boolean): void {
+  const proposal = state.ruleProposals.find((item) => item.id === id);
+  if (!proposal) throw new Error('Regelvorschlag nicht gefunden.');
+  if (proposal.reviewStatus !== 'pending') throw new Error('Dieser Regelvorschlag wurde bereits geprüft.');
+  if (confirmed) {
+    const stamp = now();
+    state.rules = [{ id: crypto.randomUUID(), projectId: proposal.projectId, title: proposal.title, statement: proposal.statement, scope: proposal.scope, prerequisites: proposal.prerequisites, effects: proposal.effects, exceptions: proposal.exceptions, connectedLoreIds: proposal.connectedLoreIds, sourceReferenceIds: proposal.sourceReferenceIds, status: 'confirmed', confidence: proposal.confidence, authorConfirmed: true, origin: 'bible_update', createdAt: stamp, updatedAt: stamp }, ...state.rules];
+  }
+  state.ruleProposals = state.ruleProposals.map((item) => item.id === id ? { ...item, reviewStatus: confirmed ? 'accepted' : uncertain ? 'pending' : 'rejected', reviewedAt: confirmed || !uncertain ? now() : undefined } : item);
+}
+
 export class TauriStoryRepository implements StoryRepository {
   readonly mode = 'desktop' as const;
 
@@ -510,6 +540,7 @@ export class TauriStoryRepository implements StoryRepository {
   async saveManuscriptAnalysisArtifacts(jobId: string, artifacts: SaveManuscriptAnalysisArtifactInput[]): Promise<ManuscriptAnalysisArtifact[]> { return parse(z.array(manuscriptAnalysisArtifactSchema), await desktopInvoke('save_manuscript_analysis_artifacts', { jobId, artifacts }), 'Analyseartefakte'); }
   async listManuscriptAnalysisArtifacts(jobId: string): Promise<ManuscriptAnalysisArtifact[]> { return parse(z.array(manuscriptAnalysisArtifactSchema), await desktopInvoke('list_manuscript_analysis_artifacts', { jobId }), 'Analyseartefakte'); }
   async reviewManuscriptAnalysisArtifact(id: string, status: ManuscriptAnalysisArtifactReviewStatus, explicitlySkipped?: boolean): Promise<ManuscriptAnalysisArtifact> { return parse(manuscriptAnalysisArtifactSchema, await desktopInvoke('review_manuscript_analysis_artifact', { id, status, explicitlySkipped }), 'Artefaktreview'); }
+  async reviewManuscriptAnalysisArtifactDecision(id: string, status: ManuscriptAnalysisArtifactReviewStatus, explicitlySkipped = false): Promise<ManuscriptAnalysisArtifact> { return parse(manuscriptAnalysisArtifactSchema, await desktopInvoke('review_manuscript_analysis_artifact_decision', { id, status, explicitlySkipped }), 'Fachliche Artefaktentscheidung'); }
   async saveManuscriptAnalysisReviewAudit(input: SaveManuscriptAnalysisReviewAuditInput): Promise<ManuscriptAnalysisReviewAudit> { return parse(manuscriptAnalysisReviewAuditSchema, await desktopInvoke('save_manuscript_analysis_review_audit', { input }), 'Review-Audit'); }
   async listManuscriptAnalysisReviewAudits(jobId: string): Promise<ManuscriptAnalysisReviewAudit[]> { return parse(z.array(manuscriptAnalysisReviewAuditSchema), await desktopInvoke('list_manuscript_analysis_review_audits', { jobId }), 'Review-Audits'); }
   async listManuscriptStructureRuns(projectId: string, chapterId?: string): Promise<ManuscriptStructureRun[]> { return parse(z.array(manuscriptStructureRunSchema), await desktopInvoke('list_manuscript_structure_runs', { projectId, chapterId }), 'Strukturläufe'); }
@@ -799,6 +830,61 @@ export class BrowserDemoRepository implements StoryRepository {
   async saveManuscriptAnalysisArtifacts(jobId: string, artifacts: SaveManuscriptAnalysisArtifactInput[]): Promise<ManuscriptAnalysisArtifact[]> { const state = this.read(); const job = state.manuscriptAnalysisJobs.find((item) => item.id === jobId); if (!job || artifacts.some((item) => item.jobId !== jobId || item.projectId !== job.projectId)) throw new Error('Analyseartefakt gehört nicht zum Analysejob.'); const current = state.manuscriptAnalysisArtifacts ?? []; const stamp = now(); const saved = artifacts.map((item) => ({ ...item, id: item.id ?? crypto.randomUUID(), reviewStatus: item.reviewStatus ?? 'pending' as const, explicitlySkipped: item.explicitlySkipped ?? false, createdAt: current.find((old) => old.id === item.id)?.createdAt ?? stamp, updatedAt: stamp })); state.manuscriptAnalysisArtifacts = [...saved, ...current.filter((old) => !saved.some((next) => next.artifactType === old.artifactType && next.artifactId === old.artifactId && next.jobId === jobId))]; this.write(state); return clone(saved); }
   async listManuscriptAnalysisArtifacts(jobId: string): Promise<ManuscriptAnalysisArtifact[]> { return (this.read().manuscriptAnalysisArtifacts ?? []).filter((item) => item.jobId === jobId).map(clone); }
   async reviewManuscriptAnalysisArtifact(id: string, status: ManuscriptAnalysisArtifactReviewStatus, explicitlySkipped = false): Promise<ManuscriptAnalysisArtifact> { const state = this.read(); const current = (state.manuscriptAnalysisArtifacts ?? []).find((item) => item.id === id); if (!current) throw new Error('Analyseartefakt nicht gefunden.'); const saved = { ...current, reviewStatus: status, explicitlySkipped: explicitlySkipped || status === 'skipped', updatedAt: now() }; state.manuscriptAnalysisArtifacts = (state.manuscriptAnalysisArtifacts ?? []).map((item) => item.id === id ? saved : item); this.write(state); return clone(saved); }
+  async reviewManuscriptAnalysisArtifactDecision(id: string, status: ManuscriptAnalysisArtifactReviewStatus, explicitlySkipped = false): Promise<ManuscriptAnalysisArtifact> {
+    const state = this.read();
+    const artifact = (state.manuscriptAnalysisArtifacts ?? []).find((item) => item.id === id);
+    if (!artifact) throw new Error('Analyseartefakt nicht gefunden.');
+    if (artifact.reviewStatus !== 'pending' && !explicitlySkipped) throw new Error('Dieses Analyseartefakt wurde bereits entschieden.');
+    const accepted = status === 'confirmed';
+    const uncertain = status === 'uncertain';
+    const rejected = status === 'rejected' || status === 'skipped';
+    if (artifact.artifactType === 'bible_proposal') {
+      applyBrowserProposalReview(state, { proposalId: artifact.artifactId, reviewStatus: accepted || uncertain ? 'accepted' : 'rejected', decision: uncertain ? 'save_uncertain' : accepted ? 'accept' : 'reject' });
+    } else if (artifact.artifactType === 'character_memory_proposal') {
+      applyBrowserCharacterMemoryReview(state, { proposalId: artifact.artifactId, reviewStatus: accepted || uncertain ? 'accepted' : 'rejected', decision: uncertain ? 'uncertain' : accepted ? 'accept' : 'reject' });
+    } else if (artifact.artifactType === 'import_draft_state') {
+      applyBrowserDraftLedgerReview(state, artifact.artifactId, accepted ? 'confirmed' : uncertain ? 'uncertain' : rejected ? 'rejected' : 'proposed');
+    } else if (artifact.artifactType === 'continuity_finding' || artifact.artifactType === 'global_countercheck_finding') {
+      const finding = state.continuityFindings.find((item) => item.id === artifact.artifactId && item.projectId === artifact.projectId);
+      if (!finding) throw new Error('Kontinuitätsfinding des Artefakts nicht gefunden.');
+      state.continuityFindings = state.continuityFindings.map((item) => item.id === finding.id ? { ...item, reviewStatus: accepted ? 'resolved' : uncertain ? 'deferred' : 'dismissed', userDecision: uncertain ? 'unsicher gespeichert' : accepted ? 'bestätigt' : 'abgelehnt', updatedAt: now() } : item);
+    } else if (artifact.artifactType === 'project_rule_proposal') {
+      applyBrowserRuleProposalReview(state, artifact.artifactId, accepted, uncertain);
+    } else if (artifact.artifactType === 'plot_thread_proposal') {
+      const proposal = state.plotThreadProposals.find((item) => item.id === artifact.artifactId && item.projectId === artifact.projectId);
+      if (!proposal) throw new Error('Handlungsstrang-Vorschlag des Artefakts nicht gefunden.');
+      if (accepted) {
+        const current = state.plotThreadLifecycles.find((item) => item.entityId === proposal.entityId);
+        state.plotThreadLifecycles = [{ id: current?.id ?? crypto.randomUUID(), projectId: proposal.projectId, entityId: proposal.entityId, lifecycleStatus: proposal.proposedStatus, lastSourceReferenceId: proposal.sourceReferenceId, updatedAt: now() }, ...state.plotThreadLifecycles.filter((item) => item.entityId !== proposal.entityId)];
+        state.plotThreadProposals = state.plotThreadProposals.map((item) => item.id === proposal.id ? { ...item, reviewStatus: 'accepted', reviewedAt: now() } : item);
+      } else if (rejected) state.plotThreadProposals = state.plotThreadProposals.map((item) => item.id === proposal.id ? { ...item, reviewStatus: 'rejected', reviewedAt: now() } : item);
+    } else if (artifact.artifactType === 'narrative_summary') {
+      const summary = state.summaries.find((item) => item.id === artifact.artifactId && item.projectId === artifact.projectId);
+      if (!summary) throw new Error('Zusammenfassung des Artefakts nicht gefunden.');
+      state.summaries = state.summaries.map((item) => item.id === summary.id ? { ...item, status: accepted ? 'confirmed' : rejected ? 'rejected' : 'proposed', authorConfirmed: accepted, updatedAt: now() } : item);
+    } else if (artifact.artifactType === 'timeline_event') {
+      const event = (state.timelineEvents ?? []).find((item) => item.id === artifact.artifactId && item.projectId === artifact.projectId);
+      if (!event) throw new Error('Timeline-Ereignis des Artefakts nicht gefunden.');
+      state.timelineEvents = (state.timelineEvents ?? []).map((item) => item.id === event.id ? { ...item, status: accepted ? 'confirmed' : uncertain ? 'uncertain' : 'rejected', authorConfirmed: accepted, updatedAt: now() } : item);
+    } else if (artifact.artifactType === 'story_graph_edge') {
+      const edge = (state.graphEdges ?? []).find((item) => item.id === artifact.artifactId && item.projectId === artifact.projectId);
+      if (!edge) throw new Error('Story-Graph-Kante des Artefakts nicht gefunden.');
+      state.graphEdges = (state.graphEdges ?? []).map((item) => item.id === edge.id ? { ...item, status: accepted ? 'confirmed' : uncertain ? 'uncertain' : 'rejected', authorConfirmed: accepted, updatedAt: now() } : item);
+    } else if (artifact.artifactType === 'provisional_entity') {
+      const entity = (state.provisionalEntities ?? []).find((item) => item.id === artifact.artifactId && item.projectId === artifact.projectId);
+      if (!entity) throw new Error('Vorläufige Entität des Artefakts nicht gefunden.');
+      if (accepted) throw new Error('Vorläufige Entitäten müssen vor der Bestätigung materialisiert werden.');
+      state.provisionalEntities = (state.provisionalEntities ?? []).map((item) => item.id === entity.id ? { ...item, reviewStatus: uncertain ? 'uncertain' : 'rejected', updatedAt: now() } : item);
+    } else if (artifact.artifactType === 'provisional_merge') {
+      const merge = (state.provisionalMergeProposals ?? []).find((item) => item.id === artifact.artifactId && item.projectId === artifact.projectId);
+      if (!merge) throw new Error('Vorläufiger Merge-Vorschlag des Artefakts nicht gefunden.');
+      (state.provisionalMergeProposals ??= []); state.provisionalMergeProposals = state.provisionalMergeProposals.map((item) => item.id === merge.id ? { ...item, reviewStatus: uncertain ? 'uncertain' : 'rejected' } : item);
+    } else if (!['book_end_state_proposal'].includes(artifact.artifactType)) throw new Error('Unbekannter fachlicher Artefakttyp.');
+    const saved: ManuscriptAnalysisArtifact = { ...artifact, reviewStatus: explicitlySkipped || status === 'skipped' ? 'skipped' : status, explicitlySkipped: explicitlySkipped || status === 'skipped', updatedAt: now() };
+    state.manuscriptAnalysisArtifacts = (state.manuscriptAnalysisArtifacts ?? []).map((item) => item.id === id ? saved : item);
+    this.write(state);
+    return clone(saved);
+  }
   async saveManuscriptAnalysisReviewAudit(input: SaveManuscriptAnalysisReviewAuditInput): Promise<ManuscriptAnalysisReviewAudit> { const state = this.read(); const job = state.manuscriptAnalysisJobs.find((item) => item.id === input.jobId && item.projectId === input.projectId); if (!job) throw new Error('Review-Audit gehört nicht zum Analysejob.'); const saved: ManuscriptAnalysisReviewAudit = { ...input, id: input.id ?? crypto.randomUUID(), createdAt: now() }; state.manuscriptAnalysisReviewAudits = [saved, ...(state.manuscriptAnalysisReviewAudits ?? [])]; this.write(state); return clone(saved); }
   async listManuscriptAnalysisReviewAudits(jobId: string): Promise<ManuscriptAnalysisReviewAudit[]> { return (this.read().manuscriptAnalysisReviewAudits ?? []).filter((item) => item.jobId === jobId).map(clone); }
   async listManuscriptStructureRuns(projectId: string, chapterId?: string): Promise<ManuscriptStructureRun[]> { return (this.read().manuscriptStructureRuns ?? []).filter((run) => run.projectId === projectId && (!chapterId || run.chapterId === chapterId)).map(clone); }

@@ -143,6 +143,7 @@ pub fn run() {
             commands::save_manuscript_analysis_artifacts,
             commands::list_manuscript_analysis_artifacts,
             commands::review_manuscript_analysis_artifact,
+            commands::review_manuscript_analysis_artifact_decision,
             commands::save_manuscript_analysis_review_audit,
             commands::list_manuscript_analysis_review_audits,
             commands::create_manuscript_structure_run,

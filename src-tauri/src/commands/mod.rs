@@ -4578,6 +4578,114 @@ pub fn review_manuscript_analysis_artifact(
     db.query_row("SELECT id,job_id,project_id,phase,unit_id,artifact_type,artifact_id,review_status,explicitly_skipped,created_at,updated_at FROM manuscript_analysis_artifacts WHERE id=?1", params![id], artifact_from_row).map_err(|e| sql_error("Artefakt konnte nicht geladen werden", e))
 }
 
+#[tauri::command]
+pub fn review_manuscript_analysis_artifact_decision(
+    state: State<'_, DbState>,
+    id: String,
+    status: String,
+    explicitly_skipped: Option<bool>,
+) -> Result<ManuscriptAnalysisArtifact, String> {
+    if !matches!(
+        status.as_str(),
+        "confirmed" | "rejected" | "uncertain" | "skipped"
+    ) {
+        return Err("Ungültiger fachlicher Artefaktstatus.".into());
+    }
+    let db = lock_db(&state)?;
+    let artifact = db.query_row("SELECT id,job_id,project_id,phase,unit_id,artifact_type,artifact_id,review_status,explicitly_skipped,created_at,updated_at FROM manuscript_analysis_artifacts WHERE id=?1", params![id], artifact_from_row).map_err(|e| sql_error("Analyseartefakt konnte nicht geladen werden", e))?;
+    if artifact.review_status != "pending" && !explicitly_skipped.unwrap_or(false) {
+        return Err("Dieses Analyseartefakt wurde bereits entschieden.".into());
+    }
+    let transaction = db
+        .unchecked_transaction()
+        .map_err(|e| sql_error("Fachlicher Review konnte nicht gestartet werden", e))?;
+    let domain_status = if status == "confirmed" {
+        "confirmed"
+    } else if status == "uncertain" {
+        "uncertain"
+    } else {
+        "rejected"
+    };
+    match artifact.artifact_type.as_str() {
+        "bible_proposal"
+        | "character_memory_proposal"
+        | "project_rule_proposal"
+        | "plot_thread_proposal" => {
+            let table = match artifact.artifact_type.as_str() {
+                "bible_proposal" => "bible_proposals",
+                "character_memory_proposal" => "character_memory_proposals",
+                "project_rule_proposal" => "project_rule_proposals",
+                _ => "plot_thread_lifecycle_proposals",
+            };
+            let proposal_status = if status == "confirmed" {
+                "accepted"
+            } else if status == "rejected" || status == "skipped" {
+                "rejected"
+            } else {
+                "pending"
+            };
+            let changed = transaction
+                .execute(
+                    &format!("UPDATE {table} SET review_status=?1 WHERE id=?2 AND project_id=?3"),
+                    params![proposal_status, artifact.artifact_id, artifact.project_id],
+                )
+                .map_err(|e| sql_error("Vorschlag konnte nicht aktualisiert werden", e))?;
+            if changed == 0 {
+                return Err("Zugehöriger Vorschlag wurde nicht gefunden.".into());
+            }
+        }
+        "continuity_finding" | "global_countercheck_finding" => {
+            let changed = transaction.execute("UPDATE continuity_review_findings SET review_status=?1,user_decision=?2,updated_at=?3 WHERE id=?4 AND project_id=?5", params![if status == "confirmed" { "resolved" } else if status == "uncertain" { "deferred" } else { "dismissed" }, status, now(), artifact.artifact_id, artifact.project_id]).map_err(|e| sql_error("Finding konnte nicht aktualisiert werden", e))?;
+            if changed == 0 {
+                return Err("Zugehöriges Finding wurde nicht gefunden.".into());
+            }
+        }
+        "import_draft_state" => {
+            let changed = transaction.execute("UPDATE manuscript_analysis_draft_ledger SET status=?,updated_at=? WHERE id=? AND project_id=?", params![domain_status, now(), artifact.artifact_id, artifact.project_id]).map_err(|e| sql_error("Draft-Zustand konnte nicht aktualisiert werden", e))?;
+            if changed == 0 {
+                return Err("Zugehöriger Draft-Zustand wurde nicht gefunden.".into());
+            }
+        }
+        "narrative_summary" => {
+            let changed = transaction.execute("UPDATE narrative_summaries SET status=?,author_confirmed=?,updated_at=? WHERE id=? AND project_id=?", params![if status == "confirmed" { "confirmed" } else if status == "rejected" || status == "skipped" { "rejected" } else { "proposed" }, (status == "confirmed") as i64, now(), artifact.artifact_id, artifact.project_id]).map_err(|e| sql_error("Zusammenfassung konnte nicht aktualisiert werden", e))?;
+            if changed == 0 {
+                return Err("Zugehörige Zusammenfassung wurde nicht gefunden.".into());
+            }
+        }
+        "timeline_event" => {
+            let changed = transaction.execute("UPDATE manuscript_timeline_events SET status=?,author_confirmed=?,updated_at=? WHERE id=? AND project_id=?", params![domain_status, (status == "confirmed") as i64, now(), artifact.artifact_id, artifact.project_id]).map_err(|e| sql_error("Timeline-Ereignis konnte nicht aktualisiert werden", e))?;
+            if changed == 0 {
+                return Err("Zugehöriges Timeline-Ereignis wurde nicht gefunden.".into());
+            }
+        }
+        "story_graph_edge" => {
+            let changed = transaction.execute("UPDATE story_graph_edges SET status=?,author_confirmed=?,updated_at=? WHERE id=? AND project_id=?", params![domain_status, (status == "confirmed") as i64, now(), artifact.artifact_id, artifact.project_id]).map_err(|e| sql_error("Story-Graph-Kante konnte nicht aktualisiert werden", e))?;
+            if changed == 0 {
+                return Err("Zugehörige Story-Graph-Kante wurde nicht gefunden.".into());
+            }
+        }
+        "provisional_entity" => {
+            let changed = transaction.execute("UPDATE provisional_entities SET review_status=?,updated_at=? WHERE id=? AND project_id=?", params![if status == "uncertain" { "uncertain" } else { "rejected" }, now(), artifact.artifact_id, artifact.project_id]).map_err(|e| sql_error("Vorläufige Entität konnte nicht aktualisiert werden", e))?;
+            if changed == 0 {
+                return Err("Zugehörige vorläufige Entität wurde nicht gefunden.".into());
+            }
+        }
+        "provisional_merge" => {
+            let changed = transaction.execute("UPDATE provisional_merge_proposals SET review_status=? WHERE id=? AND project_id=?", params![if status == "uncertain" { "uncertain" } else { "rejected" }, artifact.artifact_id, artifact.project_id]).map_err(|e| sql_error("Merge-Vorschlag konnte nicht aktualisiert werden", e))?;
+            if changed == 0 {
+                return Err("Zugehöriger Merge-Vorschlag wurde nicht gefunden.".into());
+            }
+        }
+        "book_end_state_proposal" => {}
+        other => return Err(format!("Unbekannter fachlicher Artefakttyp: {other}")),
+    }
+    transaction.execute("UPDATE manuscript_analysis_artifacts SET review_status=?1,explicitly_skipped=?2,updated_at=?3 WHERE id=?4 AND job_id=?5 AND project_id=?6", params![status, (explicitly_skipped.unwrap_or(false) || status == "skipped") as i64, now(), artifact.id, artifact.job_id, artifact.project_id]).map_err(|e| sql_error("Artefaktreview konnte nicht gespeichert werden", e))?;
+    transaction
+        .commit()
+        .map_err(|e| sql_error("Fachlicher Review konnte nicht abgeschlossen werden", e))?;
+    db.query_row("SELECT id,job_id,project_id,phase,unit_id,artifact_type,artifact_id,review_status,explicitly_skipped,created_at,updated_at FROM manuscript_analysis_artifacts WHERE id=?1", params![id], artifact_from_row).map_err(|e| sql_error("Artefakt konnte nicht geladen werden", e))
+}
+
 fn audit_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ManuscriptAnalysisReviewAudit> {
     Ok(ManuscriptAnalysisReviewAudit {
         id: row.get(0)?,
@@ -9017,7 +9125,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            29
+            30
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);
