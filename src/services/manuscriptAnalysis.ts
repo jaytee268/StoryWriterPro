@@ -76,7 +76,7 @@ export class ManuscriptAnalysisController {
         throw new Error(message);
       }
       const sceneText = editorContentToPlainText(scene.content);
-      const currentContent = Array.from(sceneText).slice(unit.startOffset, unit.endOffset).join('').trim();
+      const currentContent = Array.from(sceneText).slice(unit.startOffset, unit.endOffset).join('');
       if (unit.status === 'completed' || unit.status === 'skipped') {
         if (contentHash(currentContent) === unit.contentHash) continue;
         await this.repository.updateManuscriptAnalysisUnit({ id: unit.id, status: 'pending', content: currentContent, contentHash: contentHash(currentContent), errorMessage: undefined, continuityRunId: undefined });
@@ -93,7 +93,7 @@ export class ManuscriptAnalysisController {
       const following = units[index + 1];
       try {
         const result = await runContinuityReview(this.repository, { project: workspace.project, chapter, scene, currentText: currentContent, previousText: previous?.content, followingText: following?.content, sourceKind: unit.pageNumber === undefined ? 'word_threshold' : 'page_marker', startOffset: unit.startOffset, endOffset: unit.endOffset, draftLedger, provider: active.provider, persistStateProposals: false, isCancelled: () => this.cancelled, forceAnalysis: true });
-        const draftEntries = result.draftStateChanges.map((change) => ({ jobId: this.jobId, unitId: unit.id, projectId: workspace.project.id, entityId: change.entityId, relatedEntityId: change.relatedEntityId, stateKind: change.stateKind, previousState: change.previousState, newState: change.newState, chapterId: unit.chapterId, sceneId: unit.sceneId, startOffset: change.startOffset === undefined ? unit.startOffset : unit.startOffset + change.startOffset, endOffset: change.endOffset === undefined ? unit.endOffset : unit.startOffset + change.endOffset, confidence: change.confidence, status: 'proposed' as const }));
+        const draftEntries = result.draftStateChanges.map((change) => ({ jobId: this.jobId, unitId: unit.id, projectId: workspace.project.id, entityId: change.entityId, relatedEntityId: change.relatedEntityId, stateKind: change.stateKind, previousState: change.previousState, newState: change.newState, chapterId: unit.chapterId, sceneId: unit.sceneId, startOffset: change.startOffset ?? unit.startOffset, endOffset: change.endOffset ?? unit.endOffset, confidence: change.confidence, status: 'proposed' as const }));
         await this.repository.replaceManuscriptAnalysisDraftLedger(unit.id, draftEntries);
         await this.repository.updateManuscriptAnalysisUnit({ id: unit.id, status: 'completed', continuityRunId: result.runId, content: currentContent, contentHash: contentHash(currentContent), errorMessage: undefined });
         const updated = await this.repository.getManuscriptAnalysisJob(this.jobId);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractDocxText, parseManuscriptFile, parseManuscriptText, splitContinuityUnits } from './manuscriptImport';
+import { extractDocxText, mergeImportChapters, parseManuscriptFile, parseManuscriptText, splitContinuityUnits, splitImportChapter } from './manuscriptImport';
 
 function storedZip(entries: Record<string, string>): ArrayBuffer {
   const encoder = new TextEncoder();
@@ -84,5 +84,23 @@ describe('manuscript import preview', () => {
     const wordUnits = splitContinuityUnits(Array.from({ length: 700 }, (_, index) => `Wort${index}`).join(' '));
     expect(wordUnits.length).toBeGreaterThan(1);
     expect(wordUnits.every((unit) => unit.text.split(/\s+/u).length <= 350 || unit === wordUnits.at(-1))).toBe(true);
+  });
+
+  it('behält Text vor dem ersten Seitenmarker und erzeugt keine künstlichen Leer-Einheiten', () => {
+    const preview = parseManuscriptText('Kapitel 1\nVorspann.\nSeite 1\nErste Seite.\nSeite 2\nZweite Seite.');
+    const units = splitContinuityUnits(preview.chapters[0]!.content, preview.chapters[0]!.pageMarkers);
+    expect(units[0]).toMatchObject({ page: undefined, text: 'Vorspann.\n' });
+    expect(units.at(-1)?.text).toContain('Zweite Seite.');
+    expect(units.every((unit) => unit.text.trim().length > 0)).toBe(true);
+  });
+
+  it('verschiebt Seitenmarker beim Unicode-sicheren Split und Merge', () => {
+    const chapter = parseManuscriptText('Kapitel 1\n😀 Anfang.\nSeite 2\nMitte.\nSeite 3\nEnde.').chapters[0]!;
+    const [first, second] = splitImportChapter(chapter, chapter.pageMarkers[0]!.textOffset + 2);
+    expect(first.pageMarkers.every((marker) => marker.textOffset <= Array.from(first.content).length)).toBe(true);
+    expect(second.pageMarkers.every((marker) => marker.textOffset <= Array.from(second.content).length)).toBe(true);
+    const merged = mergeImportChapters(first, second);
+    expect(merged.pageMarkers.map((marker) => marker.page)).toEqual(chapter.pageMarkers.map((marker) => marker.page));
+    expect(merged.content).toContain('😀 Anfang.');
   });
 });

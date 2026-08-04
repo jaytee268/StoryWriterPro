@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserDemoRepository } from './storyRepository';
 import { buildContinuityPrefilter, detectContinuityFindings, runContinuityReview, shouldRunContinuityReview } from './continuityReview';
 import type { ContinuityAnalysisResult } from '../types/domain';
+import { continuityResultSchema, normalizeContinuityResultNulls } from './aiProviderService';
 import type { StoryAiProvider } from './aiProviderService';
 
 const values = new Map<string, string>();
@@ -14,6 +15,11 @@ function fakeProvider(analyze: (input: Parameters<StoryAiProvider['analyzeContin
 
 describe('AI-gestützte semantische Continuity', () => {
   beforeEach(() => values.clear());
+
+  it('akzeptiert den gemeinsamen Nullable-Fixture-Datensatz', () => {
+    const fixture = { observedActions: [{ summary: 'Beobachtung', evidenceExcerpt: '', entityIds: [], startOffset: null, endOffset: null }], proposedStateChanges: [{ entityId: 'entity', relatedEntityId: null, stateKind: 'location', previousState: '', newState: 'unbekannt', confidence: 0.5, evidenceExcerpt: '', sourceReferenceId: null, startOffset: null, endOffset: null, reason: '' }], objectiveContradictions: [{ findingType: 'missing_explanation', subjectEntityId: null, relatedEntityIds: [], relatedStateIds: [], objectiveConflict: '', evidenceExcerpt: '', sourceReferenceId: null, counterEvidenceExcerpts: [], counterEvidence: null, confidence: 0.5, startOffset: null, endOffset: null, reason: '' }], missingExplanations: [], matchedLoreRules: [], newRuleProposals: [{ projectId: 'project', targetRuleId: null, title: '', statement: '', scope: 'project', prerequisites: [], effects: [], exceptions: [], connectedLoreIds: [], sourceReferenceIds: [], evidenceExcerpt: '', chapterId: null, sceneId: null, startOffset: null, endOffset: null, confidence: 0.5, reason: '' }], plotThreadChanges: [{ entityId: 'entity', proposedStatus: 'open', evidenceExcerpt: '', sourceReferenceId: null, startOffset: null, endOffset: null, reason: '', confidence: 0.5 }], confidence: 0.5, evidence: [{ id: 'evidence', label: '', chapterId: null, sceneId: null, entityId: null, excerpt: null, sourceReferenceId: null, startOffset: null, endOffset: null }], warnings: [] };
+    expect(normalizeContinuityResultNulls(continuityResultSchema.parse(fixture) as ContinuityAnalysisResult).objectiveContradictions[0]?.subjectEntityId).toBeUndefined();
+  });
 
   it('löst bestätigte Zustände an Manuskriptpositionen auf und schließt Zukunft aus', async () => {
     const repository = new BrowserDemoRepository();
@@ -31,8 +37,8 @@ describe('AI-gestützte semantische Continuity', () => {
     const repository = new BrowserDemoRepository();
     const workspace = await repository.loadWorkspace();
     const entity = await repository.createStoryEntity({ projectId: workspace.project.id, name: 'Zettel', type: 'object', description: '', status: 'confirmed', confidence: 1, chapterId: workspace.chapters[0]!.id, sceneId: workspace.chapters[0]!.scenes[0]!.id, excerpt: '', authorConfirmed: true, tags: [] });
-    await repository.saveContinuityStateEntry({ projectId: workspace.project.id, entityId: entity.id, stateKind: 'item_availability', previousState: 'verfügbar', newState: 'weggeworfen', chapterId: workspace.chapters[0]!.id, sceneId: workspace.chapters[0]!.scenes[0]!.id, status: 'confirmed', confidence: 1, authorConfirmed: true });
-    const provider = fakeProvider((input) => input.passage.text.includes('Jackentasche') ? { ...emptyAnalysis(), objectiveContradictions: [{ findingType: 'probable_contradiction', subjectEntityId: entity.id, relatedEntityIds: [entity.id], relatedStateIds: ['missing-state'], objectiveConflict: 'Ein zuvor entsorgter Gegenstand taucht wieder auf.', evidenceExcerpt: input.passage.text, counterEvidenceExcerpts: ['Der Zettel wurde zuvor entsorgt.'], confidence: 0.91, reason: 'Die AI erkennt die Zustandsbeziehung trotz anderer Formulierungen.' }] } : emptyAnalysis());
+    const state = await repository.saveContinuityStateEntry({ projectId: workspace.project.id, entityId: entity.id, stateKind: 'item_availability', previousState: 'verfügbar', newState: 'weggeworfen', chapterId: workspace.chapters[0]!.id, sceneId: workspace.chapters[0]!.scenes[0]!.id, status: 'confirmed', confidence: 1, authorConfirmed: true });
+    const provider = fakeProvider((input) => input.passage.text.includes('Jackentasche') ? { ...emptyAnalysis(), objectiveContradictions: [{ findingType: 'probable_contradiction', subjectEntityId: entity.id, relatedEntityIds: [entity.id], relatedStateIds: [state.id], objectiveConflict: 'Ein zuvor entsorgter Gegenstand taucht wieder auf.', evidenceExcerpt: input.passage.text, counterEvidenceExcerpts: ['Der Zettel wurde zuvor entsorgt.'], confidence: 0.91, reason: 'Die AI erkennt die Zustandsbeziehung trotz anderer Formulierungen.' }] } : emptyAnalysis());
     const result = await runContinuityReview(repository, { project: workspace.project, chapter: workspace.chapters[0], scene: workspace.chapters[0]!.scenes[0], currentText: 'Den Zettel zog er später wieder aus der Jackentasche.', sourceKind: 'manual', provider });
     expect(result.findings[0]).toMatchObject({ findingType: 'probable_contradiction', confidence: 0.91 });
     expect(result.findings[0]?.counterEvidenceExcerpts).toEqual(['Der Zettel wurde zuvor entsorgt.']);
@@ -68,6 +74,27 @@ describe('AI-gestützte semantische Continuity', () => {
     const result = await runContinuityReview(repository, { project: workspace.project, chapter: workspace.chapters[0], scene: workspace.chapters[0]!.scenes[0], currentText: 'Der Gegenstand liegt im Archiv.', sourceKind: 'manual', provider });
     expect(result.stateProposals[0]).toMatchObject({ newState: 'Archiv', status: 'proposed', authorConfirmed: false });
     expect(await repository.getStateAtPosition(workspace.project.id, entity.id, 'location', { chapterId: workspace.chapters[0]!.id, sceneId: workspace.chapters[0]!.scenes[0]!.id })).toBeUndefined();
+  });
+
+  it('speichert passage-relative Provider-Offsets als absolute Unicode-Positionen und legt eine Quelle an', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const entity = workspace.entities.find((item) => item.type === 'object') ?? workspace.entities[0]!;
+    const provider = fakeProvider(() => ({ ...emptyAnalysis(), proposedStateChanges: [{ entityId: entity.id, stateKind: 'location', previousState: '', newState: 'Archiv', confidence: 0.9, evidenceExcerpt: 'Notiz', startOffset: 3, endOffset: 8, reason: 'Belegter Ortswechsel.' }] }));
+    const result = await runContinuityReview(repository, { project: workspace.project, chapter: workspace.chapters[0], scene: workspace.chapters[0]!.scenes[0]!, currentText: '🧩̈ Notiz liegt hier.', startOffset: 40, endOffset: 61, sourceKind: 'manual', provider });
+    expect(result.stateProposals[0]).toMatchObject({ startOffset: 43, endOffset: 48, evidenceExcerpt: 'Notiz' });
+    expect(result.stateProposals[0]?.sourceReferenceId).toBeTruthy();
+    expect((await repository.listSourceReferences(workspace.project.id)).some((source) => source.startOffset === 43 && source.endOffset === 48)).toBe(true);
+  });
+
+  it('übernimmt historisches Figurenwissen nur bis zur Zielszene', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const character = await repository.createStoryEntity({ projectId: workspace.project.id, name: 'Mira', type: 'character', description: '', status: 'confirmed', confidence: 1, chapterId: workspace.chapters[0]!.id, sceneId: workspace.chapters[0]!.scenes[0]!.id, excerpt: '', authorConfirmed: true, tags: [] });
+    const fact = await repository.createStoryEntity({ projectId: workspace.project.id, name: 'Die Mappe', type: 'fact', description: '', status: 'confirmed', confidence: 1, chapterId: workspace.chapters[0]!.id, sceneId: workspace.chapters[0]!.scenes[0]!.id, excerpt: '', authorConfirmed: true, tags: [] });
+    await repository.saveCharacterKnowledgeState({ projectId: workspace.project.id, characterId: character.id, factEntityId: fact.id, knowledgeState: 'knows', acquiredSceneId: workspace.chapters[1]!.scenes[0]!.id, changedSceneId: workspace.chapters[1]!.scenes[0]!.id, certainty: 1, notes: '', status: 'confirmed', authorConfirmed: true });
+    const provider = fakeProvider((input) => { expect(input.characterKnowledge.some((state) => state.factEntityId === fact.id)).toBe(false); return emptyAnalysis(); });
+    await runContinuityReview(repository, { project: workspace.project, chapter: workspace.chapters[0], scene: workspace.chapters[0]!.scenes[0]!, currentText: 'Mira blickt zur Tür.', sourceKind: 'manual', provider });
   });
 
   it('erzeugt einen Plot-Thread-Kandidaten ohne resolved automatisch zu setzen', async () => {

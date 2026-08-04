@@ -322,6 +322,8 @@ pub struct ContinuityStateLedgerEntry {
     pub state_kind: String,
     pub previous_state: String,
     pub new_state: String,
+    pub reason: String,
+    pub evidence_excerpt: String,
     pub chapter_id: Option<String>,
     pub scene_id: Option<String>,
     pub start_offset: Option<i64>,
@@ -345,6 +347,10 @@ pub struct SaveContinuityStateInput {
     #[serde(default)]
     pub previous_state: String,
     pub new_state: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub evidence_excerpt: String,
     pub chapter_id: Option<String>,
     pub scene_id: Option<String>,
     pub start_offset: Option<i64>,
@@ -572,7 +578,9 @@ pub struct ContinuityReviewFinding {
     pub objective_conflict: String,
     pub lore_explanations: Vec<String>,
     pub evidence_excerpt: String,
+    pub source_reference_id: Option<String>,
     pub counter_evidence_excerpts: Vec<String>,
+    pub counter_evidence: Vec<ContinuityCounterEvidence>,
     pub confidence: f64,
     pub start_offset: Option<i64>,
     pub end_offset: Option<i64>,
@@ -605,8 +613,11 @@ pub struct SaveContinuityFindingInput {
     pub lore_explanations: Vec<String>,
     #[serde(default)]
     pub evidence_excerpt: String,
+    pub source_reference_id: Option<String>,
     #[serde(default)]
     pub counter_evidence_excerpts: Vec<String>,
+    #[serde(default)]
+    pub counter_evidence: Vec<ContinuityCounterEvidence>,
     #[serde(default = "default_continuity_confidence")]
     pub confidence: f64,
     pub start_offset: Option<i64>,
@@ -614,6 +625,17 @@ pub struct SaveContinuityFindingInput {
     pub reason: String,
     pub review_status: Option<String>,
     pub user_decision: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContinuityCounterEvidence {
+    pub source_reference_id: Option<String>,
+    pub excerpt: String,
+    pub chapter_id: Option<String>,
+    pub scene_id: Option<String>,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
 }
 
 fn default_continuity_confidence() -> f64 {
@@ -650,6 +672,7 @@ pub struct PlotThreadLifecycleProposal {
     pub entity_id: String,
     pub proposed_status: String,
     pub evidence_excerpt: String,
+    pub source_reference_id: Option<String>,
     pub start_offset: Option<i64>,
     pub end_offset: Option<i64>,
     pub reason: String,
@@ -668,6 +691,7 @@ pub struct SavePlotThreadLifecycleProposalInput {
     pub proposed_status: String,
     #[serde(default)]
     pub evidence_excerpt: String,
+    pub source_reference_id: Option<String>,
     pub start_offset: Option<i64>,
     pub end_offset: Option<i64>,
     pub reason: String,

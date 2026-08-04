@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { Check, Merge, Scissors, Upload, X } from 'lucide-react';
 import type { ManuscriptAnalysisPageMarker, ManuscriptImportResult } from '../../types/domain';
 import type { StoryRepository } from '../../services/storyRepository';
-import { mergeImportChapters, parseManuscriptFile, splitContinuityUnits, splitImportChapter, type ManuscriptImportChapterPreview, type ManuscriptImportPreview, type ContinuityPassageUnit } from '../../services/manuscriptImport';
+import { mergeImportChapters, parseManuscriptFile, recalculatePageMarkers, splitContinuityUnits, splitImportChapter, type ManuscriptImportChapterPreview, type ManuscriptImportPreview, type ContinuityPassageUnit } from '../../services/manuscriptImport';
 
 interface Props {
   projectId: string;
@@ -44,7 +44,7 @@ export function ManuscriptImportModal({ projectId, bookId, repository, onClose, 
   };
 
   const updateChapter = (index: number, patch: Partial<ManuscriptImportChapterPreview>) => {
-    setPreview((current) => current ? { ...current, chapters: current.chapters.map((chapter, chapterIndex) => chapterIndex === index ? { ...chapter, ...patch } : chapter) } : current);
+    setPreview((current) => current ? { ...current, chapters: current.chapters.map((chapter, chapterIndex) => chapterIndex === index ? { ...chapter, ...patch, pageMarkers: patch.content === undefined ? chapter.pageMarkers : recalculatePageMarkers(patch.content, chapter.pageMarkers) } : chapter) } : current);
   };
 
   const splitSelected = () => {
@@ -52,7 +52,7 @@ export function ManuscriptImportModal({ projectId, bookId, repository, onClose, 
     const chapter = preview.chapters[selectedIndex];
     if (!chapter) return;
     try {
-      const offset = Number(splitOffset) || Math.floor(chapter.content.length / 2);
+      const offset = Number(splitOffset) || Math.floor(Array.from(chapter.content).length / 2);
       const [first, second] = splitImportChapter(chapter, offset);
       const chapters = [...preview.chapters.slice(0, selectedIndex), first, second, ...preview.chapters.slice(selectedIndex + 1)].map((item, index) => ({ ...item, orderIndex: index + 1 }));
       setPreview({ ...preview, chapters, issues: [], duplicateChapterNumbers: [], missingChapterNumbers: [] });
@@ -91,7 +91,7 @@ export function ManuscriptImportModal({ projectId, bookId, repository, onClose, 
         <div className="import-preview-head"><strong>{preview.chapters.length} Kapitel erkannt</strong><span>{preview.chapters.reduce((sum, chapter) => sum + chapter.wordCount, 0).toLocaleString('de-DE')} Wörter</span><button className="text-button" onClick={() => inputRef.current?.click()}>Andere Datei</button><input ref={inputRef} hidden type="file" accept=".txt,.md,.markdown,.docx" onChange={(event) => void readFile(event.target.files?.[0])} /></div>
         {(preview.issues.length > 0 || error) && <div className="import-issues">{preview.issues.map((issue) => <div key={`${issue.message}-${issue.chapterIndex ?? 'all'}`} className={issue.severity === 'error' ? 'save-error' : 'provider-notice'}>{issue.message}</div>)}{error && <div className="save-error">{error}</div>}</div>}
         <div className="import-chapter-list">{preview.chapters.map((chapter, index) => <button key={chapter.id} className={`import-chapter-row ${selectedIndex === index ? 'active' : ''}`} onClick={() => setSelectedIndex(index)}><span>{String(index + 1).padStart(2, '0')}</span><strong>{chapter.title}</strong><small>{chapter.wordCount.toLocaleString('de-DE')} Wörter</small></button>)}</div>
-        {selected && <div className="import-editor"><label className="field-label">Kapitelname<input value={selected.title} onChange={(event) => updateChapter(selectedIndex, { title: event.target.value })} /></label><label className="field-label">Kapiteltext<textarea value={selected.content} onChange={(event) => updateChapter(selectedIndex, { content: event.target.value, wordCount: event.target.value.trim() ? event.target.value.trim().split(/\s+/u).length : 0 })} rows={8} /></label><div className="import-edit-actions"><label className="field-label compact">Teilen bei Zeichen<input value={splitOffset} onChange={(event) => setSplitOffset(event.target.value)} placeholder={`${Math.floor(selected.content.length / 2)}`} /></label><button className="ghost-button" onClick={splitSelected}><Scissors size={15} /> Kapitel teilen</button><button className="ghost-button" disabled={selectedIndex >= preview.chapters.length - 1} onClick={mergeSelected}><Merge size={15} /> Mit nächstem verbinden</button></div></div>}
+        {selected && <div className="import-editor"><label className="field-label">Kapitelname<input value={selected.title} onChange={(event) => updateChapter(selectedIndex, { title: event.target.value })} /></label><label className="field-label">Kapiteltext<textarea value={selected.content} onChange={(event) => updateChapter(selectedIndex, { content: event.target.value, wordCount: event.target.value.trim() ? event.target.value.trim().split(/\s+/u).length : 0 })} rows={8} /></label><div className="import-edit-actions"><label className="field-label compact">Teilen bei Zeichen<input value={splitOffset} onChange={(event) => setSplitOffset(event.target.value)} placeholder={`${Math.floor(Array.from(selected.content).length / 2)}`} /></label><button className="ghost-button" onClick={splitSelected}><Scissors size={15} /> Kapitel teilen</button><button className="ghost-button" disabled={selectedIndex >= preview.chapters.length - 1} onClick={mergeSelected}><Merge size={15} /> Mit nächstem verbinden</button></div></div>}
         <div className="modal-actions"><button className="ghost-button" onClick={onClose}>Abbrechen</button><button className="primary-button" disabled={blocking || status === 'importing' || status === 'reading'} onClick={() => void importNow()}>{status === 'importing' ? 'Import wird gespeichert …' : <><Check size={16} /> Kapitel importieren</>}</button></div>
       </>}
       {!preview && error && <div className="save-error">{error}</div>}

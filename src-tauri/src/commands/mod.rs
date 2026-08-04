@@ -1179,6 +1179,20 @@ pub fn create_source_reference(
     input: CreateSourceReferenceInput,
 ) -> Result<StorySourceReference, String> {
     let db = lock_db(&state)?;
+    validate_scene_project(&db, &input.project_id, &input.scene_id)?;
+    let chapter_matches: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM scenes WHERE id=?1 AND chapter_id=?2)",
+            params![input.scene_id, input.chapter_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| sql_error("Kapitel und Szene konnten nicht geprüft werden", error))?;
+    if !chapter_matches {
+        return Err("Kapitel und Szene der Quelle passen nicht zusammen.".into());
+    }
+    if let Some(entity_id) = &input.entity_id {
+        project_entity_exists(&db, &input.project_id, entity_id, None)?;
+    }
     let transaction = db
         .unchecked_transaction()
         .map_err(|error| sql_error("Quellenreferenz konnte nicht gespeichert werden", error))?;
@@ -2852,16 +2866,18 @@ fn ledger_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ContinuityStateLedgerEn
         state_kind: row.get(4)?,
         previous_state: row.get(5)?,
         new_state: row.get(6)?,
-        chapter_id: row.get(7)?,
-        scene_id: row.get(8)?,
-        start_offset: row.get(9)?,
-        end_offset: row.get(10)?,
-        source_reference_id: row.get(11)?,
-        status: row.get(12)?,
-        confidence: row.get(13)?,
-        author_confirmed: row.get(14)?,
-        created_at: row.get(15)?,
-        updated_at: row.get(16)?,
+        reason: row.get(7)?,
+        evidence_excerpt: row.get(8)?,
+        chapter_id: row.get(9)?,
+        scene_id: row.get(10)?,
+        start_offset: row.get(11)?,
+        end_offset: row.get(12)?,
+        source_reference_id: row.get(13)?,
+        status: row.get(14)?,
+        confidence: row.get(15)?,
+        author_confirmed: row.get(16)?,
+        created_at: row.get(17)?,
+        updated_at: row.get(18)?,
     })
 }
 
@@ -2913,7 +2929,7 @@ pub fn list_continuity_state_ledger(
     if let Some(kind) = &state_kind {
         validate_continuity_state_kind(kind)?;
     }
-    let result = db.prepare("SELECT id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, chapter_id, scene_id, start_offset, end_offset, source_reference_id, status, confidence, author_confirmed, created_at, updated_at FROM continuity_state_ledger WHERE project_id=?1 AND (?2 IS NULL OR entity_id=?2) AND (?3 IS NULL OR state_kind=?3) ORDER BY created_at DESC").map_err(|error| sql_error("Zustandsverlauf konnte nicht geladen werden", error))?.query_map(params![project_id, entity_id, state_kind], ledger_from_row).map_err(|error| sql_error("Zustandsverlauf konnte nicht geladen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Zustandsverlauf konnte nicht geladen werden", error));
+    let result = db.prepare("SELECT id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, reason, evidence_excerpt, chapter_id, scene_id, start_offset, end_offset, source_reference_id, status, confidence, author_confirmed, created_at, updated_at FROM continuity_state_ledger WHERE project_id=?1 AND (?2 IS NULL OR entity_id=?2) AND (?3 IS NULL OR state_kind=?3) ORDER BY created_at DESC").map_err(|error| sql_error("Zustandsverlauf konnte nicht geladen werden", error))?.query_map(params![project_id, entity_id, state_kind], ledger_from_row).map_err(|error| sql_error("Zustandsverlauf konnte nicht geladen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Zustandsverlauf konnte nicht geladen werden", error));
     result
 }
 
@@ -2926,8 +2942,8 @@ pub fn save_continuity_state_entry(
     validate_continuity_input(&db, &input)?;
     let id = input.id.clone().unwrap_or_else(new_id);
     let stamp = now();
-    db.execute("INSERT INTO continuity_state_ledger (id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, chapter_id, scene_id, start_offset, end_offset, source_reference_id, status, confidence, author_confirmed, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?16) ON CONFLICT(id) DO UPDATE SET previous_state=excluded.previous_state, new_state=excluded.new_state, chapter_id=excluded.chapter_id, scene_id=excluded.scene_id, start_offset=excluded.start_offset, end_offset=excluded.end_offset, source_reference_id=excluded.source_reference_id, status=excluded.status, confidence=excluded.confidence, author_confirmed=excluded.author_confirmed, updated_at=excluded.updated_at", params![id, input.project_id, input.entity_id, input.related_entity_id, input.state_kind, input.previous_state, input.new_state, input.chapter_id, input.scene_id, input.start_offset, input.end_offset, input.source_reference_id, input.status, input.confidence, input.author_confirmed, stamp]).map_err(|error| sql_error("Zustandsänderung konnte nicht gespeichert werden", error))?;
-    db.query_row("SELECT id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, chapter_id, scene_id, start_offset, end_offset, source_reference_id, status, confidence, author_confirmed, created_at, updated_at FROM continuity_state_ledger WHERE id=?1", params![id], ledger_from_row).map_err(|error| sql_error("Gespeicherte Zustandsänderung konnte nicht geladen werden", error))
+    db.execute("INSERT INTO continuity_state_ledger (id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, reason, evidence_excerpt, chapter_id, scene_id, start_offset, end_offset, source_reference_id, status, confidence, author_confirmed, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?18) ON CONFLICT(id) DO UPDATE SET previous_state=excluded.previous_state, new_state=excluded.new_state, reason=excluded.reason, evidence_excerpt=excluded.evidence_excerpt, chapter_id=excluded.chapter_id, scene_id=excluded.scene_id, start_offset=excluded.start_offset, end_offset=excluded.end_offset, source_reference_id=excluded.source_reference_id, status=excluded.status, confidence=excluded.confidence, author_confirmed=excluded.author_confirmed, updated_at=excluded.updated_at", params![id, input.project_id, input.entity_id, input.related_entity_id, input.state_kind, input.previous_state, input.new_state, input.reason, input.evidence_excerpt, input.chapter_id, input.scene_id, input.start_offset, input.end_offset, input.source_reference_id, input.status, input.confidence, input.author_confirmed, stamp]).map_err(|error| sql_error("Zustandsänderung konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT id, project_id, entity_id, related_entity_id, state_kind, previous_state, new_state, reason, evidence_excerpt, chapter_id, scene_id, start_offset, end_offset, source_reference_id, status, confidence, author_confirmed, created_at, updated_at FROM continuity_state_ledger WHERE id=?1", params![id], ledger_from_row).map_err(|error| sql_error("Gespeicherte Zustandsänderung konnte nicht geladen werden", error))
 }
 
 #[tauri::command]
@@ -2942,7 +2958,7 @@ pub fn get_state_at_position(
     let db = lock_db(&state)?;
     validate_scene_project(&db, &project_id, &target_position.scene_id)?;
     let target: (i64, i64) = db.query_row("SELECT chapters.order_index, scenes.order_index FROM scenes JOIN chapters ON chapters.id=scenes.chapter_id WHERE scenes.id=?1 AND chapters.id=?2", params![target_position.scene_id, target_position.chapter_id], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|error| sql_error("Zielposition konnte nicht geprüft werden", error))?;
-    let mut statement = db.prepare("SELECT l.id, l.project_id, l.entity_id, l.related_entity_id, l.state_kind, l.previous_state, l.new_state, l.chapter_id, l.scene_id, l.start_offset, l.end_offset, l.source_reference_id, l.status, l.confidence, l.author_confirmed, l.created_at, l.updated_at, COALESCE(c.order_index, -1), COALESCE(s.order_index, -1) FROM continuity_state_ledger l LEFT JOIN chapters c ON c.id=l.chapter_id LEFT JOIN scenes s ON s.id=l.scene_id WHERE l.project_id=?1 AND l.entity_id=?2 AND l.state_kind=?3 AND l.status='confirmed' AND l.author_confirmed=1 ORDER BY c.order_index DESC, s.order_index DESC, COALESCE(l.start_offset, -1) DESC").map_err(|error| sql_error("Zustandsverlauf konnte nicht geladen werden", error))?;
+    let mut statement = db.prepare("SELECT l.id, l.project_id, l.entity_id, l.related_entity_id, l.state_kind, l.previous_state, l.new_state, l.reason, l.evidence_excerpt, l.chapter_id, l.scene_id, l.start_offset, l.end_offset, l.source_reference_id, l.status, l.confidence, l.author_confirmed, l.created_at, l.updated_at, COALESCE(c.order_index, -1), COALESCE(s.order_index, -1) FROM continuity_state_ledger l LEFT JOIN chapters c ON c.id=l.chapter_id LEFT JOIN scenes s ON s.id=l.scene_id WHERE l.project_id=?1 AND l.entity_id=?2 AND l.state_kind=?3 AND l.status='confirmed' AND l.author_confirmed=1 ORDER BY c.order_index DESC, s.order_index DESC, COALESCE(l.start_offset, -1) DESC").map_err(|error| sql_error("Zustandsverlauf konnte nicht geladen werden", error))?;
     let rows = statement
         .query_map(params![project_id, entity_id, state_kind], |row| {
             let entry = ledger_from_row(row)?;
@@ -3047,15 +3063,17 @@ fn continuity_finding_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ContinuityR
         objective_conflict: row.get(11)?,
         lore_explanations: json_strings(&row.get::<_, String>(12)?),
         evidence_excerpt: row.get(13)?,
-        counter_evidence_excerpts: json_strings(&row.get::<_, String>(14)?),
-        confidence: row.get(15)?,
-        start_offset: row.get(16)?,
-        end_offset: row.get(17)?,
-        reason: row.get(18)?,
-        review_status: row.get(19)?,
-        user_decision: row.get(20)?,
-        created_at: row.get(21)?,
-        updated_at: row.get(22)?,
+        source_reference_id: row.get(14)?,
+        counter_evidence_excerpts: json_strings(&row.get::<_, String>(15)?),
+        counter_evidence: serde_json::from_str(&row.get::<_, String>(16)?).unwrap_or_default(),
+        confidence: row.get(17)?,
+        start_offset: row.get(18)?,
+        end_offset: row.get(19)?,
+        reason: row.get(20)?,
+        review_status: row.get(21)?,
+        user_decision: row.get(22)?,
+        created_at: row.get(23)?,
+        updated_at: row.get(24)?,
     })
 }
 
@@ -3078,12 +3096,13 @@ fn lifecycle_proposal_from_row(row: &rusqlite::Row<'_>) -> SqlResult<PlotThreadL
         entity_id: row.get(3)?,
         proposed_status: row.get(4)?,
         evidence_excerpt: row.get(5)?,
-        start_offset: row.get(6)?,
-        end_offset: row.get(7)?,
-        reason: row.get(8)?,
-        review_status: row.get(9)?,
-        reviewed_at: row.get(10)?,
-        created_at: row.get(11)?,
+        source_reference_id: row.get(6)?,
+        start_offset: row.get(7)?,
+        end_offset: row.get(8)?,
+        reason: row.get(9)?,
+        review_status: row.get(10)?,
+        reviewed_at: row.get(11)?,
+        created_at: row.get(12)?,
     })
 }
 
@@ -3478,7 +3497,7 @@ pub fn list_continuity_review_findings(
     run_id: Option<String>,
 ) -> Result<Vec<ContinuityReviewFinding>, String> {
     let db = lock_db(&state)?;
-    let mut statement = db.prepare("SELECT id, run_id, project_id, chapter_id, scene_id, finding_type, severity, subject_entity_id, related_entity_ids_json, related_state_ids_json, related_rule_ids_json, objective_conflict, lore_explanations_json, evidence_excerpt, counter_evidence_json, confidence, start_offset, end_offset, reason, review_status, user_decision, created_at, updated_at FROM continuity_review_findings WHERE project_id=?1 AND (?2 IS NULL OR run_id=?2) ORDER BY created_at DESC").map_err(|error| sql_error("Kontinuitätswarnungen konnten nicht geladen werden", error))?;
+    let mut statement = db.prepare("SELECT id, run_id, project_id, chapter_id, scene_id, finding_type, severity, subject_entity_id, related_entity_ids_json, related_state_ids_json, related_rule_ids_json, objective_conflict, lore_explanations_json, evidence_excerpt, source_reference_id, counter_evidence_json, counter_evidence_structured_json, confidence, start_offset, end_offset, reason, review_status, user_decision, created_at, updated_at FROM continuity_review_findings WHERE project_id=?1 AND (?2 IS NULL OR run_id=?2) ORDER BY created_at DESC").map_err(|error| sql_error("Kontinuitätswarnungen konnten nicht geladen werden", error))?;
     let result = statement
         .query_map(params![project_id, run_id], continuity_finding_from_row)
         .map_err(|error| sql_error("Kontinuitätswarnungen konnten nicht geladen werden", error))?
@@ -3523,6 +3542,20 @@ pub fn save_continuity_review_findings(
         if !continuity_review_status_valid(&status) {
             return Err("Ungültiger Status der Kontinuitätswarnung.".into());
         }
+        if let Some(source_id) = &input.source_reference_id {
+            let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2)", params![source_id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Finding-Quelle konnte nicht geprüft werden", error))?;
+            if !valid {
+                return Err("Die Finding-Quelle gehört nicht zum Projekt.".into());
+            }
+        }
+        for counter in &input.counter_evidence {
+            if let Some(source_id) = &counter.source_reference_id {
+                let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2)", params![source_id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Gegenquelle konnte nicht geprüft werden", error))?;
+                if !valid {
+                    return Err("Die Gegenquelle gehört nicht zum Projekt.".into());
+                }
+            }
+        }
         for entity_id in input
             .related_entity_ids
             .iter()
@@ -3530,9 +3563,27 @@ pub fn save_continuity_review_findings(
         {
             project_entity_exists(&tx, &input.project_id, entity_id, None)?;
         }
+        for state_id in &input.related_state_ids {
+            let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM continuity_state_ledger WHERE id=?1 AND project_id=?2)", params![state_id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Finding-Zustand konnte nicht geprüft werden", error))?;
+            if !valid {
+                return Err("Das Finding verweist auf einen unbekannten Zustand.".into());
+            }
+        }
+        for rule_id in &input.related_rule_ids {
+            let valid: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM project_rules WHERE id=?1 AND project_id=?2)",
+                    params![rule_id, input.project_id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| sql_error("Finding-Regel konnte nicht geprüft werden", error))?;
+            if !valid {
+                return Err("Das Finding verweist auf eine unbekannte Projektregel.".into());
+            }
+        }
         let id = input.id.unwrap_or_else(new_id);
         let stamp = now();
-        tx.execute("INSERT INTO continuity_review_findings (id, run_id, project_id, chapter_id, scene_id, finding_type, severity, subject_entity_id, related_entity_ids_json, related_state_ids_json, related_rule_ids_json, objective_conflict, lore_explanations_json, evidence_excerpt, counter_evidence_json, confidence, start_offset, end_offset, reason, review_status, user_decision, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,COALESCE((SELECT created_at FROM continuity_review_findings WHERE id=?1),?22),?22) ON CONFLICT(id) DO UPDATE SET objective_conflict=excluded.objective_conflict, lore_explanations_json=excluded.lore_explanations_json, evidence_excerpt=excluded.evidence_excerpt, counter_evidence_json=excluded.counter_evidence_json, confidence=excluded.confidence, review_status=excluded.review_status, user_decision=excluded.user_decision, updated_at=excluded.updated_at", params![id, run_id, input.project_id, input.chapter_id, input.scene_id, input.finding_type, input.severity, input.subject_entity_id, serde_json::to_string(&input.related_entity_ids).unwrap_or_else(|_| "[]".into()), serde_json::to_string(&input.related_state_ids).unwrap_or_else(|_| "[]".into()), serde_json::to_string(&input.related_rule_ids).unwrap_or_else(|_| "[]".into()), input.objective_conflict, serde_json::to_string(&input.lore_explanations).unwrap_or_else(|_| "[]".into()), input.evidence_excerpt, serde_json::to_string(&input.counter_evidence_excerpts).unwrap_or_else(|_| "[]".into()), input.confidence, input.start_offset, input.end_offset, input.reason, status, input.user_decision, stamp]).map_err(|error| sql_error("Kontinuitätswarnung konnte nicht gespeichert werden", error))?;
+        tx.execute("INSERT INTO continuity_review_findings (id, run_id, project_id, chapter_id, scene_id, finding_type, severity, subject_entity_id, related_entity_ids_json, related_state_ids_json, related_rule_ids_json, objective_conflict, lore_explanations_json, evidence_excerpt, source_reference_id, counter_evidence_json, counter_evidence_structured_json, confidence, start_offset, end_offset, reason, review_status, user_decision, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,COALESCE((SELECT created_at FROM continuity_review_findings WHERE id=?1),?24),?24) ON CONFLICT(id) DO UPDATE SET objective_conflict=excluded.objective_conflict, lore_explanations_json=excluded.lore_explanations_json, evidence_excerpt=excluded.evidence_excerpt, source_reference_id=excluded.source_reference_id, counter_evidence_json=excluded.counter_evidence_json, counter_evidence_structured_json=excluded.counter_evidence_structured_json, confidence=excluded.confidence, review_status=excluded.review_status, user_decision=excluded.user_decision, updated_at=excluded.updated_at", params![id, run_id, input.project_id, input.chapter_id, input.scene_id, input.finding_type, input.severity, input.subject_entity_id, serde_json::to_string(&input.related_entity_ids).unwrap_or_else(|_| "[]".into()), serde_json::to_string(&input.related_state_ids).unwrap_or_else(|_| "[]".into()), serde_json::to_string(&input.related_rule_ids).unwrap_or_else(|_| "[]".into()), input.objective_conflict, serde_json::to_string(&input.lore_explanations).unwrap_or_else(|_| "[]".into()), input.evidence_excerpt, input.source_reference_id, serde_json::to_string(&input.counter_evidence_excerpts).unwrap_or_else(|_| "[]".into()), serde_json::to_string(&input.counter_evidence).unwrap_or_else(|_| "[]".into()), input.confidence, input.start_offset, input.end_offset, input.reason, status, input.user_decision, stamp]).map_err(|error| sql_error("Kontinuitätswarnung konnte nicht gespeichert werden", error))?;
     }
     tx.commit().map_err(|error| {
         sql_error(
@@ -3540,7 +3591,7 @@ pub fn save_continuity_review_findings(
             error,
         )
     })?;
-    let mut statement = db.prepare("SELECT id, run_id, project_id, chapter_id, scene_id, finding_type, severity, subject_entity_id, related_entity_ids_json, related_state_ids_json, related_rule_ids_json, objective_conflict, lore_explanations_json, evidence_excerpt, counter_evidence_json, confidence, start_offset, end_offset, reason, review_status, user_decision, created_at, updated_at FROM continuity_review_findings WHERE run_id=?1 ORDER BY created_at").map_err(|error| sql_error("Kontinuitätswarnungen konnten nicht geladen werden", error))?;
+    let mut statement = db.prepare("SELECT id, run_id, project_id, chapter_id, scene_id, finding_type, severity, subject_entity_id, related_entity_ids_json, related_state_ids_json, related_rule_ids_json, objective_conflict, lore_explanations_json, evidence_excerpt, source_reference_id, counter_evidence_json, counter_evidence_structured_json, confidence, start_offset, end_offset, reason, review_status, user_decision, created_at, updated_at FROM continuity_review_findings WHERE run_id=?1 ORDER BY created_at").map_err(|error| sql_error("Kontinuitätswarnungen konnten nicht geladen werden", error))?;
     let result = statement
         .query_map(params![run_id], continuity_finding_from_row)
         .map_err(|error| sql_error("Kontinuitätswarnungen konnten nicht geladen werden", error))?
@@ -3571,7 +3622,7 @@ pub fn review_continuity_finding(
         return Err("Diese Kontinuitätswarnung wurde bereits entschieden.".into());
     }
     db.execute("UPDATE continuity_review_findings SET review_status=?2, user_decision=?3, updated_at=?4 WHERE id=?1", params![id, review_status, user_decision, now()]).map_err(|error| sql_error("Entscheidung konnte nicht gespeichert werden", error))?;
-    db.query_row("SELECT id, run_id, project_id, chapter_id, scene_id, finding_type, severity, subject_entity_id, related_entity_ids_json, related_state_ids_json, related_rule_ids_json, objective_conflict, lore_explanations_json, evidence_excerpt, counter_evidence_json, confidence, start_offset, end_offset, reason, review_status, user_decision, created_at, updated_at FROM continuity_review_findings WHERE id=?1", params![id], continuity_finding_from_row).map_err(|error| sql_error("Entscheidung konnte nicht geladen werden", error))
+    db.query_row("SELECT id, run_id, project_id, chapter_id, scene_id, finding_type, severity, subject_entity_id, related_entity_ids_json, related_state_ids_json, related_rule_ids_json, objective_conflict, lore_explanations_json, evidence_excerpt, source_reference_id, counter_evidence_json, counter_evidence_structured_json, confidence, start_offset, end_offset, reason, review_status, user_decision, created_at, updated_at FROM continuity_review_findings WHERE id=?1", params![id], continuity_finding_from_row).map_err(|error| sql_error("Entscheidung konnte nicht geladen werden", error))
 }
 
 fn validate_plot_thread(db: &Connection, project_id: &str, entity_id: &str) -> Result<(), String> {
@@ -3616,7 +3667,7 @@ pub fn list_plot_thread_lifecycle_proposals(
     run_id: Option<String>,
 ) -> Result<Vec<PlotThreadLifecycleProposal>, String> {
     let db = lock_db(&state)?;
-    let mut statement = db.prepare("SELECT id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, start_offset, end_offset, reason, review_status, reviewed_at, created_at FROM plot_thread_lifecycle_proposals WHERE project_id=?1 AND (?2 IS NULL OR run_id=?2) ORDER BY created_at DESC").map_err(|error| sql_error("Handlungsstrang-Vorschläge konnten nicht geladen werden", error))?;
+    let mut statement = db.prepare("SELECT id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, source_reference_id, start_offset, end_offset, reason, review_status, reviewed_at, created_at FROM plot_thread_lifecycle_proposals WHERE project_id=?1 AND (?2 IS NULL OR run_id=?2) ORDER BY created_at DESC").map_err(|error| sql_error("Handlungsstrang-Vorschläge konnten nicht geladen werden", error))?;
     let result = statement
         .query_map(params![project_id, run_id], lifecycle_proposal_from_row)
         .map_err(|error| {
@@ -3645,13 +3696,29 @@ pub fn save_plot_thread_lifecycle_proposal(
     }
     let db = lock_db(&state)?;
     validate_plot_thread(&db, &input.project_id, &input.entity_id)?;
+    let run_project: String = db
+        .query_row(
+            "SELECT project_id FROM continuity_review_runs WHERE id=?1",
+            params![input.run_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| sql_error("Kontinuitätsrun konnte nicht geladen werden", error))?;
+    if run_project != input.project_id {
+        return Err("Handlungsstrang-Vorschlag und Prüflauf gehören nicht zusammen.".into());
+    }
+    if let Some(source_id) = &input.source_reference_id {
+        let valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2)", params![source_id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Handlungsstrangquelle konnte nicht geprüft werden", error))?;
+        if !valid {
+            return Err("Die Handlungsstrangquelle gehört nicht zum Projekt.".into());
+        }
+    }
     let id = input.id.unwrap_or_else(new_id);
     let status = input.review_status.unwrap_or_else(|| "pending".into());
     if status != "pending" && !matches!(status.as_str(), "accepted" | "edited" | "rejected") {
         return Err("Ungültiger Handlungsstrang-Reviewstatus.".into());
     }
-    db.execute("INSERT INTO plot_thread_lifecycle_proposals (id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, start_offset, end_offset, reason, review_status, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(id) DO UPDATE SET proposed_status=excluded.proposed_status, reason=excluded.reason, review_status=excluded.review_status", params![id, input.run_id, input.project_id, input.entity_id, input.proposed_status, input.evidence_excerpt, input.start_offset, input.end_offset, input.reason, status, now()]).map_err(|error| sql_error("Handlungsstrang-Vorschlag konnte nicht gespeichert werden", error))?;
-    db.query_row("SELECT id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, start_offset, end_offset, reason, review_status, reviewed_at, created_at FROM plot_thread_lifecycle_proposals WHERE id=?1", params![id], lifecycle_proposal_from_row).map_err(|error| sql_error("Handlungsstrang-Vorschlag konnte nicht geladen werden", error))
+    db.execute("INSERT INTO plot_thread_lifecycle_proposals (id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, source_reference_id, start_offset, end_offset, reason, review_status, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) ON CONFLICT(id) DO UPDATE SET proposed_status=excluded.proposed_status, reason=excluded.reason, source_reference_id=excluded.source_reference_id, review_status=excluded.review_status", params![id, input.run_id, input.project_id, input.entity_id, input.proposed_status, input.evidence_excerpt, input.source_reference_id, input.start_offset, input.end_offset, input.reason, status, now()]).map_err(|error| sql_error("Handlungsstrang-Vorschlag konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, source_reference_id, start_offset, end_offset, reason, review_status, reviewed_at, created_at FROM plot_thread_lifecycle_proposals WHERE id=?1", params![id], lifecycle_proposal_from_row).map_err(|error| sql_error("Handlungsstrang-Vorschlag konnte nicht geladen werden", error))
 }
 
 #[tauri::command]
@@ -3665,7 +3732,7 @@ pub fn review_plot_thread_lifecycle_proposal(
         return Err("Ungültiger Handlungsstrang-Reviewstatus.".into());
     }
     let db = lock_db(&state)?;
-    let proposal = db.query_row("SELECT id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, start_offset, end_offset, reason, review_status, reviewed_at, created_at FROM plot_thread_lifecycle_proposals WHERE id=?1", params![id], lifecycle_proposal_from_row).map_err(|error| sql_error("Handlungsstrang-Vorschlag konnte nicht geladen werden", error))?;
+    let proposal = db.query_row("SELECT id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, source_reference_id, start_offset, end_offset, reason, review_status, reviewed_at, created_at FROM plot_thread_lifecycle_proposals WHERE id=?1", params![id], lifecycle_proposal_from_row).map_err(|error| sql_error("Handlungsstrang-Vorschlag konnte nicht geladen werden", error))?;
     if proposal.review_status != "pending" {
         return Err("Dieser Handlungsstrang-Vorschlag wurde bereits geprüft.".into());
     }
@@ -3695,7 +3762,7 @@ pub fn review_plot_thread_lifecycle_proposal(
             error,
         )
     })?;
-    db.query_row("SELECT id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, start_offset, end_offset, reason, review_status, reviewed_at, created_at FROM plot_thread_lifecycle_proposals WHERE id=?1", params![id], lifecycle_proposal_from_row).map_err(|error| sql_error("Handlungsstrangreview konnte nicht geladen werden", error))
+    db.query_row("SELECT id, run_id, project_id, entity_id, proposed_status, evidence_excerpt, source_reference_id, start_offset, end_offset, reason, review_status, reviewed_at, created_at FROM plot_thread_lifecycle_proposals WHERE id=?1", params![id], lifecycle_proposal_from_row).map_err(|error| sql_error("Handlungsstrangreview konnte nicht geladen werden", error))
 }
 
 fn validate_character(db: &Connection, project_id: &str, character_id: &str) -> Result<(), String> {
@@ -6146,7 +6213,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            17
+            18
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);
