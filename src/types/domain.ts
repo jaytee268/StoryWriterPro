@@ -199,6 +199,14 @@ export interface ChatSource { id: string; label: string; chapterId?: string; sce
 export interface TimelineEvent { id: string; title: string; storyTime: string; chapter: string; scene: string; location: string; characters: string[]; pov: string; summary: string; consequences: string; knowledge: string; clue?: string; status: EntityStatus; track: string; }
 export interface MindNode { id: string; label: string; type: string; x: number; y: number; status?: EntityStatus; }
 export interface MindEdge { id: string; source: string; target: string; label: string; }
+export type TimelineEventStatus = 'proposed' | 'confirmed' | 'uncertain' | 'rejected';
+export type TimelineTimeCertainty = 'exact' | 'relative' | 'unknown';
+export interface PersistentTimelineEvent { id: string; projectId: string; bookId: string; chapterId: string; sceneId: string; passageUnitId?: string; title: string; summary: string; storyTimeText: string; normalizedTime?: string; temporalOrder: number; timeCertainty: TimelineTimeCertainty; locationEntityId?: string; povCharacterId?: string; participatingEntityIds: string[]; causeEventIds: string[]; consequenceEventIds: string[]; knowledgeChanges: string[]; stateChanges: string[]; relatedPlotThreadIds: string[]; sourceReferenceIds: string[]; confidence: number; status: TimelineEventStatus; authorConfirmed: boolean; origin: 'manuscript_analysis' | 'manual' | 'longform'; createdAt: string; updatedAt: string; }
+export interface SavePersistentTimelineEventInput extends Omit<PersistentTimelineEvent, 'id' | 'createdAt' | 'updatedAt'> { id?: string; }
+export interface StoryGraphEdge { id: string; projectId: string; sourceEntityId: string; targetEntityId: string; relationType: string; label: string; validFromChapterId?: string; validFromSceneId?: string; validFromOffset?: number; validUntilChapterId?: string; validUntilSceneId?: string; validUntilOffset?: number; sourceReferenceIds: string[]; confidence: number; status: TimelineEventStatus; authorConfirmed: boolean; origin: 'manuscript_analysis' | 'manual' | 'longform'; createdAt: string; updatedAt: string; }
+export interface SaveStoryGraphEdgeInput extends Omit<StoryGraphEdge, 'id' | 'createdAt' | 'updatedAt'> { id?: string; }
+export interface MindmapLayout { id: string; projectId: string; userId: string; nodeId: string; positionX: number; positionY: number; width: number; height: number; groupId?: string; hidden: boolean; fixed: boolean; updatedAt: string; }
+export interface SaveMindmapLayoutInput extends Omit<MindmapLayout, 'id' | 'updatedAt'> { id?: string; }
 export interface ChatMessage { id: string; role: 'user' | 'assistant'; content: string; sources?: ChatSource[]; time: string; }
 export interface AiTask { id: string; type: AiTaskType; prompt: string; context: string[]; }
 export interface ProviderStatus { available: boolean; label: string; detail: string; }

@@ -2,9 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { BookOpen, BrainCircuit, FileText, Gauge, MessageCircle, PanelLeftClose, PanelLeftOpen, RefreshCw, Settings2, Upload, X } from 'lucide-react';
 import { useAppStore } from './stores/useAppStore';
-import { demoEvents, mindEdges, mindNodes } from './services/mockData';
 import { createStoryRepository, type RuntimeMode, type StoryRepository } from './services/storyRepository';
-import type { AiProviderSettings, AppView, BibleProposal, BibleUpdateRun, CharacterMemoryProposal, CharacterMemoryUpdateRun, ChatMessage, Chapter, CreateStyleReferenceInput, ManuscriptAnalysisArtifact, ManuscriptAnalysisJob, ManuscriptAnalysisPhaseResult, ManuscriptAnalysisUnit, ManuscriptStructureProposal, ManuscriptStructureRun, PendingSourceNavigation, Project, ProjectOnboardingState, ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput, Scene, StoryEntity, StorySourceReference, StyleReference, UpdateChapterInput, WorkspaceSnapshot } from './types/domain';
+import type { AiProviderSettings, AppView, BibleProposal, BibleUpdateRun, CharacterMemoryProposal, CharacterMemoryUpdateRun, ChatMessage, Chapter, CreateStyleReferenceInput, ManuscriptAnalysisArtifact, ManuscriptAnalysisJob, ManuscriptAnalysisPhaseResult, ManuscriptAnalysisUnit, ManuscriptStructureProposal, ManuscriptStructureRun, MindEdge, MindNode, MindmapLayout, PendingSourceNavigation, PersistentTimelineEvent, Project, ProjectOnboardingState, ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput, Scene, StoryEntity, StoryGraphEdge, StorySourceReference, StyleReference, UpdateChapterInput, WorkspaceSnapshot } from './types/domain';
 import { DeterministicProjectContextBuilder } from './services/contextBuilder';
 import { changedRange } from './services/bibleExtractor';
 import { Dashboard } from './features/projects/Dashboard';
@@ -67,6 +66,9 @@ export function App() {
   const [manuscriptAnalysisError, setManuscriptAnalysisError] = useState('');
   const manuscriptAnalysisController = useRef<ManuscriptAnalysisController | undefined>(undefined);
   const [onboarding, setOnboarding] = useState<{ project?: Project; state?: ProjectOnboardingState }>();
+  const [timelineEvents, setTimelineEvents] = useState<PersistentTimelineEvent[]>([]);
+  const [storyGraphEdges, setStoryGraphEdges] = useState<StoryGraphEdge[]>([]);
+  const [mindmapLayouts, setMindmapLayouts] = useState<MindmapLayout[]>([]);
 
   const loadWorkspace = useCallback(async (projectId?: string) => {
     setLoadState({ status: 'loading' });
@@ -118,6 +120,16 @@ export function App() {
     setManuscriptAnalysis({ job: progress.job, units: progress.units, phaseResults: progress.phaseResults, artifacts: progress.artifacts, structureRuns, structureProposals });
   }, [workspace?.project.id]);
   useEffect(() => { void refreshManuscriptAnalysis(); }, [refreshManuscriptAnalysis]);
+  const refreshVisualization = useCallback(async () => {
+    if (!workspace?.project.id) return;
+    const [events, edges, layouts] = await Promise.all([
+      repository.listTimelineEvents(workspace.project.id),
+      repository.listStoryGraphEdges(workspace.project.id),
+      repository.listMindmapLayouts(workspace.project.id, 'default'),
+    ]);
+    setTimelineEvents(events); setStoryGraphEdges(edges); setMindmapLayouts(layouts);
+  }, [workspace?.project.id]);
+  useEffect(() => { void refreshVisualization().catch((error) => setProviderNotice(error instanceof Error ? error.message : 'Story-Graph konnte nicht geladen werden.')); }, [refreshVisualization]);
   useEffect(() => {
     if (!workspace) return;
     const sceneIds = workspace.chapters.flatMap((chapter) => chapter.scenes).map((scene) => scene.id);
@@ -389,14 +401,19 @@ export function App() {
     await openSourceReference({ id: reference.id, projectId: reference.projectId, sceneId: reference.sceneId, chapterId: reference.chapterId ?? chapter.id, excerpt: reference.excerpt, startOffset: reference.startOffset, endOffset: reference.endOffset, createdAt: reference.createdAt });
   }, [openSourceReference, workspace]);
   const createStyleReference = useCallback((input: CreateStyleReferenceInput) => repository.createStyleReference(input), []);
+  const openVisualizationSource = useCallback(async (sourceId: string) => { const source = (await repository.listSourceReferences(workspace.project.id)).find((item) => item.id === sourceId); if (source) await openSourceReference(source); }, [openSourceReference, workspace]);
+  const timelineReview = useCallback(async (event: PersistentTimelineEvent, status: PersistentTimelineEvent['status']) => { await repository.reviewTimelineEvent(event.id, status); await refreshVisualization(); }, [refreshVisualization]);
+  const mindmapNodes = useMemo<MindNode[]>(() => workspace?.entities.map((entity, index) => ({ id: entity.id, label: entity.name, type: entity.type, x: 120 + (index % 4) * 330, y: 120 + Math.floor(index / 4) * 220, status: entity.status })) ?? [], [workspace?.entities]);
+  const mindmapEdges = useMemo<MindEdge[]>(() => storyGraphEdges.map((edge) => ({ id: edge.id, source: edge.sourceEntityId, target: edge.targetEntityId, label: edge.label || edge.relationType })), [storyGraphEdges]);
+  const saveMindmapLayout = useCallback(async (nodeId: string, position: { x: number; y: number }) => { if (!workspace?.project.id) return; const saved = await repository.saveMindmapLayout({ projectId: workspace.project.id, userId: 'default', nodeId, positionX: position.x, positionY: position.y, width: 190, height: 78, hidden: false, fixed: true }); setMindmapLayouts((current) => [saved, ...current.filter((item) => item.nodeId !== nodeId)]); }, [workspace?.project.id]);
 
   const renderView = () => {
     if (!workspace) return null;
     if (view === 'dashboard') return <Dashboard project={workspace.project} projects={projects} onOpen={() => void requestViewChange('editor')} onSelectProject={(id) => void loadWorkspace(id)} onCreateProject={() => setOnboarding({})} onArchive={(id) => void repository.archiveProject(id).then(() => loadWorkspace()).catch((error) => setViewError(error instanceof Error ? error.message : 'Projekt konnte nicht archiviert werden.'))} onImport={() => void openImport()} />;
     if (view === 'editor') return <EditorView projectId={workspace.project.id} chapters={workspace.chapters} scene={currentScene} chapter={currentChapter} pendingSourceNavigation={pendingSourceNavigation} onSourceNavigationConsumed={() => setPendingSourceNavigation(undefined)} onBack={() => void requestViewChange('dashboard')} onSelectScene={(id) => void requestSceneChange(id)} onSave={saveScene} onCreateChapter={createChapter} onUpdateChapter={updateChapter} onCreateScene={createScene} onListVersions={listSceneVersions} onCreateVersion={createSceneVersion} onRestoreVersion={restoreSceneVersion} onGetEditorPreferences={getEditorPreferences} onSaveEditorPreferences={saveEditorPreferences} onBibleUpdate={runBibleUpdate} bibleUpdateBusy={Boolean(bibleUpdateProvider)} onCancelBibleUpdate={cancelBibleUpdate} onOpenAssistant={() => setAssistantOpen(true)} onSaveStateChange={setSaveStatus} onRegisterSaveController={registerSaveController} onCreateStyleReference={createStyleReference} />;
     if (view === 'bible' || view === 'characters' || view === 'threads') return <StoryBibleView entities={workspace.entities} projectId={workspace.project.id} chapters={workspace.chapters} repository={repository} activeRun={activeReviewRun} proposals={reviewProposals} activeMemoryRun={activeMemoryRun} memoryProposals={memoryProposals} onEntityChanged={replaceEntity} onOpenSourceReference={openSourceReference} onOpenStyleReference={openStyleReference} onReview={reviewProposal} onCompleteReview={completeBibleReview} onMemoryReview={reviewCharacterMemory} onCompleteMemoryReview={completeCharacterMemoryReview} onCloseReview={() => { setActiveReviewRun(undefined); setReviewProposals([]); setActiveMemoryRun(undefined); setMemoryProposals([]); }} initialFilter={view === 'characters' ? 'character' : view === 'threads' ? 'plot_thread' : undefined} />;
-    if (view === 'timeline') return <TimelineView events={demoEvents} />;
-    if (view === 'mindmap') return <MindmapView nodes={mindNodes} edges={mindEdges} />;
+    if (view === 'timeline') return <TimelineView events={timelineEvents} chapters={workspace.chapters} entities={workspace.entities} onOpenSource={(id) => void openVisualizationSource(id)} onOpenScene={(id) => void requestSceneChange(id).then(async (changed) => { if (changed) await requestViewChange('editor'); })} onReview={(event, status) => void timelineReview(event, status)} />;
+    if (view === 'mindmap') return <MindmapView nodes={mindmapNodes} edges={mindmapEdges} layouts={mindmapLayouts} onLayoutChange={(id, position) => void saveMindmapLayout(id, position)} onOpenEntity={() => void requestViewChange('bible')} />;
     if (view === 'settings') return <SettingsView mode={repository.mode} project={workspace.project} settings={providerSettings} onSettingsChange={setProviderSettings} onReload={loadWorkspace} />;
     return <Dashboard project={workspace.project} projects={projects} onOpen={() => void requestViewChange('editor')} onSelectProject={(id) => void loadWorkspace(id)} onCreateProject={() => setOnboarding({})} onImport={() => void openImport()} />;
   };

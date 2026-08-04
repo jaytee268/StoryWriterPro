@@ -613,6 +613,17 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
         ))?;
         connection.execute("INSERT INTO schema_migrations (version) VALUES (27)", [])?;
     }
+    let has_timeline_graph: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 28",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_timeline_graph == 0 {
+        connection.execute_batch(include_str!(
+            "../../../migrations/028_timeline_story_graph.sql"
+        ))?;
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (28)", [])?;
+    }
     Ok(())
 }
 
@@ -768,7 +779,7 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            27
+            28
         );
         assert_eq!(
             connection
@@ -796,6 +807,9 @@ mod tests {
             "manuscript_analysis_review_audits",
             "project_source_documents",
             "project_source_references",
+            "manuscript_timeline_events",
+            "story_graph_edges",
+            "mindmap_layouts",
         ] {
             assert_eq!(
                 connection
@@ -1030,7 +1044,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                27
+                28
             );
             // Running startup migrations again must not change the assignment
             // or fail on the ALTER TABLE statement.

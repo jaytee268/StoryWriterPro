@@ -2815,6 +2815,147 @@ pub struct SaveChapterGenerationDraftLedgerInput {
     pub source_reference_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistentTimelineEvent {
+    pub id: String,
+    pub project_id: String,
+    pub book_id: String,
+    pub chapter_id: String,
+    pub scene_id: String,
+    pub passage_unit_id: Option<String>,
+    pub title: String,
+    pub summary: String,
+    pub story_time_text: String,
+    pub normalized_time: Option<String>,
+    pub temporal_order: i64,
+    pub time_certainty: String,
+    pub location_entity_id: Option<String>,
+    pub pov_character_id: Option<String>,
+    pub participating_entity_ids: Vec<String>,
+    pub cause_event_ids: Vec<String>,
+    pub consequence_event_ids: Vec<String>,
+    pub knowledge_changes: Vec<String>,
+    pub state_changes: Vec<String>,
+    pub related_plot_thread_ids: Vec<String>,
+    pub source_reference_ids: Vec<String>,
+    pub confidence: f64,
+    pub status: String,
+    pub author_confirmed: bool,
+    pub origin: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavePersistentTimelineEventInput {
+    pub id: Option<String>,
+    pub project_id: String,
+    pub book_id: String,
+    pub chapter_id: String,
+    pub scene_id: String,
+    pub passage_unit_id: Option<String>,
+    pub title: String,
+    pub summary: String,
+    pub story_time_text: String,
+    pub normalized_time: Option<String>,
+    pub temporal_order: i64,
+    pub time_certainty: String,
+    pub location_entity_id: Option<String>,
+    pub pov_character_id: Option<String>,
+    pub participating_entity_ids: Vec<String>,
+    pub cause_event_ids: Vec<String>,
+    pub consequence_event_ids: Vec<String>,
+    pub knowledge_changes: Vec<String>,
+    pub state_changes: Vec<String>,
+    pub related_plot_thread_ids: Vec<String>,
+    pub source_reference_ids: Vec<String>,
+    pub confidence: f64,
+    pub status: Option<String>,
+    pub author_confirmed: bool,
+    pub origin: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryGraphEdge {
+    pub id: String,
+    pub project_id: String,
+    pub source_entity_id: String,
+    pub target_entity_id: String,
+    pub relation_type: String,
+    pub label: String,
+    pub valid_from_chapter_id: Option<String>,
+    pub valid_from_scene_id: Option<String>,
+    pub valid_from_offset: Option<i64>,
+    pub valid_until_chapter_id: Option<String>,
+    pub valid_until_scene_id: Option<String>,
+    pub valid_until_offset: Option<i64>,
+    pub source_reference_ids: Vec<String>,
+    pub confidence: f64,
+    pub status: String,
+    pub author_confirmed: bool,
+    pub origin: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveStoryGraphEdgeInput {
+    pub id: Option<String>,
+    pub project_id: String,
+    pub source_entity_id: String,
+    pub target_entity_id: String,
+    pub relation_type: String,
+    pub label: String,
+    pub valid_from_chapter_id: Option<String>,
+    pub valid_from_scene_id: Option<String>,
+    pub valid_from_offset: Option<i64>,
+    pub valid_until_chapter_id: Option<String>,
+    pub valid_until_scene_id: Option<String>,
+    pub valid_until_offset: Option<i64>,
+    pub source_reference_ids: Vec<String>,
+    pub confidence: f64,
+    pub status: Option<String>,
+    pub author_confirmed: bool,
+    pub origin: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MindmapLayout {
+    pub id: String,
+    pub project_id: String,
+    pub user_id: String,
+    pub node_id: String,
+    pub position_x: f64,
+    pub position_y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub group_id: Option<String>,
+    pub hidden: bool,
+    pub fixed: bool,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveMindmapLayoutInput {
+    pub id: Option<String>,
+    pub project_id: String,
+    pub user_id: String,
+    pub node_id: String,
+    pub position_x: f64,
+    pub position_y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub group_id: Option<String>,
+    pub hidden: bool,
+    pub fixed: bool,
+}
+
 pub fn validate_scene_status(value: &str) -> Result<(), String> {
     match value {
         "draft" | "revised" | "final" => Ok(()),

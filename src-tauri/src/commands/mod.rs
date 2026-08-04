@@ -36,13 +36,13 @@ use crate::{
         ManuscriptAnalysisDraftLedgerEntry, ManuscriptAnalysisJob, ManuscriptAnalysisPageMarker,
         ManuscriptAnalysisPhaseResult, ManuscriptAnalysisReviewAudit, ManuscriptAnalysisUnit,
         ManuscriptImportInput, ManuscriptImportResult, ManuscriptPosition,
-        ManuscriptStructureProposal, ManuscriptStructureRun, NarrativeSummary, PlotThreadLifecycle,
-        PlotThreadLifecycleProposal, Project, ProjectOnboardingState, ProjectRule,
-        ProjectRuleProposal, ProjectSourceDocument, ProjectStyle, ProjectStyleAnalysisRun,
-        ProjectStyleObservation, ProviderStatus, ProvisionalEntity, ProvisionalEntityMention,
-        ProvisionalEvent, ProvisionalMergeProposal, ProvisionalRelation,
-        ReconcileContinuityTextCorrectionInput, RelationshipMemory, RestoreSceneVersionInput,
-        ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput,
+        ManuscriptStructureProposal, ManuscriptStructureRun, MindmapLayout, NarrativeSummary,
+        PersistentTimelineEvent, PlotThreadLifecycle, PlotThreadLifecycleProposal, Project,
+        ProjectOnboardingState, ProjectRule, ProjectRuleProposal, ProjectSourceDocument,
+        ProjectStyle, ProjectStyleAnalysisRun, ProjectStyleObservation, ProviderStatus,
+        ProvisionalEntity, ProvisionalEntityMention, ProvisionalEvent, ProvisionalMergeProposal,
+        ProvisionalRelation, ReconcileContinuityTextCorrectionInput, RelationshipMemory,
+        RestoreSceneVersionInput, ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput,
         SaveChapterGenerationDraftLedgerInput, SaveChapterGenerationPlanInput,
         SaveChapterGenerationReviewInput, SaveChapterGenerationSectionInput,
         SaveCharacterDialogueMemoryInput, SaveCharacterExperienceInput,
@@ -53,17 +53,17 @@ use crate::{
         SaveLoreSheetDraftInput, SaveLoreSheetItemInput, SaveManuscriptAnalysisArtifactInput,
         SaveManuscriptAnalysisDraftLedgerInput, SaveManuscriptAnalysisPhaseResultInput,
         SaveManuscriptAnalysisReviewAuditInput, SaveManuscriptStructureProposalInput,
-        SaveNarrativeSummaryInput, SavePlotThreadLifecycleInput,
-        SavePlotThreadLifecycleProposalInput, SaveProjectOnboardingStateInput,
-        SaveProjectRuleInput, SaveProjectRuleProposalInput, SaveProjectStyleInput,
-        SaveProjectStyleObservationInput, SaveProvisionalEntityInput, SaveProvisionalEventInput,
-        SaveProvisionalMentionInput, SaveProvisionalMergeProposalInput,
+        SaveMindmapLayoutInput, SaveNarrativeSummaryInput, SavePersistentTimelineEventInput,
+        SavePlotThreadLifecycleInput, SavePlotThreadLifecycleProposalInput,
+        SaveProjectOnboardingStateInput, SaveProjectRuleInput, SaveProjectRuleProposalInput,
+        SaveProjectStyleInput, SaveProjectStyleObservationInput, SaveProvisionalEntityInput,
+        SaveProvisionalEventInput, SaveProvisionalMentionInput, SaveProvisionalMergeProposalInput,
         SaveProvisionalRelationInput, SaveRelationshipMemoryInput, SaveStoryDirectionInput,
-        SaveWritingPreferencesInput, Scene, SceneInput, SceneVersion, StoryDirection, StoryEntity,
-        StoryEntityInput, StoryEntityRelation, StorySourceReference, StyleReference,
-        UpdateChapterInput, UpdateLoreCrafterRunInput, UpdateManuscriptAnalysisJobInput,
-        UpdateManuscriptAnalysisUnitInput, UpdateStoryEntityInput, UpdateStyleReferenceInput,
-        WorkspaceSnapshot, WritingPreferences,
+        SaveStoryGraphEdgeInput, SaveWritingPreferencesInput, Scene, SceneInput, SceneVersion,
+        StoryDirection, StoryEntity, StoryEntityInput, StoryEntityRelation, StoryGraphEdge,
+        StorySourceReference, StyleReference, UpdateChapterInput, UpdateLoreCrafterRunInput,
+        UpdateManuscriptAnalysisJobInput, UpdateManuscriptAnalysisUnitInput,
+        UpdateStoryEntityInput, UpdateStyleReferenceInput, WorkspaceSnapshot, WritingPreferences,
     },
 };
 use chrono::Utc;
@@ -5185,6 +5185,304 @@ pub fn save_provisional_event(
     db.query_row("SELECT id,job_id,project_id,passage_unit_id,chapter_id,scene_id,title,summary,participant_entity_ids_json,start_offset,end_offset,confidence,review_status,source_reference_id,created_at FROM provisional_events WHERE id=?1", params![id], provisional_event_from_row).map_err(|e| sql_error("Provisorisches Ereignis konnte nicht geladen werden", e))
 }
 
+fn timeline_event_from_row(row: &rusqlite::Row<'_>) -> SqlResult<PersistentTimelineEvent> {
+    Ok(PersistentTimelineEvent {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        book_id: row.get(2)?,
+        chapter_id: row.get(3)?,
+        scene_id: row.get(4)?,
+        passage_unit_id: row.get(5)?,
+        title: row.get(6)?,
+        summary: row.get(7)?,
+        story_time_text: row.get(8)?,
+        normalized_time: row.get(9)?,
+        temporal_order: row.get(10)?,
+        time_certainty: row.get(11)?,
+        location_entity_id: row.get(12)?,
+        pov_character_id: row.get(13)?,
+        participating_entity_ids: json_strings(&row.get::<_, String>(14)?),
+        cause_event_ids: json_strings(&row.get::<_, String>(15)?),
+        consequence_event_ids: json_strings(&row.get::<_, String>(16)?),
+        knowledge_changes: json_strings(&row.get::<_, String>(17)?),
+        state_changes: json_strings(&row.get::<_, String>(18)?),
+        related_plot_thread_ids: json_strings(&row.get::<_, String>(19)?),
+        source_reference_ids: json_strings(&row.get::<_, String>(20)?),
+        confidence: row.get(21)?,
+        status: row.get(22)?,
+        author_confirmed: row.get(23)?,
+        origin: row.get(24)?,
+        created_at: row.get(25)?,
+        updated_at: row.get(26)?,
+    })
+}
+
+fn validate_timeline_input(
+    db: &Connection,
+    input: &SavePersistentTimelineEventInput,
+) -> Result<(), String> {
+    if !(0.0..=1.0).contains(&input.confidence)
+        || input.status.as_deref().unwrap_or("proposed") == "confirmed" && !input.author_confirmed
+    {
+        return Err("Ungültiger Timeline-Status oder Confidence.".into());
+    }
+    let chapter_exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM chapters c JOIN books b ON b.id=c.book_id WHERE c.id=?1 AND c.book_id=?2 AND b.project_id=?3)", params![input.chapter_id, input.book_id, input.project_id], |row| row.get(0)).map_err(|e| e.to_string())?;
+    let scene_exists: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM scenes WHERE id=?1 AND chapter_id=?2)",
+            params![input.scene_id, input.chapter_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if !chapter_exists || !scene_exists {
+        return Err("Timeline-Ereignis gehört nicht zum Projekt.".into());
+    }
+    for source_id in &input.source_reference_ids {
+        let valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2) OR EXISTS(SELECT 1 FROM project_source_references WHERE id=?1 AND project_id=?2)", params![source_id, input.project_id], |row| row.get(0)).map_err(|e| e.to_string())?;
+        if !valid {
+            return Err("Eine Timeline-Quelle gehört nicht zum Projekt.".into());
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn list_timeline_events(
+    state: State<'_, DbState>,
+    project_id: String,
+    status: Option<String>,
+) -> Result<Vec<PersistentTimelineEvent>, String> {
+    let db = lock_db(&state)?;
+    let mut stmt = db.prepare("SELECT id,project_id,book_id,chapter_id,scene_id,passage_unit_id,title,summary,story_time_text,normalized_time,temporal_order,time_certainty,location_entity_id,pov_character_id,participating_entity_ids_json,cause_event_ids_json,consequence_event_ids_json,knowledge_changes_json,state_changes_json,related_plot_thread_ids_json,source_reference_ids_json,confidence,status,author_confirmed,origin,created_at,updated_at FROM manuscript_timeline_events WHERE project_id=?1 AND (?2 IS NULL OR status=?2) ORDER BY temporal_order, created_at").map_err(|e| sql_error("Timeline konnte nicht geladen werden", e))?;
+    let result = stmt
+        .query_map(params![project_id, status], timeline_event_from_row)
+        .map_err(|e| sql_error("Timeline konnte nicht geladen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Timeline konnte nicht geladen werden", e));
+    result
+}
+
+#[tauri::command]
+pub fn save_timeline_event(
+    state: State<'_, DbState>,
+    input: SavePersistentTimelineEventInput,
+) -> Result<PersistentTimelineEvent, String> {
+    let db = lock_db(&state)?;
+    validate_timeline_input(&db, &input)?;
+    let id = input.id.clone().unwrap_or_else(new_id);
+    let stamp = now();
+    let arrays: Vec<String> = [
+        &input.participating_entity_ids,
+        &input.cause_event_ids,
+        &input.consequence_event_ids,
+        &input.knowledge_changes,
+        &input.state_changes,
+        &input.related_plot_thread_ids,
+        &input.source_reference_ids,
+    ]
+    .iter()
+    .map(|value| serde_json::to_string(value).unwrap_or_else(|_| "[]".into()))
+    .collect();
+    db.execute("INSERT INTO manuscript_timeline_events(id,project_id,book_id,chapter_id,scene_id,passage_unit_id,title,summary,story_time_text,normalized_time,temporal_order,time_certainty,location_entity_id,pov_character_id,participating_entity_ids_json,cause_event_ids_json,consequence_event_ids_json,knowledge_changes_json,state_changes_json,related_plot_thread_ids_json,source_reference_ids_json,confidence,status,author_confirmed,origin,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,COALESCE((SELECT created_at FROM manuscript_timeline_events WHERE id=?1),?26),?26) ON CONFLICT(id) DO UPDATE SET title=excluded.title,summary=excluded.summary,story_time_text=excluded.story_time_text,normalized_time=excluded.normalized_time,temporal_order=excluded.temporal_order,time_certainty=excluded.time_certainty,location_entity_id=excluded.location_entity_id,pov_character_id=excluded.pov_character_id,participating_entity_ids_json=excluded.participating_entity_ids_json,cause_event_ids_json=excluded.cause_event_ids_json,consequence_event_ids_json=excluded.consequence_event_ids_json,knowledge_changes_json=excluded.knowledge_changes_json,state_changes_json=excluded.state_changes_json,related_plot_thread_ids_json=excluded.related_plot_thread_ids_json,source_reference_ids_json=excluded.source_reference_ids_json,confidence=excluded.confidence,status=excluded.status,author_confirmed=excluded.author_confirmed,updated_at=excluded.updated_at", params![id,input.project_id,input.book_id,input.chapter_id,input.scene_id,input.passage_unit_id,input.title,input.summary,input.story_time_text,input.normalized_time,input.temporal_order,input.time_certainty,input.location_entity_id,input.pov_character_id,arrays[0],arrays[1],arrays[2],arrays[3],arrays[4],arrays[5],arrays[6],input.confidence,input.status.unwrap_or_else(|| "proposed".into()),input.author_confirmed,input.origin,stamp]).map_err(|e| sql_error("Timeline-Ereignis konnte nicht gespeichert werden", e))?;
+    db.query_row("SELECT id,project_id,book_id,chapter_id,scene_id,passage_unit_id,title,summary,story_time_text,normalized_time,temporal_order,time_certainty,location_entity_id,pov_character_id,participating_entity_ids_json,cause_event_ids_json,consequence_event_ids_json,knowledge_changes_json,state_changes_json,related_plot_thread_ids_json,source_reference_ids_json,confidence,status,author_confirmed,origin,created_at,updated_at FROM manuscript_timeline_events WHERE id=?1", params![id], timeline_event_from_row).map_err(|e| sql_error("Timeline-Ereignis konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn review_timeline_event(
+    state: State<'_, DbState>,
+    id: String,
+    status: String,
+    input: Option<SavePersistentTimelineEventInput>,
+) -> Result<PersistentTimelineEvent, String> {
+    let db = lock_db(&state)?;
+    let current = db.query_row("SELECT id,project_id,book_id,chapter_id,scene_id,passage_unit_id,title,summary,story_time_text,normalized_time,temporal_order,time_certainty,location_entity_id,pov_character_id,participating_entity_ids_json,cause_event_ids_json,consequence_event_ids_json,knowledge_changes_json,state_changes_json,related_plot_thread_ids_json,source_reference_ids_json,confidence,status,author_confirmed,origin,created_at,updated_at FROM manuscript_timeline_events WHERE id=?1", params![id], timeline_event_from_row).map_err(|e| sql_error("Timeline-Ereignis konnte nicht geladen werden", e))?;
+    drop(db);
+    let mut next = input.unwrap_or_else(|| SavePersistentTimelineEventInput {
+        id: Some(current.id),
+        project_id: current.project_id,
+        book_id: current.book_id,
+        chapter_id: current.chapter_id,
+        scene_id: current.scene_id,
+        passage_unit_id: current.passage_unit_id,
+        title: current.title,
+        summary: current.summary,
+        story_time_text: current.story_time_text,
+        normalized_time: current.normalized_time,
+        temporal_order: current.temporal_order,
+        time_certainty: current.time_certainty,
+        location_entity_id: current.location_entity_id,
+        pov_character_id: current.pov_character_id,
+        participating_entity_ids: current.participating_entity_ids,
+        cause_event_ids: current.cause_event_ids,
+        consequence_event_ids: current.consequence_event_ids,
+        knowledge_changes: current.knowledge_changes,
+        state_changes: current.state_changes,
+        related_plot_thread_ids: current.related_plot_thread_ids,
+        source_reference_ids: current.source_reference_ids,
+        confidence: current.confidence,
+        status: Some(status.clone()),
+        author_confirmed: status == "confirmed",
+        origin: current.origin,
+    });
+    next.id = Some(id);
+    next.status = Some(status.clone());
+    next.author_confirmed = status == "confirmed";
+    save_timeline_event(state, next)
+}
+
+fn graph_edge_from_row(row: &rusqlite::Row<'_>) -> SqlResult<StoryGraphEdge> {
+    Ok(StoryGraphEdge {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        source_entity_id: row.get(2)?,
+        target_entity_id: row.get(3)?,
+        relation_type: row.get(4)?,
+        label: row.get(5)?,
+        valid_from_chapter_id: row.get(6)?,
+        valid_from_scene_id: row.get(7)?,
+        valid_from_offset: row.get(8)?,
+        valid_until_chapter_id: row.get(9)?,
+        valid_until_scene_id: row.get(10)?,
+        valid_until_offset: row.get(11)?,
+        source_reference_ids: json_strings(&row.get::<_, String>(12)?),
+        confidence: row.get(13)?,
+        status: row.get(14)?,
+        author_confirmed: row.get(15)?,
+        origin: row.get(16)?,
+        created_at: row.get(17)?,
+        updated_at: row.get(18)?,
+    })
+}
+
+#[tauri::command]
+pub fn list_story_graph_edges(
+    state: State<'_, DbState>,
+    project_id: String,
+    status: Option<String>,
+) -> Result<Vec<StoryGraphEdge>, String> {
+    let db = lock_db(&state)?;
+    let mut stmt = db.prepare("SELECT id,project_id,source_entity_id,target_entity_id,relation_type,label,valid_from_chapter_id,valid_from_scene_id,valid_from_offset,valid_until_chapter_id,valid_until_scene_id,valid_until_offset,source_reference_ids_json,confidence,status,author_confirmed,origin,created_at,updated_at FROM story_graph_edges WHERE project_id=?1 AND (?2 IS NULL OR status=?2) ORDER BY created_at").map_err(|e| sql_error("Story-Graph konnte nicht geladen werden", e))?;
+    let result = stmt
+        .query_map(params![project_id, status], graph_edge_from_row)
+        .map_err(|e| sql_error("Story-Graph konnte nicht geladen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Story-Graph konnte nicht geladen werden", e));
+    result
+}
+
+#[tauri::command]
+pub fn save_story_graph_edge(
+    state: State<'_, DbState>,
+    input: SaveStoryGraphEdgeInput,
+) -> Result<StoryGraphEdge, String> {
+    let db = lock_db(&state)?;
+    if input.source_entity_id == input.target_entity_id
+        || !(0.0..=1.0).contains(&input.confidence)
+        || input.status.as_deref().unwrap_or("proposed") == "confirmed" && !input.author_confirmed
+    {
+        return Err("Ungültige Story-Graph-Kante.".into());
+    }
+    for entity_id in [&input.source_entity_id, &input.target_entity_id] {
+        let valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM story_entities WHERE id=?1 AND project_id=?2) OR EXISTS(SELECT 1 FROM provisional_entities WHERE id=?1 AND project_id=?2)", params![entity_id,input.project_id], |row| row.get(0)).map_err(|e| e.to_string())?;
+        if !valid {
+            return Err("Story-Graph-Knoten gehört nicht zum Projekt.".into());
+        }
+    }
+    let source_json =
+        serde_json::to_string(&input.source_reference_ids).unwrap_or_else(|_| "[]".into());
+    let id = input.id.clone().unwrap_or_else(new_id);
+    let stamp = now();
+    db.execute("INSERT INTO story_graph_edges(id,project_id,source_entity_id,target_entity_id,relation_type,label,valid_from_chapter_id,valid_from_scene_id,valid_from_offset,valid_until_chapter_id,valid_until_scene_id,valid_until_offset,source_reference_ids_json,confidence,status,author_confirmed,origin,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,COALESCE(?15,'proposed'),?16,?17,COALESCE((SELECT created_at FROM story_graph_edges WHERE id=?1),?18),?18) ON CONFLICT(id) DO UPDATE SET label=excluded.label,relation_type=excluded.relation_type,source_reference_ids_json=excluded.source_reference_ids_json,confidence=excluded.confidence,status=excluded.status,author_confirmed=excluded.author_confirmed,updated_at=excluded.updated_at", params![id,input.project_id,input.source_entity_id,input.target_entity_id,input.relation_type,input.label,input.valid_from_chapter_id,input.valid_from_scene_id,input.valid_from_offset,input.valid_until_chapter_id,input.valid_until_scene_id,input.valid_until_offset,source_json,input.confidence,input.status,input.author_confirmed,input.origin,stamp]).map_err(|e| sql_error("Story-Graph-Kante konnte nicht gespeichert werden", e))?;
+    db.query_row("SELECT id,project_id,source_entity_id,target_entity_id,relation_type,label,valid_from_chapter_id,valid_from_scene_id,valid_from_offset,valid_until_chapter_id,valid_until_scene_id,valid_until_offset,source_reference_ids_json,confidence,status,author_confirmed,origin,created_at,updated_at FROM story_graph_edges WHERE id=?1", params![id], graph_edge_from_row).map_err(|e| sql_error("Story-Graph-Kante konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn review_story_graph_edge(
+    state: State<'_, DbState>,
+    id: String,
+    status: String,
+    input: Option<SaveStoryGraphEdgeInput>,
+) -> Result<StoryGraphEdge, String> {
+    let db = lock_db(&state)?;
+    let current = db.query_row("SELECT id,project_id,source_entity_id,target_entity_id,relation_type,label,valid_from_chapter_id,valid_from_scene_id,valid_from_offset,valid_until_chapter_id,valid_until_scene_id,valid_until_offset,source_reference_ids_json,confidence,status,author_confirmed,origin,created_at,updated_at FROM story_graph_edges WHERE id=?1", params![id], graph_edge_from_row).map_err(|e| sql_error("Story-Graph-Kante konnte nicht geladen werden", e))?;
+    drop(db);
+    let mut next = input.unwrap_or_else(|| SaveStoryGraphEdgeInput {
+        id: Some(current.id),
+        project_id: current.project_id,
+        source_entity_id: current.source_entity_id,
+        target_entity_id: current.target_entity_id,
+        relation_type: current.relation_type,
+        label: current.label,
+        valid_from_chapter_id: current.valid_from_chapter_id,
+        valid_from_scene_id: current.valid_from_scene_id,
+        valid_from_offset: current.valid_from_offset,
+        valid_until_chapter_id: current.valid_until_chapter_id,
+        valid_until_scene_id: current.valid_until_scene_id,
+        valid_until_offset: current.valid_until_offset,
+        source_reference_ids: current.source_reference_ids,
+        confidence: current.confidence,
+        status: Some(status.clone()),
+        author_confirmed: status == "confirmed",
+        origin: current.origin,
+    });
+    next.id = Some(id);
+    next.status = Some(status.clone());
+    next.author_confirmed = status == "confirmed";
+    save_story_graph_edge(state, next)
+}
+
+fn mindmap_layout_from_row(row: &rusqlite::Row<'_>) -> SqlResult<MindmapLayout> {
+    Ok(MindmapLayout {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        user_id: row.get(2)?,
+        node_id: row.get(3)?,
+        position_x: row.get(4)?,
+        position_y: row.get(5)?,
+        width: row.get(6)?,
+        height: row.get(7)?,
+        group_id: row.get(8)?,
+        hidden: row.get(9)?,
+        fixed: row.get(10)?,
+        updated_at: row.get(11)?,
+    })
+}
+
+#[tauri::command]
+pub fn list_mindmap_layouts(
+    state: State<'_, DbState>,
+    project_id: String,
+    user_id: String,
+) -> Result<Vec<MindmapLayout>, String> {
+    let db = lock_db(&state)?;
+    let mut stmt = db.prepare("SELECT id,project_id,user_id,node_id,position_x,position_y,width,height,group_id,hidden,fixed,updated_at FROM mindmap_layouts WHERE project_id=?1 AND user_id=?2 ORDER BY node_id").map_err(|e| sql_error("Mindmap-Layout konnte nicht geladen werden", e))?;
+    let result = stmt
+        .query_map(params![project_id, user_id], mindmap_layout_from_row)
+        .map_err(|e| sql_error("Mindmap-Layout konnte nicht geladen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Mindmap-Layout konnte nicht geladen werden", e));
+    result
+}
+
+#[tauri::command]
+pub fn save_mindmap_layout(
+    state: State<'_, DbState>,
+    input: SaveMindmapLayoutInput,
+) -> Result<MindmapLayout, String> {
+    let db = lock_db(&state)?;
+    if !input.position_x.is_finite()
+        || !input.position_y.is_finite()
+        || !input.width.is_finite()
+        || !input.height.is_finite()
+    {
+        return Err("Ungültige Mindmap-Position.".into());
+    }
+    let id = input.id.unwrap_or_else(new_id);
+    let stamp = now();
+    db.execute("INSERT INTO mindmap_layouts(id,project_id,user_id,node_id,position_x,position_y,width,height,group_id,hidden,fixed,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) ON CONFLICT(project_id,user_id,node_id) DO UPDATE SET position_x=excluded.position_x,position_y=excluded.position_y,width=excluded.width,height=excluded.height,group_id=excluded.group_id,hidden=excluded.hidden,fixed=excluded.fixed,updated_at=excluded.updated_at", params![id,input.project_id,input.user_id,input.node_id,input.position_x,input.position_y,input.width,input.height,input.group_id,input.hidden,input.fixed,stamp]).map_err(|e| sql_error("Mindmap-Layout konnte nicht gespeichert werden", e))?;
+    db.query_row("SELECT id,project_id,user_id,node_id,position_x,position_y,width,height,group_id,hidden,fixed,updated_at FROM mindmap_layouts WHERE project_id=?1 AND user_id=?2 AND node_id=?3", params![input.project_id,input.user_id,input.node_id], mindmap_layout_from_row).map_err(|e| sql_error("Mindmap-Layout konnte nicht geladen werden", e))
+}
+
 #[tauri::command]
 pub fn list_continuity_review_runs(
     state: State<'_, DbState>,
@@ -8503,7 +8801,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            27
+            28
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);
