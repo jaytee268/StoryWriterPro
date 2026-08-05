@@ -160,6 +160,25 @@ describe('vollständiger Erststart- und Manuskriptimport-Workflow', () => {
     expect(result.report?.payload.providers).toEqual(expect.arrayContaining(['codex-cli']));
   });
 
+  it('führt den Import, Resume und die neue Version im Browser in einem Workflow aus', async () => {
+    const repository = new BrowserDemoRepository();
+    const project = await repository.createProject({ title: 'Transaktionaler Import', author: '' });
+    const workspace = await repository.loadWorkspace(project.id);
+    const text = 'Kapitel 1\nSeite 1\n😀 Anfang.\nSeite 2\nFortsetzung.';
+    const preview = parseManuscriptText(text, 'import.txt');
+    const input = { projectId: project.id, bookId: workspace.books[0]!.id, originalText: preview.originalText, originalContentHash: contentHash(preview.originalText), fileName: 'import.txt', sourceKind: 'external_text' as const, providerId: 'codex-cli', chapters: preview.chapters.map((chapter) => ({ title: chapter.title, content: chapter.content, pageMarkers: chapter.pageMarkers.map((marker) => ({ pageNumber: marker.page, label: marker.label, sourceOffset: marker.sourceOffset, textOffset: marker.textOffset })), units: splitContinuityUnits(chapter.content, chapter.pageMarkers).map((unit) => ({ pageNumber: unit.page, startOffset: unit.startOffset, endOffset: unit.endOffset, content: unit.text, contentHash: contentHash(unit.text) })) })) };
+    const first = await repository.createManuscriptImport(input);
+    const resumed = await repository.createManuscriptImport(input);
+    expect(resumed.analysisJob.id).toBe(first.analysisJob.id);
+    expect((await repository.loadWorkspace(project.id)).chapters.filter((chapter) => chapter.importVersionId === first.importVersion.id)).toHaveLength(1);
+    const second = await repository.createManuscriptImport({ ...input, newVersion: true });
+    expect(second.importVersion.versionNumber).toBe(2);
+    expect(second.analysisJob.importVersionId).toBe(second.importVersion.id);
+    const visible = await repository.loadWorkspace(project.id);
+    expect(visible.chapters.filter((chapter) => chapter.importVersionId === first.importVersion.id)).toHaveLength(0);
+    expect(visible.chapters.filter((chapter) => chapter.importVersionId === second.importVersion.id)).toHaveLength(1);
+  });
+
   it('Lasttest hält 54 Seiten, 3 Kapitel, Unicode und 12 strukturierte Prüfeinheiten ohne Zeichenverlust', async () => {
     let page = 1;
     const chapterTexts = Array.from({ length: 3 }, (_, chapterIndex) => `Kapitel ${chapterIndex + 1}\n${Array.from({ length: 18 }, (_, sceneIndex) => { const text = `Seite ${page}\n😀 Figur ${chapterIndex + 1}-${sceneIndex + 1} e\u0301 verfolgt die Spur.`; page += 1; return text; }).join('\n\n')}`);

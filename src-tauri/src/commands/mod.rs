@@ -26,17 +26,18 @@ use crate::{
         ContinuityReviewRun, ContinuityReviewSettings, ContinuityStateLedgerEntry,
         CreateBibleUpdateRunInput, CreateChapterGenerationJobInput, CreateChapterInput,
         CreateCharacterMemoryUpdateRunInput, CreateLoreCrafterRunInput, CreateLoreEntryInput,
-        CreateManuscriptAnalysisJobInput, CreateManuscriptStructureRunInput, CreateProjectInput,
-        CreateProjectSourceDocumentInput, CreateProjectSourceReferenceInput,
-        CreateProjectStyleAnalysisRunInput, CreateSceneInput, CreateSceneVersionInput,
-        CreateSourceReferenceInput, CreateStoryEntityInput, CreateStoryEntityRelationInput,
-        CreateStyleReferenceInput, DatabaseInfo, DialogueMemoryParticipant, EditorPreferences,
-        LoreCrafterClarification, LoreCrafterRun, LoreCrafterSourceReference, LoreEntry,
-        LoreMetadata, LoreSheetDraft, LoreSheetItem, ManuscriptAnalysisArtifact,
-        ManuscriptAnalysisCompletionReport, ManuscriptAnalysisDraftLedgerEntry,
-        ManuscriptAnalysisJob, ManuscriptAnalysisPageMarker, ManuscriptAnalysisPhaseResult,
-        ManuscriptAnalysisReviewAudit, ManuscriptAnalysisUnit, ManuscriptImportInput,
-        ManuscriptImportResult, ManuscriptPosition, ManuscriptStructureProposal,
+        CreateManuscriptAnalysisJobInput, CreateManuscriptImportInput,
+        CreateManuscriptStructureRunInput, CreateProjectInput, CreateProjectSourceDocumentInput,
+        CreateProjectSourceReferenceInput, CreateProjectStyleAnalysisRunInput, CreateSceneInput,
+        CreateSceneVersionInput, CreateSourceReferenceInput, CreateStoryEntityInput,
+        CreateStoryEntityRelationInput, CreateStyleReferenceInput, DatabaseInfo,
+        DialogueMemoryParticipant, EditorPreferences, LoreCrafterClarification, LoreCrafterRun,
+        LoreCrafterSourceReference, LoreEntry, LoreMetadata, LoreSheetDraft, LoreSheetItem,
+        ManuscriptAnalysisArtifact, ManuscriptAnalysisCompletionReport,
+        ManuscriptAnalysisDraftLedgerEntry, ManuscriptAnalysisJob, ManuscriptAnalysisPageMarker,
+        ManuscriptAnalysisPhaseResult, ManuscriptAnalysisReviewAudit, ManuscriptAnalysisUnit,
+        ManuscriptImportInput, ManuscriptImportResult, ManuscriptImportVersion,
+        ManuscriptImportWorkflowResult, ManuscriptPosition, ManuscriptStructureProposal,
         ManuscriptStructureRun, MaterializeProvisionalEntityInput, MindmapLayout, NarrativeSummary,
         PersistentTimelineEvent, PlotThreadLifecycle, PlotThreadLifecycleProposal, Project,
         ProjectOnboardingState, ProjectRule, ProjectRuleProposal, ProjectSourceDocument,
@@ -448,7 +449,7 @@ fn load_chapters(db: &Connection, books: &[Book]) -> Result<Vec<Chapter>, String
     let mut chapters = Vec::new();
     for book in books {
         let mut statement = db
-            .prepare("SELECT id FROM chapters WHERE book_id=?1 ORDER BY order_index, created_at")
+            .prepare("SELECT id FROM chapters WHERE book_id=?1 AND COALESCE(import_status,'active')='active' ORDER BY order_index, created_at")
             .map_err(|error| sql_error("Kapitel konnten nicht geladen werden", error))?;
         let ids = statement
             .query_map(params![book.id], |row| row.get::<_, String>(0))
@@ -1414,6 +1415,239 @@ pub fn import_manuscript(
 ) -> Result<ManuscriptImportResult, String> {
     let db = lock_db(&state)?;
     import_manuscript_in_db(&db, input)
+}
+
+fn manuscript_import_version_from_row(
+    row: &rusqlite::Row<'_>,
+) -> SqlResult<ManuscriptImportVersion> {
+    Ok(ManuscriptImportVersion {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        book_id: row.get(2)?,
+        source_document_id: row.get(3)?,
+        original_content_hash: row.get(4)?,
+        version_number: row.get(5)?,
+        status: row.get(6)?,
+        analysis_job_id: row.get(7)?,
+        created_at: row.get(8)?,
+        activated_at: row.get(9)?,
+    })
+}
+
+#[tauri::command]
+pub fn create_manuscript_import(
+    state: State<'_, DbState>,
+    input: CreateManuscriptImportInput,
+) -> Result<ManuscriptImportWorkflowResult, String> {
+    let db = lock_db(&state)?;
+    create_manuscript_import_in_db(&db, input)
+}
+
+pub(crate) fn create_manuscript_import_in_db(
+    db: &Connection,
+    input: CreateManuscriptImportInput,
+) -> Result<ManuscriptImportWorkflowResult, String> {
+    required(&input.project_id, "Das Projekt")?;
+    required(&input.book_id, "Das Buch")?;
+    required(&input.original_content_hash, "Der Originalhash")?;
+    required(&input.provider_id, "Der Provider")?;
+    if input.chapters.is_empty() || input.chapters.len() > 1000 {
+        return Err("Der Import muss zwischen 1 und 1.000 Kapitel enthalten.".into());
+    }
+    if !matches!(input.source_kind.as_str(), "external_text") {
+        return Err("Ungültiger Manuskriptquellentyp.".into());
+    }
+    validate_book_project(db, &input.project_id, &input.book_id)?;
+    if let Some(existing) = db
+        .query_row(
+            "SELECT id,project_id,book_id,source_document_id,original_content_hash,version_number,status,analysis_job_id,created_at,activated_at FROM manuscript_import_versions WHERE project_id=?1 AND book_id=?2 AND original_content_hash=?3 ORDER BY version_number DESC LIMIT 1",
+            params![input.project_id, input.book_id, input.original_content_hash],
+            manuscript_import_version_from_row,
+        )
+        .optional()
+        .map_err(|error| sql_error("Bestehende Importversion konnte nicht geprüft werden", error))?
+    {
+        if !input.new_version {
+            let job_id = existing.analysis_job_id.clone().ok_or_else(|| "Der bestehende Import besitzt keinen Analysejob.".to_string())?;
+            let job = db.query_row("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message, import_version_id FROM manuscript_analysis_jobs WHERE id=?1", params![job_id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Bestehender Analysejob konnte nicht geladen werden", error))?;
+            if let Some(onboarding) = &input.onboarding {
+                if onboarding.project_id == input.project_id {
+                    db.execute("INSERT INTO project_onboarding_state(project_id,current_step,completed_steps_json,skipped_steps_json,language,genre,lore_crafter_run_id,import_id,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(project_id) DO UPDATE SET current_step=excluded.current_step,completed_steps_json=excluded.completed_steps_json,skipped_steps_json=excluded.skipped_steps_json,language=excluded.language,genre=excluded.genre,lore_crafter_run_id=excluded.lore_crafter_run_id,import_id=excluded.import_id,updated_at=excluded.updated_at", params![input.project_id, onboarding.current_step, serde_json::to_string(&onboarding.completed_steps).unwrap_or_else(|_| "[]".into()), serde_json::to_string(&onboarding.skipped_steps).unwrap_or_else(|_| "[]".into()), onboarding.language, onboarding.genre, onboarding.lore_crafter_run_id, job_id, now()]).map_err(|error| sql_error("Onboardingstatus konnte beim Fortsetzen nicht gespeichert werden", error))?;
+                }
+            }
+            let source_document = db.query_row("SELECT id,project_id,source_kind,title,content,content_hash,origin_id,created_at,updated_at FROM project_source_documents WHERE id=?1 AND project_id=?2", params![existing.source_document_id, input.project_id], project_source_document_from_row).map_err(|error| sql_error("Bestehendes Quelldokument konnte nicht geladen werden", error))?;
+            let mut chapters = Vec::new();
+            let mut scenes = Vec::new();
+            let mut versions = Vec::new();
+            let mut statement = db.prepare("SELECT id FROM chapters WHERE book_id=?1 AND import_version_id=?2 ORDER BY order_index").map_err(|error| sql_error("Importkapitel konnten nicht geladen werden", error))?;
+            let ids = statement.query_map(params![input.book_id, existing.id], |row| row.get::<_, String>(0)).map_err(|error| sql_error("Importkapitel konnten nicht gelesen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Importkapitel konnten nicht gelesen werden", error))?;
+            for id in ids { let chapter = load_chapter(db, &id)?; scenes.extend(chapter.scenes.clone()); chapters.push(chapter); }
+            for scene in &scenes { versions.extend(load_scene_versions(db, &scene.id)?); }
+            return Ok(ManuscriptImportWorkflowResult { import_version: existing, source_document, import: ManuscriptImportResult { chapters, scenes, versions }, analysis_job: job });
+        }
+    }
+    for chapter in &input.chapters {
+        required(&chapter.title, "Der Kapitelname")?;
+        let character_count = chapter.content.chars().count();
+        if character_count > 20_000_000 {
+            return Err("Der Text eines Kapitels ist zu groß für den sicheren Import.".into());
+        }
+        for unit in &chapter.units {
+            let chars: Vec<char> = chapter.content.chars().collect();
+            if unit.start_offset < 0
+                || unit.end_offset < unit.start_offset
+                || unit.end_offset as usize > chars.len()
+                || unit.content.is_empty()
+                || chars[unit.start_offset as usize..unit.end_offset as usize]
+                    .iter()
+                    .collect::<String>()
+                    != unit.content
+            {
+                return Err(
+                    "Eine Prüfeinheit stimmt nicht mit dem vollständigen Kapiteltext überein."
+                        .into(),
+                );
+            }
+        }
+        for marker in &chapter.page_markers {
+            if marker.text_offset < 0 || marker.text_offset as usize > character_count {
+                return Err("Ein Seitenmarker besitzt eine ungültige Unicode-Position.".into());
+            }
+        }
+    }
+    let transaction = db
+        .unchecked_transaction()
+        .map_err(|error| sql_error("Importtransaktion konnte nicht gestartet werden", error))?;
+    let timestamp = now();
+    let source_document_id: String = transaction.query_row("SELECT id FROM project_source_documents WHERE project_id=?1 AND source_kind='external_text' AND content_hash=?2 ORDER BY updated_at DESC LIMIT 1", params![input.project_id, input.original_content_hash], |row| row.get(0)).optional().map_err(|error| sql_error("Quelldokument konnte nicht geprüft werden", error))?.unwrap_or_else(new_id);
+    transaction.execute("INSERT INTO project_source_documents(id,project_id,source_kind,title,content,content_hash,origin_id,created_at,updated_at) VALUES(?1,?2,'external_text',?3,?4,?5,NULL,?6,?6) ON CONFLICT(id) DO UPDATE SET title=excluded.title,content=excluded.content,updated_at=excluded.updated_at", params![source_document_id, input.project_id, input.file_name, input.original_text, input.original_content_hash, timestamp]).map_err(|error| sql_error("Quelldokument konnte nicht gespeichert werden", error))?;
+    let next_version: i64 = transaction.query_row("SELECT COALESCE(MAX(version_number),0)+1 FROM manuscript_import_versions WHERE project_id=?1 AND book_id=?2 AND original_content_hash=?3", params![input.project_id, input.book_id, input.original_content_hash], |row| row.get(0)).map_err(|error| sql_error("Importversionsnummer konnte nicht ermittelt werden", error))?;
+    transaction.execute("UPDATE manuscript_import_versions SET status='archived' WHERE project_id=?1 AND book_id=?2 AND status='active'", params![input.project_id, input.book_id]).map_err(|error| sql_error("Vorherige Importversion konnte nicht archiviert werden", error))?;
+    transaction.execute("UPDATE chapters SET import_status='archived' WHERE book_id=?1 AND import_version_id IS NOT NULL", params![input.book_id]).map_err(|error| sql_error("Vorherige Importkapitel konnten nicht archiviert werden", error))?;
+    let import_version_id = new_id();
+    transaction.execute("INSERT INTO manuscript_import_versions(id,project_id,book_id,source_document_id,original_content_hash,version_number,status,created_at,activated_at) VALUES(?1,?2,?3,?4,?5,?6,'active',?7,?7)", params![import_version_id, input.project_id, input.book_id, source_document_id, input.original_content_hash, next_version, timestamp]).map_err(|error| sql_error("Importversion konnte nicht gespeichert werden", error))?;
+    let start_order: i64 = transaction.query_row("SELECT COALESCE(MAX(order_index),0) FROM chapters WHERE book_id=?1 AND import_version_id IS NULL", params![input.book_id], |row| row.get(0)).map_err(|error| sql_error("Kapitelreihenfolge konnte nicht ermittelt werden", error))?;
+    let mut imported_chapters = Vec::new();
+    let mut scenes = Vec::new();
+    let mut version_ids = Vec::new();
+    let mut unit_inputs = Vec::new();
+    let mut all_markers = Vec::new();
+    for (chapter_index, imported) in input.chapters.iter().enumerate() {
+        let chapter_id = new_id();
+        let scene_id = new_id();
+        transaction.execute("INSERT INTO chapters(id,book_id,title,order_index,created_at,updated_at,import_version_id,import_status) VALUES(?1,?2,?3,?4,?5,?5,?6,'active')", params![chapter_id, input.book_id, imported.title.trim(), start_order + chapter_index as i64 + 1, timestamp, import_version_id]).map_err(|error| sql_error("Importkapitel konnte nicht gespeichert werden", error))?;
+        transaction.execute("INSERT INTO scenes(id,chapter_id,title,order_index,content,pov,location,story_time,status,goal,notes,is_implicit,created_at,updated_at) VALUES(?1,?2,'Kapiteltext',1,?3,'','','','draft','','',1,?4,?4)", params![scene_id, chapter_id, imported.content, timestamp]).map_err(|error| sql_error("Kapiteltext konnte nicht gespeichert werden", error))?;
+        let scene = Scene {
+            id: scene_id.clone(),
+            chapter_id: chapter_id.clone(),
+            title: "Kapiteltext".into(),
+            order_index: 1,
+            content: imported.content.clone(),
+            pov: String::new(),
+            location: String::new(),
+            story_time: String::new(),
+            status: "draft".into(),
+            goal: String::new(),
+            notes: String::new(),
+            is_implicit: true,
+            created_at: timestamp.clone(),
+            updated_at: timestamp.clone(),
+        };
+        let version_id =
+            insert_scene_version_in_transaction(&transaction, &scene, &timestamp, "before_import")?
+                .0;
+        version_ids.push((scene_id, version_id));
+        scenes.push(scene.clone());
+        imported_chapters.push(Chapter {
+            id: chapter_id,
+            book_id: input.book_id.clone(),
+            title: imported.title.trim().into(),
+            order_index: start_order + chapter_index as i64 + 1,
+            scenes: vec![scene],
+            created_at: timestamp.clone(),
+            updated_at: timestamp.clone(),
+        });
+        for marker in &imported.page_markers {
+            all_markers.push(ManuscriptAnalysisPageMarker {
+                chapter_id: imported_chapters.last().unwrap().id.clone(),
+                page_number: marker.page_number,
+                label: marker.label.clone(),
+                source_offset: marker.source_offset,
+                text_offset: marker.text_offset,
+            });
+        }
+        for unit in &imported.units {
+            unit_inputs.push((
+                imported_chapters.last().unwrap().id.clone(),
+                scenes.last().unwrap().id.clone(),
+                unit,
+            ));
+        }
+    }
+    let job_id = new_id();
+    let page_markers_json = serde_json::to_string(&all_markers)
+        .map_err(|error| format!("Seitenmarker konnten nicht serialisiert werden: {error}"))?;
+    let import_reference = if next_version > 1 {
+        format!("{}:version-{}", input.original_content_hash, next_version)
+    } else {
+        input.original_content_hash.clone()
+    };
+    transaction.execute("INSERT INTO manuscript_analysis_jobs(id,project_id,book_id,import_reference,status,current_phase,phase_progress_json,phase_errors_json,total_units,provider_id,page_markers_json,created_at,updated_at,import_version_id) VALUES(?1,?2,?3,?4,'pending','structure','{}','{}',?5,?6,?7,?8,?8,?9)", params![job_id, input.project_id, input.book_id, import_reference, unit_inputs.len() as i64, input.provider_id, page_markers_json, timestamp, import_version_id]).map_err(|error| sql_error("Analysejob konnte nicht gespeichert werden", error))?;
+    for (order_index, (chapter_id, scene_id, unit)) in unit_inputs.iter().enumerate() {
+        transaction.execute("INSERT INTO manuscript_analysis_units(id,job_id,project_id,chapter_id,scene_id,order_index,page_number,start_offset,end_offset,content,content_hash,status,retry_count,requested_provider,prompt_version,input_hash,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'pending',0,?12,'manuscript-analysis-v1',?11,?13,?13)", params![new_id(), job_id, input.project_id, chapter_id, scene_id, order_index as i64, unit.page_number, unit.start_offset, unit.end_offset, unit.content, unit.content_hash, input.provider_id, timestamp]).map_err(|error| sql_error("Manuskriptprüfeinheit konnte nicht gespeichert werden", error))?;
+    }
+    transaction
+        .execute(
+            "UPDATE manuscript_import_versions SET analysis_job_id=?2 WHERE id=?1",
+            params![import_version_id, job_id],
+        )
+        .map_err(|error| {
+            sql_error(
+                "Importversion konnte nicht mit Analysejob verbunden werden",
+                error,
+            )
+        })?;
+    if let Some(onboarding) = &input.onboarding {
+        if onboarding.project_id == input.project_id {
+            let completed = serde_json::to_string(
+                &onboarding
+                    .completed_steps
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once("manuscript".into()))
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap_or_else(|_| "[\"manuscript\"]".into());
+            transaction.execute("INSERT INTO project_onboarding_state(project_id,current_step,completed_steps_json,skipped_steps_json,language,genre,lore_crafter_run_id,import_id,updated_at) VALUES(?1,'summary',?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(project_id) DO UPDATE SET current_step='summary',completed_steps_json=excluded.completed_steps_json,skipped_steps_json=excluded.skipped_steps_json,language=excluded.language,genre=excluded.genre,lore_crafter_run_id=excluded.lore_crafter_run_id,import_id=excluded.import_id,updated_at=excluded.updated_at", params![input.project_id, completed, serde_json::to_string(&onboarding.skipped_steps).unwrap_or_else(|_| "[]".into()), onboarding.language, onboarding.genre, onboarding.lore_crafter_run_id, job_id, timestamp]).map_err(|error| sql_error("Onboardingstatus konnte nicht gespeichert werden", error))?;
+        }
+    }
+    transaction
+        .commit()
+        .map_err(|error| sql_error("Importtransaktion konnte nicht abgeschlossen werden", error))?;
+    let source_document = db.query_row("SELECT id,project_id,source_kind,title,content,content_hash,origin_id,created_at,updated_at FROM project_source_documents WHERE id=?1", params![source_document_id], project_source_document_from_row).map_err(|error| sql_error("Quelldokument konnte nicht geladen werden", error))?;
+    let mut versions = Vec::new();
+    for (scene_id, version_id) in version_ids {
+        if let Some(version) = load_scene_versions(db, &scene_id)?
+            .into_iter()
+            .find(|item| item.id == version_id)
+        {
+            versions.push(version);
+        }
+    }
+    let job = db.query_row("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message, import_version_id FROM manuscript_analysis_jobs WHERE id=?1", params![job_id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Analysejob konnte nicht geladen werden", error))?;
+    let import_version = db.query_row("SELECT id,project_id,book_id,source_document_id,original_content_hash,version_number,status,analysis_job_id,created_at,activated_at FROM manuscript_import_versions WHERE id=?1", params![import_version_id], manuscript_import_version_from_row).map_err(|error| sql_error("Importversion konnte nicht geladen werden", error))?;
+    Ok(ManuscriptImportWorkflowResult {
+        import_version,
+        source_document,
+        import: ManuscriptImportResult {
+            chapters: imported_chapters,
+            scenes,
+            versions,
+        },
+        analysis_job: job,
+    })
 }
 
 pub(crate) fn create_chapter_in_db(
@@ -4162,6 +4396,7 @@ fn manuscript_analysis_job_from_row(row: &rusqlite::Row<'_>) -> SqlResult<Manusc
         updated_at: row.get(16)?,
         completed_at: row.get(17)?,
         error_message: row.get(18)?,
+        import_version_id: row.get(19)?,
     })
 }
 
@@ -4259,7 +4494,7 @@ pub fn create_manuscript_analysis_job(
     let db = lock_db(&state)?;
     validate_book_project(&db, &input.project_id, &input.book_id)?;
     if !input.new_version {
-        if let Some(existing) = db.query_row("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE project_id=?1 AND import_reference=?2", params![input.project_id, input.import_reference], manuscript_analysis_job_from_row).optional().map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geprüft werden", error))? {
+        if let Some(existing) = db.query_row("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message, import_version_id FROM manuscript_analysis_jobs WHERE project_id=?1 AND import_reference=?2", params![input.project_id, input.import_reference], manuscript_analysis_job_from_row).optional().map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geprüft werden", error))? {
         return Ok(existing);
     }
     }
@@ -4312,7 +4547,7 @@ pub fn create_manuscript_analysis_job(
             error,
         )
     })?;
-    db.query_row("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE id=?1", params![job_id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geladen werden", error))
+    db.query_row("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message, import_version_id FROM manuscript_analysis_jobs WHERE id=?1", params![job_id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geladen werden", error))
 }
 
 #[tauri::command]
@@ -4321,7 +4556,7 @@ pub fn list_manuscript_analysis_jobs(
     project_id: String,
 ) -> Result<Vec<ManuscriptAnalysisJob>, String> {
     let db = lock_db(&state)?;
-    let result = db.prepare("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE project_id=?1 ORDER BY updated_at DESC").map_err(|error| sql_error("Manuskriptanalysejobs konnten nicht geladen werden", error))?.query_map(params![project_id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejobs konnten nicht gelesen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Manuskriptanalysejobs konnten nicht gelesen werden", error));
+    let result = db.prepare("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message, import_version_id FROM manuscript_analysis_jobs WHERE project_id=?1 ORDER BY updated_at DESC").map_err(|error| sql_error("Manuskriptanalysejobs konnten nicht geladen werden", error))?.query_map(params![project_id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejobs konnten nicht gelesen werden", error))?.collect::<SqlResult<Vec<_>>>().map_err(|error| sql_error("Manuskriptanalysejobs konnten nicht gelesen werden", error));
     result
 }
 
@@ -4331,14 +4566,14 @@ pub fn get_manuscript_analysis_job(
     id: String,
 ) -> Result<ManuscriptAnalysisJob, String> {
     let db = lock_db(&state)?;
-    db.query_row("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE id=?1", params![id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geladen werden", error))
+    db.query_row("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message, import_version_id FROM manuscript_analysis_jobs WHERE id=?1", params![id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geladen werden", error))
 }
 
 fn load_manuscript_analysis_job(
     db: &Connection,
     id: &str,
 ) -> Result<ManuscriptAnalysisJob, String> {
-    db.query_row("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE id=?1", params![id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geladen werden", error))
+    db.query_row("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message, import_version_id FROM manuscript_analysis_jobs WHERE id=?1", params![id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geladen werden", error))
 }
 
 fn load_manuscript_analysis_job_for_project(
@@ -4386,7 +4621,7 @@ pub fn update_manuscript_analysis_job(
         .as_ref()
         .map(serde_json::Value::to_string);
     db.execute("UPDATE manuscript_analysis_jobs SET status=?2, current_phase=COALESCE(?3,current_phase), phase_progress_json=COALESCE(?4,phase_progress_json), phase_errors_json=COALESCE(?5,phase_errors_json), current_unit_id=?6, last_successful_unit_id=COALESCE(?7,last_successful_unit_id), error_message=?8, completed_at=?9, completed_units=(SELECT COUNT(*) FROM manuscript_analysis_units WHERE job_id=?1 AND status IN ('completed','skipped')), failed_units=(SELECT COUNT(*) FROM manuscript_analysis_units WHERE job_id=?1 AND status='failed'), updated_at=?10 WHERE id=?1", params![input.id, input.status, input.current_phase, phase_progress, phase_errors, input.current_unit_id, input.last_successful_unit_id, input.error_message, completed_at, now()]).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht aktualisiert werden", error))?;
-    db.query_row("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message FROM manuscript_analysis_jobs WHERE id=?1", params![input.id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geladen werden", error))
+    db.query_row("SELECT id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, completed_units, failed_units, current_unit_id, last_successful_unit_id, provider_id, page_markers_json, created_at, updated_at, completed_at, error_message, import_version_id FROM manuscript_analysis_jobs WHERE id=?1", params![input.id], manuscript_analysis_job_from_row).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht geladen werden", error))
 }
 
 #[tauri::command]
@@ -9188,7 +9423,10 @@ mod tests {
     use crate::database::{
         database_path_for_test, has_column, initialize_connection, seed_if_empty,
     };
-    use crate::models::{DraftContinuityState, ManuscriptImportChapterInput};
+    use crate::models::{
+        CreateManuscriptImportChapterInput, CreateManuscriptImportInput, DraftContinuityState,
+        ManuscriptImportChapterInput, ManuscriptImportPageMarkerInput, ManuscriptImportUnitInput,
+    };
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},
@@ -9335,6 +9573,88 @@ mod tests {
             )
             .unwrap(),
             2
+        );
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn transactional_manuscript_import_persists_version_job_units_and_resume() {
+        let (path, db) = connection("transactional-manuscript-import");
+        let chapter = CreateManuscriptImportChapterInput {
+            title: "Importkapitel".into(),
+            content: "😀 Text vor Seite 2.".into(),
+            page_markers: vec![ManuscriptImportPageMarkerInput {
+                page_number: 2,
+                label: "Seite 2".into(),
+                source_offset: 3,
+                text_offset: 4,
+            }],
+            units: vec![ManuscriptImportUnitInput {
+                page_number: Some(2),
+                start_offset: 0,
+                end_offset: "😀 Text vor Seite 2.".chars().count() as i64,
+                content: "😀 Text vor Seite 2.".into(),
+                content_hash: "unit-hash".into(),
+            }],
+        };
+        let input = CreateManuscriptImportInput {
+            project_id: "project-zugestellt".into(),
+            book_id: "book-1".into(),
+            original_text: "Kapitel 1\n😀 Text vor Seite 2.".into(),
+            original_content_hash: "import-hash".into(),
+            file_name: "import.txt".into(),
+            source_kind: "external_text".into(),
+            chapters: vec![chapter.clone()],
+            page_markers: Vec::new(),
+            provider_id: "fake-provider".into(),
+            new_version: false,
+            onboarding: None,
+        };
+        let first = create_manuscript_import_in_db(&db, input.clone()).unwrap();
+        assert_eq!(first.import_version.version_number, 1);
+        assert_eq!(
+            first.analysis_job.import_version_id.as_deref(),
+            Some(first.import_version.id.as_str())
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT COUNT(*) FROM manuscript_analysis_units WHERE job_id=?1",
+                params![first.analysis_job.id],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        let resumed = create_manuscript_import_in_db(&db, input.clone()).unwrap();
+        assert_eq!(resumed.analysis_job.id, first.analysis_job.id);
+        assert_eq!(
+            db.query_row(
+                "SELECT COUNT(*) FROM chapters WHERE import_version_id=?1",
+                params![first.import_version.id],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        let second = create_manuscript_import_in_db(
+            &db,
+            CreateManuscriptImportInput {
+                new_version: true,
+                ..input
+            },
+        )
+        .unwrap();
+        assert_eq!(second.import_version.version_number, 2);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM chapters WHERE import_version_id=?1 AND import_status='archived'", params![first.import_version.id], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(
+            db.query_row(
+                "SELECT status FROM manuscript_import_versions WHERE id=?1",
+                params![first.import_version.id],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            "archived"
         );
         drop(db);
         let _ = fs::remove_file(path);
@@ -9842,7 +10162,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            33
+            34
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);

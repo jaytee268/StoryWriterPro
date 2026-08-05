@@ -30,6 +30,7 @@ pub fn run() {
             commands::save_project_onboarding_state,
             commands::save_book_genres,
             commands::import_manuscript,
+            commands::create_manuscript_import,
             commands::create_chapter,
             commands::update_chapter,
             commands::create_scene,

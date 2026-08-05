@@ -33,10 +33,87 @@ pub struct ManuscriptImportChapterInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ManuscriptImportPageMarkerInput {
+    pub page_number: i64,
+    pub label: String,
+    pub source_offset: i64,
+    pub text_offset: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManuscriptImportUnitInput {
+    pub page_number: Option<i64>,
+    pub start_offset: i64,
+    pub end_offset: i64,
+    pub content: String,
+    pub content_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ManuscriptImportInput {
     pub project_id: String,
     pub book_id: String,
     pub chapters: Vec<ManuscriptImportChapterInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateManuscriptImportInput {
+    pub project_id: String,
+    pub book_id: String,
+    pub original_text: String,
+    pub original_content_hash: String,
+    pub file_name: String,
+    #[serde(default = "default_import_source_kind")]
+    pub source_kind: String,
+    pub chapters: Vec<CreateManuscriptImportChapterInput>,
+    #[serde(default)]
+    pub page_markers: Vec<ManuscriptAnalysisPageMarker>,
+    pub provider_id: String,
+    #[serde(default)]
+    pub new_version: bool,
+    pub onboarding: Option<SaveProjectOnboardingStateInput>,
+}
+
+fn default_import_source_kind() -> String {
+    "external_text".into()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateManuscriptImportChapterInput {
+    pub title: String,
+    pub content: String,
+    #[serde(default)]
+    pub page_markers: Vec<ManuscriptImportPageMarkerInput>,
+    #[serde(default)]
+    pub units: Vec<ManuscriptImportUnitInput>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManuscriptImportVersion {
+    pub id: String,
+    pub project_id: String,
+    pub book_id: String,
+    pub source_document_id: String,
+    pub original_content_hash: String,
+    pub version_number: i64,
+    pub status: String,
+    pub analysis_job_id: Option<String>,
+    pub created_at: String,
+    pub activated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManuscriptImportWorkflowResult {
+    pub import_version: ManuscriptImportVersion,
+    pub source_document: ProjectSourceDocument,
+    pub import: ManuscriptImportResult,
+    pub analysis_job: ManuscriptAnalysisJob,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -491,6 +568,7 @@ pub struct ManuscriptAnalysisJob {
     pub updated_at: String,
     pub completed_at: Option<String>,
     pub error_message: Option<String>,
+    pub import_version_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

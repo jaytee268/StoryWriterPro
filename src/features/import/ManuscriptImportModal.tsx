@@ -1,19 +1,20 @@
 import { useRef, useState } from 'react';
 import { Check, Merge, Scissors, Upload, X } from 'lucide-react';
-import type { ManuscriptAnalysisPageMarker, ManuscriptImportResult } from '../../types/domain';
+import type { ManuscriptImportWorkflowResult } from '../../types/domain';
 import type { StoryRepository } from '../../services/storyRepository';
-import { mergeImportChapters, parseManuscriptFile, parseManuscriptText, recalculatePageMarkers, splitContinuityUnits, splitImportChapter, type ManuscriptImportChapterPreview, type ManuscriptImportPreview, type ContinuityPassageUnit } from '../../services/manuscriptImport';
+import { contentHash } from '../../utils/aiText';
+import { mergeImportChapters, parseManuscriptFile, parseManuscriptText, recalculatePageMarkers, splitContinuityUnits, splitImportChapter, type ManuscriptImportChapterPreview, type ManuscriptImportPreview } from '../../services/manuscriptImport';
 
 interface Props {
   projectId: string;
   bookId: string;
   repository: StoryRepository;
+  providerId: string;
   onClose: () => void;
-  onImported: (result: ManuscriptImportResult, pageMarkersFound?: number, unitsByChapter?: ContinuityPassageUnit[][], pageMarkersByChapter?: ManuscriptAnalysisPageMarker[][], sourceDocument?: { id: string; contentHash: string }, newVersion?: boolean) => Promise<void>;
-  onResumeExisting?: (contentHash: string) => Promise<void>;
+  onImported: (result: ManuscriptImportWorkflowResult) => Promise<void>;
 }
 
-export function ManuscriptImportModal({ projectId, bookId, repository, onClose, onImported, onResumeExisting }: Props) {
+export function ManuscriptImportModal({ projectId, bookId, repository, providerId, onClose, onImported }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<ManuscriptImportPreview>();
   const [sourceFile, setSourceFile] = useState<File>();
@@ -77,17 +78,17 @@ export function ManuscriptImportModal({ projectId, bookId, repository, onClose, 
     setPreview({ ...preview, chapters, issues: [], duplicateChapterNumbers: [], missingChapterNumbers: [] });
   };
 
-  const importNow = async () => {
+  const importNow = async (resumeExisting = false) => {
     if (!preview || preview.chapters.length === 0) return;
-    if (!allowDuplicateVersion) {
+    if (!allowDuplicateVersion && !resumeExisting) {
       const existing = (await repository.listProjectSourceDocuments(projectId)).find((document) => document.sourceKind === 'external_text' && document.contentHash === preview.originalContentHash);
       if (existing) { setDuplicateDocument({ title: existing.title }); return; }
     }
     setStatus('importing'); setError('');
     try {
-      const result = await repository.importManuscript({ projectId, bookId, chapters: preview.chapters.map(({ title, content }) => ({ title, content })) });
-      const source = await repository.createProjectSourceDocument({ projectId, sourceKind: 'external_text', title: preview.fileName, content: preview.originalText, contentHash: preview.originalContentHash });
-      await onImported(result, preview.pageMarkersFound, preview.chapters.map((chapter) => splitContinuityUnits(chapter.content, chapter.pageMarkers)), preview.chapters.map((chapter, index) => chapter.pageMarkers.map((marker) => ({ chapterId: result.chapters[index]?.id ?? chapter.id, pageNumber: marker.page, label: marker.label, sourceOffset: marker.sourceOffset, textOffset: marker.textOffset }))), { id: source.id, contentHash: source.contentHash }, allowDuplicateVersion);
+      const onboarding = await repository.getProjectOnboardingState(projectId);
+      const result = await repository.createManuscriptImport({ projectId, bookId, originalText: preview.originalText, originalContentHash: preview.originalContentHash, fileName: preview.fileName, sourceKind: 'external_text', providerId, newVersion: allowDuplicateVersion, onboarding, chapters: preview.chapters.map((chapter) => ({ title: chapter.title, content: chapter.content, pageMarkers: chapter.pageMarkers.map((marker) => ({ pageNumber: marker.page, label: marker.label, sourceOffset: marker.sourceOffset, textOffset: marker.textOffset })), units: splitContinuityUnits(chapter.content, chapter.pageMarkers).map((unit) => ({ pageNumber: unit.page, startOffset: unit.startOffset, endOffset: unit.endOffset, content: unit.text, contentHash: contentHash(unit.text) })) })) });
+      await onImported(result);
     } catch (reason) {
       setStatus('error'); setError(reason instanceof Error ? reason.message : 'Der Import konnte nicht gespeichert werden.');
     }
@@ -105,7 +106,7 @@ export function ManuscriptImportModal({ projectId, bookId, repository, onClose, 
         <div className="import-options"><label className="field-label">Datei<strong>{preview.fileName}</strong></label><label className="checkbox-row"><input type="checkbox" checked={removePageMarkers} onChange={(event) => void reread(event.target.checked)} /> Seitenmarker entfernen</label></div>
         <div className="import-preview-head"><strong>{preview.chapters.length} Kapitel erkannt</strong><span>{preview.chapters.reduce((sum, chapter) => sum + chapter.wordCount, 0).toLocaleString('de-DE')} Wörter</span><button className="text-button" onClick={() => inputRef.current?.click()}>Andere Datei</button><input ref={inputRef} hidden type="file" accept=".txt,.md,.markdown,.docx" onChange={(event) => void readFile(event.target.files?.[0])} /></div>
         {(preview.issues.length > 0 || error) && <div className="import-issues">{preview.issues.map((issue) => <div key={`${issue.message}-${issue.chapterIndex ?? 'all'}`} className={issue.severity === 'error' ? 'save-error' : 'provider-notice'}>{issue.message}</div>)}{error && <div className="save-error">{error}</div>}</div>}
-        {duplicateDocument && <div className="provider-notice" role="alert"><strong>Dieser Originaltext wurde bereits importiert: {duplicateDocument.title}</strong><span>Du kannst den vorhandenen Import fortsetzen oder bewusst eine neue Version anlegen.</span><div className="modal-actions"><button className="ghost-button" onClick={() => { setDuplicateDocument(undefined); void onResumeExisting?.(preview.originalContentHash); }}>Vorhandenen Import fortsetzen</button><button className="primary-button" onClick={() => { setDuplicateDocument(undefined); setAllowDuplicateVersion(true); void importNow(); }}>Als neue Version importieren</button></div></div>}
+        {duplicateDocument && <div className="provider-notice" role="alert"><strong>Dieser Originaltext wurde bereits importiert: {duplicateDocument.title}</strong><span>Du kannst den vorhandenen Import fortsetzen oder bewusst eine neue Version anlegen.</span><div className="modal-actions"><button className="ghost-button" onClick={() => { setDuplicateDocument(undefined); void importNow(true); }}>Vorhandenen Import fortsetzen</button><button className="primary-button" onClick={() => { setDuplicateDocument(undefined); setAllowDuplicateVersion(true); void importNow(); }}>Als neue Version importieren</button></div></div>}
         <div className="import-chapter-list">{preview.chapters.map((chapter, index) => <button key={chapter.id} className={`import-chapter-row ${selectedIndex === index ? 'active' : ''}`} onClick={() => setSelectedIndex(index)}><span>{String(index + 1).padStart(2, '0')}</span><strong>{chapter.title}</strong><small>{chapter.wordCount.toLocaleString('de-DE')} Wörter</small></button>)}</div>
         {selected && <div className="import-editor"><label className="field-label">Kapitelname<input value={selected.title} onChange={(event) => updateChapter(selectedIndex, { title: event.target.value })} /></label><label className="field-label">Kapiteltext<textarea value={selected.content} onChange={(event) => updateChapter(selectedIndex, { content: event.target.value, wordCount: event.target.value.trim() ? event.target.value.trim().split(/\s+/u).length : 0 })} rows={8} /></label><div className="import-edit-actions"><label className="field-label compact">Teilen bei Zeichen<input value={splitOffset} onChange={(event) => setSplitOffset(event.target.value)} placeholder={`${Math.floor(Array.from(selected.content).length / 2)}`} /></label><button className="ghost-button" onClick={splitSelected}><Scissors size={15} /> Kapitel teilen</button><button className="ghost-button" disabled={selectedIndex >= preview.chapters.length - 1} onClick={mergeSelected}><Merge size={15} /> Mit nächstem verbinden</button></div></div>}
         <div className="modal-actions"><button className="ghost-button" onClick={onClose}>Abbrechen</button><button className="primary-button" disabled={blocking || status === 'importing' || status === 'reading'} onClick={() => void importNow()}>{status === 'importing' ? 'Import wird gespeichert …' : <><Check size={16} /> Struktur bestätigen und importieren</>}</button></div>
