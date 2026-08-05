@@ -15,6 +15,8 @@
 .empty-state { padding: 55px 20px; color: var(--muted); text-align: center; font-size: 12px; } @media (max-width: 1250px) { .app-shell { grid-template-columns: 58px 285px minmax(480px, 1fr); } .inspector { display: none; } .editor-layout { grid-template-columns: 170px minmax(450px, 1fr); } .scene-meta { display: none; } }
 
 /* Project creation: a focused, compact first step with progressive genre selection. */
+.onboarding-screen { position: fixed; inset: 0; z-index: 100; min-width: 0; overflow: auto; background: #eef2f6; }
+.onboarding-screen .onboarding-view { min-height: 100vh; }
 .onboarding-view { width: 100%; max-width: none; min-height: 100%; padding: 28px 20px 52px; justify-content: flex-start; align-items: center; }
 .onboarding-card { width: min(820px, 100%); padding: 38px 42px 34px; border: 1px solid #d6dee8; border-radius: 16px; background: #ffffff; box-shadow: 0 18px 45px #40567714; }
 .onboarding-intro { padding-bottom: 28px; border-bottom: 1px solid #e5eaf0; }
@@ -66,6 +68,9 @@
 .onboarding-actions { display: flex; justify-content: flex-end; padding-top: 4px; border-top: 1px solid #e5eaf0; }
 .onboarding-actions .primary-button { min-width: 176px; min-height: 43px; }
 .button-spinner { width: 14px; height: 14px; border: 2px solid #ffffff80; border-top-color: #fff; border-radius: 50%; animation: spin 1s linear infinite; }
+.onboarding-flow-top { display: flex; justify-content: flex-end; min-height: 24px; margin: -8px 0 7px; }
+.onboarding-flow-top .text-button { color: #8999ad; font-size: 11px; }
+.onboarding-flow-top .text-button:hover { color: #a34b42; }
 .onboarding-flow-card { max-width: 760px; padding: 34px 40px 38px; }
 .onboarding-flow-heading { padding-bottom: 23px; border-bottom: 1px solid #e5eaf0; }
 .onboarding-flow-heading h1 { margin-top: 10px; color: #24344a; font-size: 34px; font-weight: 500; }
@@ -88,6 +93,10 @@
 .onboarding-choice-secondary { display: flex; align-items: center; gap: 14px; margin-top: 2px; padding-top: 16px; border-top: 1px solid #e5eaf0; }
 .onboarding-choice-secondary .ghost-button { color: #52647c; background: #f8fafc; border-color: #d5dfeb; }
 .onboarding-choice-secondary .text-button { min-height: 38px; }
+.onboarding-review-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 8px; }
+.onboarding-review-summary > div { display: grid; gap: 5px; padding: 12px 13px; border: 1px solid #e1e7ef; border-radius: 8px; background: #f8fafc; }
+.onboarding-review-summary span { color: #8999ad; font-size: 10px; }
+.onboarding-review-summary strong { overflow: hidden; color: #344b6d; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 
 @media (max-width: 760px) {
   .onboarding-view { padding: 18px 12px 34px; }
@@ -100,6 +109,7 @@
   .onboarding-flow-card { padding: 26px 20px 28px; }
   .onboarding-stepper { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .onboarding-choice-actions { grid-template-columns: 1fr; }
+  .onboarding-review-summary { grid-template-columns: 1fr; }
 }
 .simple-mode { grid-template-columns: 245px minmax(680px, 1fr); background: #0b1018; }
 .simple-mode .rail, .simple-mode .inspector { display: none; }
