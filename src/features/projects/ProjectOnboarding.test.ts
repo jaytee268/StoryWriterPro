@@ -21,6 +21,12 @@ function inputValue(input: HTMLInputElement, value: string): void {
   input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+function textareaValue(textarea: HTMLTextAreaElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+  setter?.call(textarea, value);
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 describe('Projekt-Onboarding', () => {
   afterEach(() => { window.localStorage.clear(); document.body.replaceChildren(); });
 
@@ -66,5 +72,22 @@ describe('Projekt-Onboarding', () => {
     expect(window.localStorage.getItem('storymemory.new-project-onboarding.v1')).toBeNull();
     expect(repository.createProject).not.toHaveBeenCalled();
     act(() => secondRoot.unmount());
+  });
+
+  it('übernimmt Lore-Notizen erst nach dem finalen Anlegen in den Lore-Crafter-Kontext', async () => {
+    const created = { ...project, id: 'created-lore-1', title: 'Lore-Buch' };
+    const onCreated = vi.fn();
+    const repository = { createProject: vi.fn(async () => created), loadWorkspace: vi.fn(async () => workspace()), saveBookGenres: vi.fn(), saveProjectOnboardingState: vi.fn(async (input) => ({ ...input, updatedAt: '' })) } as unknown as StoryRepository;
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => root.render(createElement(ProjectOnboarding, { repository, onCreated, onContinue: vi.fn(), onOpenLore: vi.fn(), onOpenImport: vi.fn() })));
+    await act(async () => { inputValue(container.querySelector('#project-title') as HTMLInputElement, 'Lore-Buch'); container.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); });
+    await act(async () => { textareaValue(container.querySelector('#onboarding-lore-notes') as HTMLTextAreaElement, 'Die Stadt schützt ihre Archive durch ein jährliches Ritual.'); (container.querySelector('button.primary-button') as HTMLButtonElement).click(); });
+    expect(repository.createProject).not.toHaveBeenCalled();
+    await act(async () => (container.querySelector('button.primary-button') as HTMLButtonElement).click());
+    await act(async () => [...container.querySelectorAll('button')].find((button) => button.textContent?.includes('Projekt anlegen'))?.click());
+    expect(onCreated).toHaveBeenCalledWith(created, expect.objectContaining({ currentStep: 'completed' }), 'Die Stadt schützt ihre Archive durch ein jährliches Ritual.');
+    act(() => root.unmount());
   });
 });

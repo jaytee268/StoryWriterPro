@@ -44,7 +44,7 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('saved');
   const editorSaveController = useRef<EditorSaveController | null>(null);
-  const allowNextClose = useRef(false);
+  const closeInProgress = useRef(false);
   const [closePrompt, setClosePrompt] = useState('');
   const [viewError, setViewError] = useState('');
   const [pendingSourceNavigation, setPendingSourceNavigation] = useState<PendingSourceNavigation>();
@@ -66,6 +66,7 @@ export function App() {
   const [manuscriptAnalysisError, setManuscriptAnalysisError] = useState('');
   const manuscriptAnalysisController = useRef<ManuscriptAnalysisController | undefined>(undefined);
   const [onboarding, setOnboarding] = useState<{ project?: Project; state?: ProjectOnboardingState }>();
+  const [onboardingLoreNotes, setOnboardingLoreNotes] = useState('');
   const [timelineEvents, setTimelineEvents] = useState<PersistentTimelineEvent[]>([]);
   const [storyGraphEdges, setStoryGraphEdges] = useState<StoryGraphEdge[]>([]);
   const [mindmapLayouts, setMindmapLayouts] = useState<MindmapLayout[]>([]);
@@ -208,21 +209,23 @@ export function App() {
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void appWindow.onCloseRequested(async (event) => {
-      if (allowNextClose.current) {
-        allowNextClose.current = false;
-        return;
-      }
-      const controller = editorSaveController.current;
-      if (!controller?.hasPendingChanges()) return;
+      if (closeInProgress.current) return;
+      closeInProgress.current = true;
       event.preventDefault();
-      await controller.flush();
-      if (controller.getStatus() === 'error') {
-        const reason = controller.getError();
-        setClosePrompt(reason instanceof Error ? reason.message : 'Die letzte Änderung konnte nicht gespeichert werden.');
-        return;
+      const controller = editorSaveController.current;
+      try {
+        if (controller?.hasPendingChanges()) {
+          await controller.flush();
+          if (controller.getStatus() === 'error') {
+            const reason = controller.getError();
+            setClosePrompt(reason instanceof Error ? reason.message : 'Die letzte Änderung konnte nicht gespeichert werden.');
+            return;
+          }
+        }
+        await appWindow.destroy();
+      } finally {
+        closeInProgress.current = false;
       }
-      allowNextClose.current = true;
-      await appWindow.close();
     }).then((remove) => { if (disposed) remove(); else unlisten = remove; });
     return () => { disposed = true; unlisten?.(); };
   }, []);
@@ -237,9 +240,8 @@ export function App() {
         return;
       }
     }
-    allowNextClose.current = true;
     setClosePrompt('');
-    await getCurrentWindow().close();
+    await getCurrentWindow().destroy();
   }, []);
 
   const retryEditorSave = useCallback(async () => {
@@ -419,7 +421,7 @@ export function App() {
     if (!workspace) return null;
     if (view === 'dashboard') return <Dashboard project={workspace.project} projects={projects} onOpen={() => void requestViewChange('editor')} onSelectProject={(id) => void loadWorkspace(id)} onCreateProject={() => setOnboarding({})} onArchive={(id) => void repository.archiveProject(id).then(() => loadWorkspace()).catch((error) => setViewError(error instanceof Error ? error.message : 'Projekt konnte nicht archiviert werden.'))} onImport={() => void openImport()} />;
     if (view === 'editor') return <EditorView projectId={workspace.project.id} chapters={workspace.chapters} scene={currentScene} chapter={currentChapter} pendingSourceNavigation={pendingSourceNavigation} onSourceNavigationConsumed={() => setPendingSourceNavigation(undefined)} onBack={() => void requestViewChange('dashboard')} onSelectScene={(id) => void requestSceneChange(id)} onSave={saveScene} onCreateChapter={createChapter} onUpdateChapter={updateChapter} onCreateScene={createScene} onListVersions={listSceneVersions} onCreateVersion={createSceneVersion} onRestoreVersion={restoreSceneVersion} onGetEditorPreferences={getEditorPreferences} onSaveEditorPreferences={saveEditorPreferences} onBibleUpdate={runBibleUpdate} bibleUpdateBusy={Boolean(bibleUpdateProvider)} onCancelBibleUpdate={cancelBibleUpdate} onOpenAssistant={() => setAssistantOpen(true)} onSaveStateChange={setSaveStatus} onRegisterSaveController={registerSaveController} onCreateStyleReference={createStyleReference} />;
-    if (view === 'bible' || view === 'characters' || view === 'threads') return <StoryBibleView entities={workspace.entities} projectId={workspace.project.id} chapters={workspace.chapters} repository={repository} activeRun={activeReviewRun} proposals={reviewProposals} activeMemoryRun={activeMemoryRun} memoryProposals={memoryProposals} onEntityChanged={replaceEntity} onOpenSourceReference={openSourceReference} onOpenStyleReference={openStyleReference} onReview={reviewProposal} onCompleteReview={completeBibleReview} onMemoryReview={reviewCharacterMemory} onCompleteMemoryReview={completeCharacterMemoryReview} onCloseReview={() => { setActiveReviewRun(undefined); setReviewProposals([]); setActiveMemoryRun(undefined); setMemoryProposals([]); }} initialTab={view === 'bible' ? bibleInitialTab : undefined} initialFilter={view === 'characters' ? 'character' : view === 'threads' ? 'plot_thread' : undefined} />;
+    if (view === 'bible' || view === 'characters' || view === 'threads') return <StoryBibleView entities={workspace.entities} projectId={workspace.project.id} chapters={workspace.chapters} repository={repository} activeRun={activeReviewRun} proposals={reviewProposals} activeMemoryRun={activeMemoryRun} memoryProposals={memoryProposals} onEntityChanged={replaceEntity} onOpenSourceReference={openSourceReference} onOpenStyleReference={openStyleReference} onReview={reviewProposal} onCompleteReview={completeBibleReview} onMemoryReview={reviewCharacterMemory} onCompleteMemoryReview={completeCharacterMemoryReview} onCloseReview={() => { setActiveReviewRun(undefined); setReviewProposals([]); setActiveMemoryRun(undefined); setMemoryProposals([]); }} initialTab={view === 'bible' ? bibleInitialTab : undefined} initialLoreNotes={onboardingLoreNotes} initialFilter={view === 'characters' ? 'character' : view === 'threads' ? 'plot_thread' : undefined} />;
     if (view === 'timeline') return <TimelineView events={timelineEvents} chapters={workspace.chapters} entities={workspace.entities} onOpenSource={(id) => void openVisualizationSource(id)} onOpenScene={(id) => void requestSceneChange(id).then(async (changed) => { if (changed) await requestViewChange('editor'); })} onReview={(event, status) => void timelineReview(event, status)} />;
     if (view === 'mindmap') return <MindmapView nodes={mindmapNodes} edges={mindmapEdges} layouts={mindmapLayouts} onLayoutChange={(id, position) => void saveMindmapLayout(id, position)} onOpenEntity={() => void requestViewChange('bible')} />;
     if (view === 'settings') return <SettingsView mode={repository.mode} project={workspace.project} settings={providerSettings} onSettingsChange={setProviderSettings} onReload={loadWorkspace} />;
@@ -431,7 +433,7 @@ export function App() {
   const topLabel = view === 'dashboard' ? 'Übersicht' : view === 'settings' ? 'Einstellungen' : navItems.find((item) => item.view === view)?.label ?? 'Arbeitsbereich';
 
   const onboardingProject = onboarding?.project ?? (loadState.status === 'ready' ? loadState.workspace.project : undefined);
-  if (loadState.status === 'empty' || onboarding) return <div className="onboarding-screen"><ProjectOnboarding repository={repository} project={onboardingProject} state={onboarding?.state} onCreated={(createdProject) => { setOnboarding(undefined); void loadWorkspace(createdProject.id); }} onContinue={(nextState) => { if (nextState.currentStep === 'completed') { setOnboarding(undefined); void loadWorkspace(nextState.projectId); } else setOnboarding((current) => current ? { ...current, state: nextState } : current); }} onOpenLore={() => { setBibleInitialTab('lore_crafter'); setOnboarding(undefined); void requestViewChange('bible'); }} onOpenImport={() => { setOnboarding(undefined); void openImport(); }} onAbort={() => { setOnboarding(undefined); void loadWorkspace(onboardingProject?.id); }} /></div>;
+  if (loadState.status === 'empty' || onboarding) return <div className="onboarding-screen"><ProjectOnboarding repository={repository} project={onboardingProject} state={onboarding?.state} onCreated={(createdProject, _state, loreNotes) => { setOnboarding(undefined); setOnboardingLoreNotes(loreNotes ?? ''); if (loreNotes?.trim()) { setBibleInitialTab('lore_crafter'); setView('bible'); } void loadWorkspace(createdProject.id); }} onContinue={(nextState) => { if (nextState.currentStep === 'completed') { setOnboarding(undefined); void loadWorkspace(nextState.projectId); } else setOnboarding((current) => current ? { ...current, state: nextState } : current); }} onOpenLore={() => { setBibleInitialTab('lore_crafter'); setOnboarding(undefined); void requestViewChange('bible'); }} onOpenImport={() => { setOnboarding(undefined); void openImport(); }} onAbort={() => { setOnboarding(undefined); void loadWorkspace(onboardingProject?.id); }} /></div>;
 
   return <div className={`app-shell simple-mode ${sidebarOpen ? 'sidebar-open' : 'sidebar-collapsed'} ${view === 'editor' ? 'writing-mode' : ''}`}>
     <aside className="simple-sidebar">

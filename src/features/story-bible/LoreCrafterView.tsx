@@ -5,10 +5,10 @@ import { providerRouter } from '../../services/aiProviderService';
 import { analyzeLoreDraft, buildLoreSheet, confirmLoreCrafterRule, finishLoreCrafterReview, reviewLoreSheetItem, routeExcludedContent } from '../../services/loreCrafter';
 import type { StoryRepository } from '../../services/storyRepository';
 
-interface Props { projectId: string; repository: StoryRepository; onRunCreated?: (run: LoreCrafterRun) => void; }
+interface Props { projectId: string; repository: StoryRepository; initialNotes?: string; onRunCreated?: (run: LoreCrafterRun) => void; }
 
-export function LoreCrafterView({ projectId, repository, onRunCreated }: Props) {
-  const [notes, setNotes] = useState('');
+export function LoreCrafterView({ projectId, repository, initialNotes, onRunCreated }: Props) {
+  const [notes, setNotes] = useState(initialNotes ?? '');
   const [runs, setRuns] = useState<LoreCrafterRun[]>([]);
   const [run, setRun] = useState<LoreCrafterRun>();
   const [clarifications, setClarifications] = useState<LoreCrafterClarification[]>([]);

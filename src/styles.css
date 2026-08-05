@@ -29,10 +29,11 @@
 .onboarding-field-full { grid-column: 1 / -1; }
 .onboarding-view .field-label { display: grid; gap: 7px; color: #52657e; font-size: 11px; font-weight: 700; }
 .onboarding-view .field-label > span:not(.field-error) { color: #9aa8b8; font-weight: 400; }
-.onboarding-view .field-label input, .onboarding-view .field-label select { width: 100%; min-height: 43px; margin: 0; padding: 10px 12px; border: 1px solid #cfd9e4; border-radius: 8px; outline: 0; color: #26364b; background: #fbfcfe; font-size: 12px; transition: border-color .18s ease, box-shadow .18s ease, background .18s ease; }
-.onboarding-view .field-label input::placeholder { color: #a8b3c0; }
-.onboarding-view .field-label input:hover, .onboarding-view .field-label select:hover { border-color: #afc0d4; }
-.onboarding-view .field-label input:focus, .onboarding-view .field-label select:focus, .genre-combobox-trigger:focus-visible, .genre-picker-search input:focus { border-color: #7188c8; box-shadow: 0 0 0 3px #dfe8fb; }
+.onboarding-view .field-label input, .onboarding-view .field-label select, .onboarding-view .field-label textarea { width: 100%; min-height: 43px; margin: 0; padding: 10px 12px; border: 1px solid #cfd9e4; border-radius: 8px; outline: 0; color: #26364b; background: #fbfcfe; font-size: 12px; transition: border-color .18s ease, box-shadow .18s ease, background .18s ease; }
+.onboarding-view .field-label textarea { min-height: 150px; line-height: 1.55; resize: vertical; }
+.onboarding-view .field-label input::placeholder, .onboarding-view .field-label textarea::placeholder { color: #a8b3c0; }
+.onboarding-view .field-label input:hover, .onboarding-view .field-label select:hover, .onboarding-view .field-label textarea:hover { border-color: #afc0d4; }
+.onboarding-view .field-label input:focus, .onboarding-view .field-label select:focus, .onboarding-view .field-label textarea:focus, .genre-combobox-trigger:focus-visible, .genre-picker-search input:focus { border-color: #7188c8; box-shadow: 0 0 0 3px #dfe8fb; }
 .onboarding-view .field-label input[aria-invalid="true"] { border-color: #c56b62; box-shadow: 0 0 0 3px #fbe8e5; }
 .field-error { color: #a34b42 !important; font-size: 11px; font-weight: 500 !important; }
 .onboarding-genre-section { display: grid; gap: 14px; padding-top: 2px; }
@@ -88,6 +89,8 @@
 .onboarding-choice-icon-success { color: #287c5a; background: #e5f5ed; }
 .onboarding-choice h2 { color: #24344a; font-size: 22px; }
 .onboarding-choice p { max-width: 580px; color: #718096; font-size: 13px; line-height: 1.6; }
+.onboarding-lore-field { max-width: 680px; margin-top: 4px; }
+.onboarding-inline-note { color: #8999ad !important; font-size: 11px !important; }
 .onboarding-choice-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 8px; }
 .onboarding-choice-actions button { min-height: 47px; }
 .onboarding-choice-secondary { display: flex; align-items: center; gap: 14px; margin-top: 2px; padding-top: 16px; border-top: 1px solid #e5eaf0; }
