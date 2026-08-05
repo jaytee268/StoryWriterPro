@@ -38,11 +38,18 @@ async function resolvePosition(repository: StoryRepository, projectId: string, p
   const book = position.bookId ? workspace.books.find((item) => item.id === position.bookId) : chapter ? workspace.books.find((item) => item.id === chapter.bookId) : undefined;
   if (position.bookId && !book) throw new Error('Reveal-Position verweist auf einen ungültigen Band.');
   if (chapter && book && chapter.bookId !== book.id) throw new Error('Reveal-Kapitel gehört nicht zum angegebenen Band.');
-  return { ...position, bookId: book?.id ?? position.bookId, chapterId: chapter?.id ?? position.chapterId, sceneId: scene?.id ?? position.sceneId, bookOrderIndex: position.bookOrderIndex ?? book?.volume ?? 0, bookOrder: book?.volume ?? 0, chapterOrder: position.chapterOrderIndex ?? chapter?.orderIndex ?? 0, sceneOrder: position.sceneOrderIndex ?? scene?.orderIndex ?? 0, offsetValue: position.offset ?? 0 };
+  return { ...position, bookId: book?.id ?? position.bookId, chapterId: chapter?.id ?? position.chapterId, sceneId: scene?.id ?? position.sceneId, bookOrderIndex: position.bookOrderIndex ?? book?.volume ?? 0, bookOrder: position.bookOrderIndex ?? book?.volume ?? 0, chapterOrder: position.chapterOrderIndex ?? chapter?.orderIndex ?? 0, sceneOrder: position.sceneOrderIndex ?? scene?.orderIndex ?? 0, offsetValue: position.offset ?? 0 };
 }
 
 export async function validateRevealPositionForRepository(repository: StoryRepository, projectId: string, position: RevealPosition): Promise<void> {
   await resolvePosition(repository, projectId, position);
+}
+
+export async function validateRevealIntervalForRepository(repository: StoryRepository, projectId: string, validFrom: RevealPosition, validUntil?: RevealPosition): Promise<void> {
+  if (!validUntil) return;
+  const start = await resolvePosition(repository, projectId, validFrom);
+  const end = await resolvePosition(repository, projectId, validUntil);
+  if (compareResolved(end, start) <= 0) throw new Error('Reveal-Intervall muss ein validUntil strikt nach validFrom haben.');
 }
 
 function compareResolved(left: ResolvedPosition, right: ResolvedPosition): number {
@@ -76,9 +83,15 @@ async function selectStates(repository: StoryRepository, projectId: string, posi
     if (!previous) { selected.set(key, state); continue; }
     const previousStart = await resolvePosition(repository, projectId, previous.validFromPosition);
     const currentStart = await resolvePosition(repository, projectId, state.validFromPosition);
-    const score = specificity(state.validFromPosition) - specificity(previous.validFromPosition);
-    if (score > 0 || (score === 0 && compareResolved(currentStart, previousStart) > 0)) selected.set(key, state);
-    else if (score === 0 && previous.knowledgeLevel !== state.knowledgeLevel) warnings.push(`Widersprüchliche gleichrangige Wissensstände für ${key}.`);
+    const previousSpecificity = specificity(previous.validFromPosition);
+    const currentSpecificity = specificity(state.validFromPosition);
+    const sameRank = currentSpecificity === previousSpecificity && compareResolved(currentStart, previousStart) === 0;
+    if (sameRank && previous.knowledgeLevel !== state.knowledgeLevel) warnings.push(`Widersprüchliche gleichrangige Wissensstände für ${key}.`);
+    const shouldReplace = currentSpecificity > previousSpecificity
+      || (currentSpecificity === previousSpecificity && (compareResolved(currentStart, previousStart) > 0
+        || (compareResolved(currentStart, previousStart) === 0
+          && (state.updatedAt > previous.updatedAt || (state.updatedAt === previous.updatedAt && state.id > previous.id)))));
+    if (shouldReplace) selected.set(key, state);
   }
   return [...selected.values()];
 }

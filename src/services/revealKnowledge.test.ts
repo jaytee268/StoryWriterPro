@@ -71,4 +71,27 @@ describe('structured reveal knowledge engine', () => {
     expect(validateRevealComplianceResultReferences(input, result)).toEqual(result);
     expect(() => validateRevealComplianceResultReferences(input, { ...result, findings: [{ ...result.findings[0]!, contractId: 'future' }] })).toThrow('CODEX_INVALID_REFERENCE');
   });
+
+  it('wählt Audience States in Browser und Tauri-kompatibler Reihenfolge und lehnt ungültige Intervalle ab', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const book = workspace.books[0]!;
+    const chapter = await repository.createChapter({ bookId: book.id, title: 'Auswahl' });
+    const scene = await repository.createScene({ chapterId: chapter.id, title: 'Position' });
+    const subject = await repository.createStoryEntity({ projectId: workspace.project.id, name: 'Auswahl-Wahrheit', type: 'secret', description: '', status: 'confirmed', confidence: 1, chapterId: chapter.id, sceneId: scene.id, excerpt: '', authorConfirmed: true, tags: [] });
+    const contract = await repository.saveRevealContract({ projectId: workspace.project.id, subjectEntityId: subject.id, title: 'Auswahl', truthStatement: 'Eine Testwahrheit.', scope: 'book', status: 'confirmed', authorConfirmed: true, revealState: 'author_only', revealConditionText: '', notes: '' });
+    const current = { bookId: book.id, chapterId: chapter.id, sceneId: scene.id, offset: 0 };
+    const broad = await repository.saveRevealAudienceState({ projectId: workspace.project.id, contractId: contract.id, audienceKind: 'reader', knowledgeLevel: 'unknown', beliefText: '', validFromPosition: { chapterId: chapter.id }, status: 'confirmed', authorConfirmed: true });
+    const precise = await repository.saveRevealAudienceState({ projectId: workspace.project.id, contractId: contract.id, audienceKind: 'reader', knowledgeLevel: 'knows', beliefText: '', validFromPosition: current, status: 'confirmed', authorConfirmed: true });
+    expect((await buildRevealContext(repository, { projectId: workspace.project.id, position: current })).readerKnowledgeAtPosition[0]?.id).toBe(precise.id);
+    const equalA = await repository.saveRevealAudienceState({ projectId: workspace.project.id, contractId: contract.id, audienceKind: 'reader', knowledgeLevel: 'partial', beliefText: '', validFromPosition: current, status: 'confirmed', authorConfirmed: true });
+    const equalB = await repository.saveRevealAudienceState({ projectId: workspace.project.id, contractId: contract.id, audienceKind: 'reader', knowledgeLevel: 'suspects', beliefText: '', validFromPosition: current, status: 'confirmed', authorConfirmed: true });
+    const expected = [precise, equalA, equalB].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id))[0]!;
+    const context = await buildRevealContext(repository, { projectId: workspace.project.id, position: current });
+    expect(context.readerKnowledgeAtPosition[0]?.id).toBe(expected.id);
+    expect(context.warnings).toContain(`Widersprüchliche gleichrangige Wissensstände für ${contract.id}:reader:reader.`);
+    expect(broad.id).not.toBe(context.readerKnowledgeAtPosition[0]?.id);
+    await expect(repository.saveRevealAudienceState({ projectId: workspace.project.id, contractId: contract.id, audienceKind: 'reader', knowledgeLevel: 'unknown', beliefText: '', validFromPosition: current, validUntilPosition: current, status: 'confirmed', authorConfirmed: true })).rejects.toThrow('validUntil strikt nach validFrom');
+    await expect(repository.saveRevealClueRule({ projectId: workspace.project.id, contractId: contract.id, ruleKind: 'forbidden', clueType: 'direct', description: 'Test', maximumExplicitness: 'direct', validFromPosition: {}, validUntilPosition: {}, status: 'confirmed', authorConfirmed: true })).rejects.toThrow('validUntil strikt nach validFrom');
+  });
 });
