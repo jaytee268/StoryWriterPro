@@ -4382,9 +4382,17 @@ pub fn replace_manuscript_analysis_draft_ledger(
         }
         validate_continuity_state_kind(&entry.state_kind)?;
         validate_probability(entry.confidence, "Die Draft-Ledger-Sicherheit")?;
-        project_entity_exists(&tx, &entry.project_id, &entry.entity_id, None)?;
+        let valid_entity: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM story_entities WHERE id=?1 AND project_id=?2) OR EXISTS(SELECT 1 FROM provisional_entities WHERE id=?1 AND project_id=?2 AND job_id=?3)", params![entry.entity_id, entry.project_id, entry.job_id], |row| row.get(0)).map_err(|error| sql_error("Import-Draft-Entität konnte nicht geprüft werden", error))?;
+        if !valid_entity {
+            return Err("Import-Draft-Entität gehört nicht zum Projekt oder Analysejob.".into());
+        }
         if let Some(related) = &entry.related_entity_id {
-            project_entity_exists(&tx, &entry.project_id, related, None)?;
+            let valid_related: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM story_entities WHERE id=?1 AND project_id=?2) OR EXISTS(SELECT 1 FROM provisional_entities WHERE id=?1 AND project_id=?2 AND job_id=?3)", params![related, entry.project_id, entry.job_id], |row| row.get(0)).map_err(|error| sql_error("Import-Draft-Relation konnte nicht geprüft werden", error))?;
+            if !valid_related {
+                return Err(
+                    "Import-Draft-Relation gehört nicht zum Projekt oder Analysejob.".into(),
+                );
+            }
         }
         if let Some(source_id) = &entry.source_reference_id {
             let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2 UNION ALL SELECT 1 FROM project_source_references WHERE id=?1 AND project_id=?2)", params![source_id, entry.project_id], |row| row.get(0)).map_err(|error| sql_error("Import-Draft-Quelle konnte nicht geprüft werden", error))?;

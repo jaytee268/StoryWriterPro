@@ -323,7 +323,11 @@ export class ManuscriptAnalysisController {
         const previous = units[index - 1];
         const previousContent = (await this.repository.listManuscriptAnalysisUnits(this.jobId)).find((candidate) => candidate.id === previous?.id)?.content ?? previous?.content;
         await this.resolveProvisionalEntities(workspace, job, unit, currentContent, previousContent?.slice(-2000) ?? '', provider);
-        const priorProvisional = await this.listPriorProvisionalEntities(job.id, unit.orderIndex);
+      // resolveProvisionalEntities has persisted the current passage before
+      // downstream providers run. Inclusive ordering makes the first mention
+      // immediately available to Bible, memory and continuity without leaking
+      // later units.
+      const priorProvisional = await this.listPriorProvisionalEntities(job.id, unit.orderIndex, true);
         await this.runBibleUnit(job, workspace, unit, provider, timeout, priorProvisional);
         await this.runCharacterMemoryUnit(job, workspace, unit, provider, timeout, priorProvisional);
         const afterPassage = await this.repository.getManuscriptAnalysisJob(this.jobId);
@@ -434,13 +438,13 @@ export class ManuscriptAnalysisController {
     void previousMentions;
   }
 
-  private async listPriorProvisionalEntities(jobId: string, orderIndex: number): Promise<ProvisionalEntity[]> {
+  private async listPriorProvisionalEntities(jobId: string, orderIndex: number, includeCurrent = false): Promise<ProvisionalEntity[]> {
     const [entities, mentions, units] = await Promise.all([this.repository.listProvisionalEntities(jobId), this.repository.listProvisionalEntityMentions(jobId), this.repository.listManuscriptAnalysisUnits(jobId)]);
     const orderByUnit = new Map(units.map((unit) => [unit.id, unit.orderIndex]));
     const firstOrder = new Map<string, number>();
     for (const mention of mentions) {
       const order = orderByUnit.get(mention.passageUnitId);
-      if (order !== undefined && order < orderIndex && mention.resolvedProvisionalEntityId && (!firstOrder.has(mention.resolvedProvisionalEntityId) || order < firstOrder.get(mention.resolvedProvisionalEntityId)!)) firstOrder.set(mention.resolvedProvisionalEntityId, order);
+      if (order !== undefined && (includeCurrent ? order <= orderIndex : order < orderIndex) && mention.resolvedProvisionalEntityId && (!firstOrder.has(mention.resolvedProvisionalEntityId) || order < firstOrder.get(mention.resolvedProvisionalEntityId)!)) firstOrder.set(mention.resolvedProvisionalEntityId, order);
     }
     return entities.filter((entity) => (firstOrder.get(entity.id) ?? Number.MAX_SAFE_INTEGER) < orderIndex).sort((a, b) => (firstOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (firstOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER)).slice(0, 160);
   }
