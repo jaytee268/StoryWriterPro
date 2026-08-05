@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserDemoRepository } from './storyRepository';
 import { buildContinuityPrefilter, detectContinuityFindings, runContinuityReview, shouldRunContinuityReview } from './continuityReview';
 import type { ContinuityAnalysisResult } from '../types/domain';
-import { continuityResultSchema, normalizeContinuityResultNulls } from './aiProviderService';
-import type { StoryAiProvider } from './aiProviderService';
+import { continuityResultSchema, normalizeContinuityResultNulls, validateContinuityResultReferences } from './aiProviderService';
+import type { ContinuityAnalysisInput, StoryAiProvider } from './aiProviderService';
 
 const values = new Map<string, string>();
 vi.stubGlobal('localStorage', { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) });
@@ -19,6 +19,12 @@ describe('AI-gestützte semantische Continuity', () => {
   it('akzeptiert den gemeinsamen Nullable-Fixture-Datensatz', () => {
     const fixture = { observedActions: [{ summary: 'Beobachtung', evidenceExcerpt: '', entityIds: [], startOffset: null, endOffset: null }], proposedStateChanges: [{ entityId: 'entity', relatedEntityId: null, stateKind: 'location', previousState: '', newState: 'unbekannt', confidence: 0.5, evidenceExcerpt: '', sourceReferenceId: null, startOffset: null, endOffset: null, reason: '' }], objectiveContradictions: [{ findingType: 'missing_explanation', subjectEntityId: null, relatedEntityIds: [], relatedStateIds: [], objectiveConflict: '', evidenceExcerpt: '', sourceReferenceId: null, counterEvidenceExcerpts: [], counterEvidence: null, confidence: 0.5, startOffset: null, endOffset: null, reason: '' }], missingExplanations: [], matchedLoreRules: [], newRuleProposals: [{ projectId: 'project', targetRuleId: null, title: '', statement: '', scope: 'project', prerequisites: [], effects: [], exceptions: [], connectedLoreIds: [], sourceReferenceIds: [], evidenceExcerpt: '', chapterId: null, sceneId: null, startOffset: null, endOffset: null, confidence: 0.5, reason: '' }], plotThreadChanges: [{ entityId: 'entity', proposedStatus: 'open', evidenceExcerpt: '', sourceReferenceId: null, startOffset: null, endOffset: null, reason: '', confidence: 0.5 }], confidence: 0.5, evidence: [{ id: 'evidence', label: '', chapterId: null, sceneId: null, entityId: null, excerpt: null, sourceReferenceId: null, startOffset: null, endOffset: null }], warnings: [] };
     expect(normalizeContinuityResultNulls(continuityResultSchema.parse(fixture) as ContinuityAnalysisResult).objectiveContradictions[0]?.subjectEntityId).toBeUndefined();
+  });
+
+  it('validiert provisorische Entitäten im selben chronologischen Auftrag wie der Rust-Validator', () => {
+    const input: ContinuityAnalysisInput = { projectId: 'project', analysisJobId: 'job-1', passageOrderIndex: 2, passage: { text: 'Text', changedText: '', passageStartOffset: 0, passageEndOffset: 4, coordinateSystem: 'unicode_codepoints' }, previousContext: '', followingContext: '', confirmedStoryBible: [{ id: 'confirmed' } as never], provisionalEntities: [{ id: 'current', jobId: 'job-1', projectId: 'project', entityType: 'character', canonicalName: 'Jetzt', aliases: [], description: '', confidence: .8, reviewStatus: 'proposed', firstSeenOrderIndex: 2, createdAt: '', updatedAt: '' }], provisionalAliases: [], confirmedLore: [], confirmedRules: [], continuityStatesBeforePosition: [], draftLedger: [], characterKnowledge: [], characterProfiles: [], characterMemories: [], activePlotThreads: [], relevantSources: [], openFindings: [], continuityDecisions: [] };
+    validateContinuityResultReferences({ ...emptyAnalysis(), proposedStateChanges: [{ entityId: 'current', relatedEntityId: undefined, stateKind: 'location', previousState: '', newState: 'hier', confidence: .8, evidenceExcerpt: '', reason: '' }] }, input);
+    expect(() => validateContinuityResultReferences({ ...emptyAnalysis(), proposedStateChanges: [{ entityId: 'future', relatedEntityId: undefined, stateKind: 'location', previousState: '', newState: 'später', confidence: .8, evidenceExcerpt: '', reason: '' }] }, input)).toThrow('CODEX_INVALID_REFERENCE');
   });
 
   it('löst bestätigte Zustände an Manuskriptpositionen auf und schließt Zukunft aus', async () => {

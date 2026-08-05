@@ -1248,13 +1248,86 @@ fn validate_continuity_result(result: &Value, request: &Value) -> Result<Value, 
             ));
         }
     }
-    let entities: std::collections::HashSet<&str> = request
+    let mut entities: std::collections::HashSet<&str> = request
         .get("confirmedStoryBible")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(|item| item.get("id").and_then(Value::as_str))
         .collect();
+    if let Some(provisional_entities) = request.get("provisionalEntities").and_then(Value::as_array)
+    {
+        if !provisional_entities.is_empty() {
+            let project_id = request
+                .get("projectId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    CodexError::new(
+                        "CODEX_INVALID_REFERENCE",
+                        "Provisorische Entitäten benötigen ein Projekt.",
+                    )
+                })?;
+            let job_id = request
+                .get("analysisJobId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    CodexError::new(
+                        "CODEX_INVALID_REFERENCE",
+                        "Provisorische Entitäten benötigen einen Analysejob.",
+                    )
+                })?;
+            let passage_order = request
+                .get("passageOrderIndex")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| {
+                    CodexError::new(
+                        "CODEX_INVALID_REFERENCE",
+                        "Provisorische Entitäten benötigen eine chronologische Passageposition.",
+                    )
+                })?;
+            if passage_order < 0 {
+                return Err(CodexError::new(
+                    "CODEX_INVALID_REFERENCE",
+                    "Die chronologische Passageposition ist ungültig.",
+                ));
+            }
+            for provisional in provisional_entities {
+                let id = provisional
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        CodexError::new(
+                            "CODEX_INVALID_REFERENCE",
+                            "Provisorische Entität benötigt eine ID.",
+                        )
+                    })?;
+                if provisional.get("projectId").and_then(Value::as_str) != Some(project_id)
+                    || provisional.get("jobId").and_then(Value::as_str) != Some(job_id)
+                {
+                    return Err(CodexError::new(
+                        "CODEX_INVALID_REFERENCE",
+                        "Provisorische Entität gehört nicht zum aktuellen Projekt oder Analysejob.",
+                    ));
+                }
+                let first_seen = provisional
+                    .get("firstSeenOrderIndex")
+                    .and_then(Value::as_i64)
+                    .ok_or_else(|| {
+                        CodexError::new(
+                            "CODEX_INVALID_REFERENCE",
+                            "Provisorische Entität benötigt ihre erste chronologische Position.",
+                        )
+                    })?;
+                if first_seen < 0 || first_seen > passage_order {
+                    return Err(CodexError::new(
+                        "CODEX_INVALID_REFERENCE",
+                        "Provisorische Entität ist für diese Passage noch nicht verfügbar.",
+                    ));
+                }
+                entities.insert(id);
+            }
+        }
+    }
     let passage = request.get("passage").ok_or_else(|| {
         CodexError::new(
             "CODEX_SCHEMA_VALIDATION_FAILED",
@@ -2351,6 +2424,89 @@ mod tests {
             "evidence":[{"id":"evidence","label":"","chapterId":null,"sceneId":null,"entityId":null,"excerpt":null,"startOffset":null,"endOffset":null}],"warnings":[]
         });
         validate_continuity_result(&fixture, &request).expect("nullable fixture must validate");
+    }
+
+    fn provisional_continuity_request(passage_order: i64, provisional_entities: Value) -> Value {
+        json!({
+            "projectId": "project",
+            "analysisJobId": "job-1",
+            "passageOrderIndex": passage_order,
+            "passage": {"text":"Text", "passageStartOffset":0, "passageEndOffset":4, "coordinateSystem":"unicode_codepoints"},
+            "confirmedStoryBible":[{"id":"confirmed"}],
+            "provisionalEntities": provisional_entities,
+            "confirmedRules":[], "continuityStatesBeforePosition":[], "draftLedger":[], "confirmedLore":[], "relevantSources":[]
+        })
+    }
+
+    fn provisional_entity_result(entity_id: &str) -> Value {
+        json!({
+            "observedActions":[{"summary":"","evidenceExcerpt":"","entityIds":[entity_id],"startOffset":null,"endOffset":null}],
+            "proposedStateChanges":[{"entityId":entity_id,"relatedEntityId":null,"stateKind":"location","previousState":"","newState":"hier","confidence":0.8,"evidenceExcerpt":"","sourceReferenceId":null,"startOffset":null,"endOffset":null,"reason":""}],
+            "objectiveContradictions":[{"findingType":"missing_explanation","subjectEntityId":entity_id,"relatedEntityIds":[entity_id],"relatedStateIds":[],"objectiveConflict":"","evidenceExcerpt":"","sourceReferenceId":null,"counterEvidenceExcerpts":[],"confidence":0.5,"startOffset":null,"endOffset":null,"reason":""}],
+            "missingExplanations":[], "matchedLoreRules":[], "newRuleProposals":[],
+            "plotThreadChanges":[{"entityId":entity_id,"proposedStatus":"open","evidenceExcerpt":"","sourceReferenceId":null,"startOffset":null,"endOffset":null,"reason":"","confidence":0.5}],
+            "confidence":0.8,"evidence":[],"warnings":[]
+        })
+    }
+
+    #[test]
+    fn continuity_validator_accepts_only_chronologically_available_provisional_entities() {
+        let available = json!([
+            {"id":"provisional-current","projectId":"project","jobId":"job-1","firstSeenOrderIndex":2},
+            {"id":"provisional-previous","projectId":"project","jobId":"job-1","firstSeenOrderIndex":1}
+        ]);
+        let request = provisional_continuity_request(2, available);
+        validate_continuity_result(&provisional_entity_result("provisional-current"), &request)
+            .expect("current provisional entity must be valid");
+        validate_continuity_result(&provisional_entity_result("provisional-previous"), &request)
+            .expect("previous provisional entity must be valid");
+        validate_continuity_result(&provisional_entity_result("confirmed"), &request)
+            .expect("confirmed entity must remain valid");
+
+        let future_request = provisional_continuity_request(
+            2,
+            json!([{"id":"provisional-future","projectId":"project","jobId":"job-1","firstSeenOrderIndex":3}]),
+        );
+        assert_eq!(
+            validate_continuity_result(
+                &provisional_entity_result("provisional-future"),
+                &future_request,
+            )
+            .unwrap_err()
+            .code,
+            "CODEX_INVALID_REFERENCE"
+        );
+
+        assert_eq!(
+            validate_continuity_result(
+                &provisional_entity_result("not-passed"),
+                &provisional_continuity_request(2, json!([])),
+            )
+            .unwrap_err()
+            .code,
+            "CODEX_INVALID_REFERENCE"
+        );
+
+        let foreign_project = provisional_continuity_request(
+            2,
+            json!([{"id":"foreign","projectId":"other-project","jobId":"job-1","firstSeenOrderIndex":1}]),
+        );
+        assert_eq!(
+            validate_continuity_result(&provisional_entity_result("foreign"), &foreign_project,)
+                .unwrap_err()
+                .code,
+            "CODEX_INVALID_REFERENCE"
+        );
+        let foreign_job = provisional_continuity_request(
+            2,
+            json!([{"id":"foreign-job","projectId":"project","jobId":"other-job","firstSeenOrderIndex":1}]),
+        );
+        assert_eq!(
+            validate_continuity_result(&provisional_entity_result("foreign-job"), &foreign_job,)
+                .unwrap_err()
+                .code,
+            "CODEX_INVALID_REFERENCE"
+        );
     }
     #[test]
     fn chat_rejects_unknown_source() {
