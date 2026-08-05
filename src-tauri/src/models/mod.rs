@@ -3446,6 +3446,148 @@ pub struct SaveRevealClueRuleInput {
     pub author_confirmed: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevealSubjectInput {
+    pub id: Option<String>,
+    pub name: String,
+    pub entity_type: String,
+    pub description: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivateRevealContractBundleInput {
+    pub project_id: String,
+    pub source_reference_id: Option<String>,
+    pub subject_entity: Option<RevealSubjectInput>,
+    pub contract: SaveRevealContractInput,
+    #[serde(default)]
+    pub audience_states: Vec<SaveRevealAudienceStateInput>,
+    #[serde(default)]
+    pub clue_rules: Vec<SaveRevealClueRuleInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RevealComplianceRunStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Stale,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RevealComplianceReviewStatus {
+    Open,
+    Accepted,
+    Dismissed,
+    CorrectionPlanned,
+    RevealRuleChanged,
+    IntentionalException,
+}
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevealComplianceRun {
+    pub id: String,
+    pub job_id: String,
+    pub unit_id: String,
+    pub project_id: String,
+    pub contract_id: String,
+    pub input_hash: String,
+    pub provider_id: String,
+    pub prompt_version: String,
+    pub status: RevealComplianceRunStatus,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveRevealComplianceRunInput {
+    pub id: Option<String>,
+    pub job_id: String,
+    pub unit_id: String,
+    pub project_id: String,
+    pub contract_id: String,
+    pub input_hash: String,
+    pub provider_id: String,
+    pub prompt_version: String,
+    pub status: RevealComplianceRunStatus,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+}
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevealComplianceFindingRecord {
+    pub id: String,
+    pub run_id: String,
+    pub job_id: String,
+    pub unit_id: String,
+    pub project_id: String,
+    pub contract_id: String,
+    pub subject_entity_id: String,
+    pub character_entity_id: Option<String>,
+    pub finding_type: String,
+    pub severity: String,
+    pub evidence_excerpt: String,
+    pub explanation: String,
+    pub expected_knowledge_level: RevealKnowledgeLevel,
+    pub actual_disclosure_level: RevealKnowledgeLevel,
+    pub chapter_id: Option<String>,
+    pub scene_id: Option<String>,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub provider_id: String,
+    pub prompt_version: String,
+    pub input_hash: String,
+    pub review_status: RevealComplianceReviewStatus,
+    pub user_decision: Option<String>,
+    pub source_reference_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveRevealComplianceFindingInput {
+    pub id: Option<String>,
+    pub run_id: String,
+    pub job_id: String,
+    pub unit_id: String,
+    pub project_id: String,
+    pub contract_id: String,
+    pub subject_entity_id: String,
+    pub character_entity_id: Option<String>,
+    pub finding_type: String,
+    pub severity: String,
+    pub evidence_excerpt: String,
+    pub explanation: String,
+    pub expected_knowledge_level: RevealKnowledgeLevel,
+    pub actual_disclosure_level: RevealKnowledgeLevel,
+    pub chapter_id: Option<String>,
+    pub scene_id: Option<String>,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub provider_id: String,
+    pub prompt_version: String,
+    pub input_hash: String,
+    pub review_status: RevealComplianceReviewStatus,
+    pub user_decision: Option<String>,
+    pub source_reference_id: Option<String>,
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewRevealComplianceFindingInput {
+    pub project_id: String,
+    pub id: String,
+    pub review_status: RevealComplianceReviewStatus,
+    pub user_decision: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RevealContext {

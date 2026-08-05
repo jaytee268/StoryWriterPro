@@ -94,4 +94,33 @@ describe('structured reveal knowledge engine', () => {
     await expect(repository.saveRevealAudienceState({ projectId: workspace.project.id, contractId: contract.id, audienceKind: 'reader', knowledgeLevel: 'unknown', beliefText: '', validFromPosition: current, validUntilPosition: current, status: 'confirmed', authorConfirmed: true })).rejects.toThrow('validUntil strikt nach validFrom');
     await expect(repository.saveRevealClueRule({ projectId: workspace.project.id, contractId: contract.id, ruleKind: 'forbidden', clueType: 'direct', description: 'Test', maximumExplicitness: 'direct', validFromPosition: {}, validUntilPosition: {}, status: 'confirmed', authorConfirmed: true })).rejects.toThrow('validUntil strikt nach validFrom');
   });
+
+  it('aktiviert ein Reveal-Bundle atomar, idempotent und ohne Manuskriptmutation', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const chapter = await repository.createChapter({ bookId: workspace.books[0]!.id, title: 'Reveal-Bundle' });
+    const scene = await repository.createScene({ chapterId: chapter.id, title: 'Enthüllung' });
+    const character = await repository.createStoryEntity({ projectId: workspace.project.id, name: 'M', type: 'character', description: '', status: 'confirmed', confidence: 1, chapterId: chapter.id, sceneId: scene.id, excerpt: '', authorConfirmed: true, tags: [] });
+    const input = {
+      projectId: workspace.project.id,
+      subjectEntity: { id: 'candidate-branch-truth', name: 'Branch-Identität', type: 'secret' as const, description: 'Mehrere Figuren sind Varianten derselben Person.', tags: ['reveal'] },
+      contract: { id: 'bundle-contract', projectId: workspace.project.id, subjectEntityId: 'candidate-branch-truth', title: 'Branch-Identität', truthStatement: 'Mehrere Figuren sind Varianten derselben Person.', scope: 'book' as const, status: 'proposed' as const, authorConfirmed: false, revealState: 'author_only' as const, revealConditionText: 'Im Finale.', notes: '' },
+      audienceStates: [{ projectId: workspace.project.id, contractId: 'candidate-branch-truth', audienceKind: 'character' as const, characterEntityId: character.id, knowledgeLevel: 'knows' as const, beliefText: 'M kennt die Wahrheit.', validFromPosition: { chapterId: chapter.id, sceneId: scene.id }, status: 'proposed' as const, authorConfirmed: false }],
+      clueRules: [{ projectId: workspace.project.id, contractId: 'candidate-branch-truth', ruleKind: 'forbidden' as const, clueType: 'direct_identity', description: 'Direkte Identitätsaussage vor dem Finale.', maximumExplicitness: 'direct' as const, status: 'proposed' as const, authorConfirmed: false }],
+    };
+    const before = await repository.listStoryEntities(workspace.project.id);
+    const first = await repository.activateRevealContractBundle(input);
+    const second = await repository.activateRevealContractBundle(input);
+    expect(first.contract.status).toBe('confirmed');
+    expect(first.contract.authorConfirmed).toBe(true);
+    expect(first.audienceStates[0]?.characterEntityId).toBe(character.id);
+    expect(first.clueRules[0]?.ruleKind).toBe('forbidden');
+    expect((await repository.listRevealContracts(workspace.project.id)).filter((item) => item.id === first.contract.id)).toHaveLength(1);
+    expect((await repository.listStoryEntities(workspace.project.id)).length).toBe(before.length + 1);
+    expect(second.contract.id).toBe(first.contract.id);
+    expect((await repository.loadWorkspace()).chapters.find((item) => item.id === chapter.id)?.scenes[0]?.content).toBe('');
+    const context = await repository.buildRevealContext({ projectId: workspace.project.id, position: { chapterId: chapter.id, sceneId: scene.id }, participatingCharacterIds: [character.id] });
+    expect(context.confirmedAuthorTruths).toHaveLength(1);
+    expect(context.participantKnowledgeAtPosition[0]?.knowledgeLevel).toBe('knows');
+  });
 });

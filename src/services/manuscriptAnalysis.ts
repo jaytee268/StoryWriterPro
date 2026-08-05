@@ -1,4 +1,4 @@
-import type { Chapter, ContinuityStateLedgerEntry, CreateManuscriptAnalysisJobInput, ManuscriptAnalysisDraftLedgerEntry, ManuscriptAnalysisJob, ManuscriptAnalysisPhase, ManuscriptAnalysisPhaseProgress, ManuscriptAnalysisUnit, ManuscriptSynthesisResult, NarrativeSummaryAnalysisResult, ManuscriptPhaseInput, PlotThreadSynthesisResult, BookEndStateResult, GlobalCountercheckResult, ManuscriptAnalysisArtifactType, SaveContinuityFindingInput, StoryEntity, ProvisionalEntity, DetectBookGenreResult } from '../types/domain';
+import type { Chapter, ContinuityStateLedgerEntry, CreateManuscriptAnalysisJobInput, ManuscriptAnalysisDraftLedgerEntry, ManuscriptAnalysisJob, ManuscriptAnalysisPhase, ManuscriptAnalysisPhaseProgress, ManuscriptAnalysisUnit, ManuscriptSynthesisResult, NarrativeSummaryAnalysisResult, ManuscriptPhaseInput, PlotThreadSynthesisResult, BookEndStateResult, GlobalCountercheckResult, ManuscriptAnalysisArtifactType, SaveContinuityFindingInput, StoryEntity, ProvisionalEntity, DetectBookGenreResult, SaveRevealComplianceFindingInput } from '../types/domain';
 import type { StoryRepository } from './storyRepository';
 import { contentHash } from '../utils/aiText';
 import { editorContentToPlainText } from '../utils/editorContent';
@@ -11,7 +11,7 @@ import { buildHierarchicalPhaseContext, truncateUnicode } from './analysisBudget
 import { GENRE_CATALOG } from '../data/genreCatalog';
 
 const activeJobs = new Map<string, Promise<void>>();
-const PHASES: ManuscriptAnalysisPhase[] = ['structure', 'passage_continuity', 'bible_extraction', 'character_memory', 'scene_or_chapter_synthesis', 'narrative_summaries', 'plot_thread_synthesis', 'book_end_state', 'global_countercheck', 'user_review', 'completed'];
+const PHASES: ManuscriptAnalysisPhase[] = ['structure', 'passage_continuity', 'reveal_compliance', 'bible_extraction', 'character_memory', 'scene_or_chapter_synthesis', 'narrative_summaries', 'plot_thread_synthesis', 'book_end_state', 'global_countercheck', 'user_review', 'completed'];
 const PROMPT_VERSION = 'manuscript-analysis-v2-multipass';
 
 function draftEntryToLedger(entry: ManuscriptAnalysisDraftLedgerEntry): ContinuityStateLedgerEntry {
@@ -59,8 +59,8 @@ export interface ManuscriptReviewArtifactDetail { artifactId: string; artifactTy
 
 export async function loadManuscriptAnalysisReviewDetails(repository: StoryRepository, progress: ManuscriptAnalysisProgress): Promise<ManuscriptReviewArtifactDetail[]> {
   const projectId = progress.job.projectId;
-  const [runs, memoryRuns, bible, memories, findings, rules, threads, summaries, events, edges, provisional, merges, sources] = await Promise.all([
-    repository.listBibleUpdateRuns(projectId), repository.listCharacterMemoryUpdateRuns(projectId), repository.listBibleUpdateRuns(projectId).then(async (items) => (await Promise.all(items.map((run) => repository.listBibleProposals(run.id)))).flat()), repository.listCharacterMemoryUpdateRuns(projectId).then(async (items) => (await Promise.all(items.map((run) => repository.listCharacterMemoryProposals(run.id)))).flat()), repository.listContinuityReviewFindings(projectId), repository.listProjectRuleProposals(projectId), repository.listPlotThreadLifecycleProposals(projectId), repository.listNarrativeSummaries(projectId), repository.listTimelineEvents(projectId), repository.listStoryGraphEdges(projectId), repository.listProvisionalEntities(progress.job.id), repository.listProvisionalMergeProposals(progress.job.id), repository.listSourceReferences(projectId),
+  const [runs, memoryRuns, bible, memories, findings, rules, threads, summaries, events, edges, provisional, merges, sources, revealFindings] = await Promise.all([
+    repository.listBibleUpdateRuns(projectId), repository.listCharacterMemoryUpdateRuns(projectId), repository.listBibleUpdateRuns(projectId).then(async (items) => (await Promise.all(items.map((run) => repository.listBibleProposals(run.id)))).flat()), repository.listCharacterMemoryUpdateRuns(projectId).then(async (items) => (await Promise.all(items.map((run) => repository.listCharacterMemoryProposals(run.id)))).flat()), repository.listContinuityReviewFindings(projectId), repository.listProjectRuleProposals(projectId), repository.listPlotThreadLifecycleProposals(projectId), repository.listNarrativeSummaries(projectId), repository.listTimelineEvents(projectId), repository.listStoryGraphEdges(projectId), repository.listProvisionalEntities(progress.job.id), repository.listProvisionalMergeProposals(progress.job.id), repository.listSourceReferences(projectId), repository.listRevealComplianceFindings(projectId, progress.job.id),
   ]);
   void runs; void memoryRuns;
   const details: ManuscriptReviewArtifactDetail[] = [];
@@ -70,6 +70,7 @@ export async function loadManuscriptAnalysisReviewDetails(repository: StoryRepos
   for (const proposal of bible) add({ artifactId: proposal.id, artifactType: 'bible_proposal', title: proposal.candidateName, body: proposal.candidateDescription, chapterId: progress.units.find((unit) => unit.sceneId === proposal.sceneId)?.chapterId, sceneId: proposal.sceneId, excerpt: proposal.evidenceExcerpt, confidence: proposal.confidence, reason: proposal.reason, sourceReferenceId: sources.find((source) => source.proposalId === proposal.id)?.id, startOffset: proposal.startOffset, endOffset: proposal.endOffset });
   for (const proposal of memories) add({ artifactId: proposal.id, artifactType: 'character_memory_proposal', title: proposal.proposalKind, body: JSON.stringify(proposal.payload), sceneId: proposal.sceneId, excerpt: proposal.evidenceExcerpt, confidence: proposal.confidence, reason: proposal.reason, sourceReferenceId: sources.find((source) => source.proposalId === proposal.id)?.id, startOffset: proposal.startOffset, endOffset: proposal.endOffset });
   for (const finding of findings) add({ artifactId: finding.id, artifactType: 'continuity_finding', title: finding.findingType, body: finding.objectiveConflict, chapterId: finding.chapterId, sceneId: finding.sceneId, excerpt: finding.evidenceExcerpt, confidence: finding.confidence, reason: finding.reason, sourceReferenceId: finding.sourceReferenceId, startOffset: finding.startOffset, endOffset: finding.endOffset });
+  for (const finding of revealFindings) add({ artifactId: finding.id, artifactType: 'continuity_finding', title: ({ premature_revelation: 'Geheimnis wird möglicherweise zu früh verraten', impossible_character_knowledge: 'Figur weiß hier möglicherweise zu viel', narrator_information_leak: 'Der Erzähler verrät verborgenes Wissen', forbidden_clue: 'Hinweis ist vor der Enthüllung zu eindeutig', reveal_plan_conflict: 'Text widerspricht dem geplanten Reveal', missing_required_foreshadowing: 'Erforderliche Vorbereitung fehlt möglicherweise', ambiguous_possible_leak: 'Möglicher Hinweis-Leak' } as Record<string, string>)[finding.findingType] ?? 'Reveal-Prüfung', body: finding.explanation, chapterId: finding.chapterId, sceneId: finding.sceneId, excerpt: finding.evidenceExcerpt, confidence: finding.confidence, reason: finding.explanation, sourceReferenceId: finding.sourceReferenceId, startOffset: finding.startOffset, endOffset: finding.endOffset });
   for (const proposal of rules) add({ artifactId: proposal.id, artifactType: 'project_rule_proposal', title: proposal.title, body: proposal.statement, chapterId: proposal.chapterId, sceneId: proposal.sceneId, excerpt: proposal.evidenceExcerpt, confidence: proposal.confidence, reason: proposal.reason, sourceReferenceId: proposal.sourceReferenceIds[0], startOffset: proposal.startOffset, endOffset: proposal.endOffset });
   for (const proposal of threads) add({ artifactId: proposal.id, artifactType: 'plot_thread_proposal', title: proposal.proposedStatus, body: proposal.evidenceExcerpt, excerpt: proposal.evidenceExcerpt, confidence: proposal.confidence, reason: proposal.reason, sourceReferenceId: proposal.sourceReferenceId, startOffset: proposal.startOffset, endOffset: proposal.endOffset });
   for (const summary of summaries) add({ artifactId: summary.id, artifactType: 'narrative_summary', title: `${summary.scopeType}-Zusammenfassung`, body: summary.summary, confidence: 1 });
@@ -256,6 +257,7 @@ export class ManuscriptAnalysisController {
         job = await this.savePhase(job, phase, { status: 'running', requestedProvider: active.provider.id, errorCode: undefined, errorMessage: undefined }, 'running');
         if (phase === 'structure') await this.runStructure(job, workspace, chapters, units, active.provider, active.settings.bibleUpdateTimeoutSeconds);
         else if (phase === 'passage_continuity') await this.runContinuity(job, workspace, units, active.provider, active.settings.bibleUpdateTimeoutSeconds);
+        else if (phase === 'reveal_compliance') await this.runRevealCompliance(job, workspace, units, active.provider, active.settings.bibleUpdateTimeoutSeconds);
         else if (phase === 'bible_extraction' || phase === 'character_memory') await this.markIntegratedPassagePhase(job, phase, units, active.provider);
         else if (phase === 'scene_or_chapter_synthesis') await this.runChapterSynthesis(job, workspace, chapters, active.provider, active.settings.bibleUpdateTimeoutSeconds);
         else if (phase === 'narrative_summaries') await this.runNarrativeSummaries(job, workspace, active.provider, active.settings.bibleUpdateTimeoutSeconds);
@@ -378,6 +380,38 @@ export class ManuscriptAnalysisController {
         if (this.cancelled || this.paused) throw error;
         const message = errorText(error); await this.repository.updateManuscriptAnalysisUnit({ id: unit.id, status: 'failed', actualProvider: provider.id, errorCode: errorCode(error), errorMessage: message }); throw error;
       }
+    }
+  }
+
+  private async runRevealCompliance(job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, units: ManuscriptAnalysisUnit[], provider: Provider, timeout: number): Promise<void> {
+    const contracts = (await this.repository.listRevealContracts(workspace.project.id)).filter((contract) => contract.status === 'confirmed' && contract.authorConfirmed);
+    const progress = this.emptyProgress('reveal_compliance', units.length, provider.id);
+    if (!contracts.length) { progress.status = 'completed'; progress.completedUnits = units.length; progress.actualProvider = provider.id; progress.updatedAt = new Date().toISOString(); await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'running', phaseProgress: { ...(await this.repository.getManuscriptAnalysisJob(job.id)).phaseProgress, reveal_compliance: progress } }); return; }
+    for (const unit of units) {
+      if (!await this.checkControl(job)) return;
+      const chapter = workspace.chapters.find((item) => item.id === unit.chapterId); const scene = chapter?.scenes.find((item) => item.id === unit.sceneId); if (!chapter || !scene) throw new Error('Kapitel oder Szene der Reveal-Prüfeinheit wurde nicht gefunden.');
+      const text = Array.from(editorContentToPlainText(scene.content)).slice(unit.startOffset, unit.endOffset).join('');
+      const currentPosition = { bookId: workspace.books.find((book) => book.id === chapter.bookId)?.id, chapterId: chapter.id, sceneId: scene.id, chapterOrderIndex: chapter.orderIndex, sceneOrderIndex: scene.orderIndex, offset: unit.startOffset };
+      const context = await this.repository.buildRevealContext({ projectId: workspace.project.id, position: currentPosition });
+      for (const contract of contracts) {
+        if (!context.confirmedAuthorTruths.some((item) => item.id === contract.id)) continue;
+        const inputHash = contentHash(`${unit.contentHash}:${contract.id}:${JSON.stringify(context)}`);
+        const existing = (await this.repository.listRevealComplianceRuns(workspace.project.id, job.id, unit.id)).find((run) => run.contractId === contract.id && run.inputHash === inputHash && run.status === 'completed');
+        if (existing) continue;
+        const run = await this.repository.saveRevealComplianceRun({ jobId: job.id, unitId: unit.id, projectId: workspace.project.id, contractId: contract.id, inputHash, providerId: provider.id, promptVersion: 'storymemory-reveal-compliance-v1', status: 'running' });
+        try {
+          const povCharacterId = workspace.entities.find((entity) => entity.type === 'character' && entity.name === scene.pov)?.id;
+          const participatingCharacterIds = workspace.entities.filter((entity) => entity.type === 'character' && text.includes(entity.name)).map((entity) => entity.id).filter((id, index, ids) => ids.indexOf(id) === index);
+          const result = await provider.validateRevealCompliance({ projectId: workspace.project.id, manuscriptPosition: currentPosition, text, textKind: 'manuscript', povCharacterId, participatingCharacterIds, revealContext: context }, timeout);
+          const findings: SaveRevealComplianceFindingInput[] = result.findings.filter((finding) => finding.contractId === contract.id).map((finding) => ({ ...finding, runId: run.id, jobId: job.id, unitId: unit.id, projectId: workspace.project.id, chapterId: chapter.id, sceneId: scene.id, providerId: provider.id, promptVersion: 'storymemory-reveal-compliance-v1', inputHash, reviewStatus: 'open' as const }));
+          if (findings.length) {
+            const savedFindings = await this.repository.saveRevealComplianceFindings(findings);
+            await this.repository.saveManuscriptAnalysisArtifacts(job.id, savedFindings.map((finding) => ({ jobId: job.id, projectId: workspace.project.id, phase: 'reveal_compliance' as const, unitId: unit.id, artifactType: 'continuity_finding' as const, artifactId: finding.id, reviewStatus: 'pending' as const, explicitlySkipped: false })));
+          }
+          await this.repository.saveRevealComplianceRun({ id: run.id, jobId: job.id, unitId: unit.id, projectId: workspace.project.id, contractId: contract.id, inputHash, providerId: provider.id, promptVersion: 'storymemory-reveal-compliance-v1', status: 'completed' });
+        } catch (error) { await this.repository.saveRevealComplianceRun({ id: run.id, jobId: job.id, unitId: unit.id, projectId: workspace.project.id, contractId: contract.id, inputHash, providerId: provider.id, promptVersion: 'storymemory-reveal-compliance-v1', status: 'failed', errorCode: errorCode(error), errorMessage: errorText(error) }); throw error; }
+      }
+      progress.completedUnits += 1; progress.lastSuccessfulUnitId = unit.id; progress.actualProvider = provider.id; progress.updatedAt = new Date().toISOString(); await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'running', currentUnitId: undefined, lastSuccessfulUnitId: unit.id, phaseProgress: { ...(await this.repository.getManuscriptAnalysisJob(job.id)).phaseProgress, reveal_compliance: progress } });
     }
   }
 

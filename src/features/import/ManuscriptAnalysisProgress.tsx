@@ -28,7 +28,7 @@ interface Props {
   onCompleteReview: (explicitlySkip?: boolean) => void;
 }
 
-const phaseLabels: Record<ManuscriptAnalysisPhase, string> = { structure: 'Strukturprüfung', passage_continuity: 'Passagenanalyse', bible_extraction: 'Bible-Vorschläge', character_memory: 'Character Memories', scene_or_chapter_synthesis: 'Kapitel-Synthesen', narrative_summaries: 'Zusammenfassungen', plot_thread_synthesis: 'Handlungsstränge', book_end_state: 'Buch-Endzustand', global_countercheck: 'Globale Gegenprüfung', user_review: 'Review', completed: 'Abgeschlossen' };
+const phaseLabels: Record<ManuscriptAnalysisPhase, string> = { structure: 'Strukturprüfung', passage_continuity: 'Passagenanalyse', reveal_compliance: 'Enthüllungsprüfung', bible_extraction: 'Bible-Vorschläge', character_memory: 'Character Memories', scene_or_chapter_synthesis: 'Kapitel-Synthesen', narrative_summaries: 'Zusammenfassungen', plot_thread_synthesis: 'Handlungsstränge', book_end_state: 'Buch-Endzustand', global_countercheck: 'Globale Gegenprüfung', user_review: 'Review', completed: 'Abgeschlossen' };
 
 function CompletionReport({ report }: { report: ManuscriptAnalysisCompletionReport }) {
   const { payload } = report;
