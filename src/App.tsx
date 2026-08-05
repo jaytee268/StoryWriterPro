@@ -116,10 +116,12 @@ export function App() {
     const progress = await loadManuscriptAnalysisProgress(repository, selected.id);
     const reviewDetails = await loadManuscriptAnalysisReviewDetails(repository, progress);
     const structureRuns = await repository.listManuscriptStructureRuns(workspace.project.id);
-    const latestStructureRun = structureRuns.filter((run) => run.status !== 'failed').sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-    const structureProposals = latestStructureRun ? await repository.listManuscriptStructureProposals(latestStructureRun.id) : [];
+    const jobChapterIds = new Set(progress.units.map((unit) => unit.chapterId));
+    const relevantStructureRuns = structureRuns.filter((run) => run.status !== 'failed' && jobChapterIds.has(run.chapterId)).sort((a, b) => (workspace.chapters.find((chapter) => chapter.id === a.chapterId)?.orderIndex ?? Number.MAX_SAFE_INTEGER) - (workspace.chapters.find((chapter) => chapter.id === b.chapterId)?.orderIndex ?? Number.MAX_SAFE_INTEGER));
+    const structureProposalGroups = await Promise.all(relevantStructureRuns.map(async (run) => repository.listManuscriptStructureProposals(run.id)));
+    const structureProposals = structureProposalGroups.flat();
     setManuscriptAnalysis({ job: progress.job, units: progress.units, draftLedger: progress.draftLedger, phaseResults: progress.phaseResults, artifacts: progress.artifacts, completionReport: progress.completionReport ?? undefined, reviewDetails, structureRuns, structureProposals });
-  }, [workspace?.project.id]);
+  }, [workspace?.chapters, workspace?.project.id]);
   useEffect(() => { void refreshManuscriptAnalysis(); }, [refreshManuscriptAnalysis]);
   const refreshVisualization = useCallback(async () => {
     if (!workspace?.project.id) return;
@@ -265,7 +267,7 @@ export function App() {
     catch (error) { setManuscriptAnalysisError(error instanceof Error ? error.message : String(error)); }
     finally { await refreshManuscriptAnalysis(jobId); }
   }, [refreshManuscriptAnalysis]);
-  const applyManuscriptStructure = useCallback(async (runId: string) => { const jobId = manuscriptAnalysis?.job.id; if (!jobId || !workspace?.project.id) return; try { await repository.applyManuscriptStructure(workspace.project.id, runId); await loadWorkspace(workspace.project.id); await startManuscriptAnalysis(jobId); } catch (error) { setManuscriptAnalysisError(error instanceof Error ? error.message : String(error)); await refreshManuscriptAnalysis(jobId); } }, [loadWorkspace, manuscriptAnalysis?.job.id, refreshManuscriptAnalysis, startManuscriptAnalysis, workspace?.project.id]);
+  const applyManuscriptStructure = useCallback(async (runId: string) => { if (!runId) return; const jobId = manuscriptAnalysis?.job.id; if (!jobId || !workspace?.project.id) return; try { await repository.applyReviewedManuscriptStructure(jobId); await loadWorkspace(workspace.project.id); await startManuscriptAnalysis(jobId); } catch (error) { setManuscriptAnalysisError(error instanceof Error ? error.message : String(error)); await refreshManuscriptAnalysis(jobId); } }, [loadWorkspace, manuscriptAnalysis?.job.id, refreshManuscriptAnalysis, startManuscriptAnalysis, workspace?.project.id]);
   const pauseManuscriptAnalysis = useCallback(async () => { await manuscriptAnalysisController.current?.pause(); await refreshManuscriptAnalysis(manuscriptAnalysis?.job.id); }, [manuscriptAnalysis?.job.id, refreshManuscriptAnalysis]);
   const cancelManuscriptAnalysis = useCallback(async () => { await manuscriptAnalysisController.current?.cancel(); await refreshManuscriptAnalysis(manuscriptAnalysis?.job.id); }, [manuscriptAnalysis?.job.id, refreshManuscriptAnalysis]);
   const retryManuscriptAnalysis = useCallback(async () => { const jobId = manuscriptAnalysis?.job.id; if (!jobId) return; const controller = manuscriptAnalysisController.current?.jobId === jobId ? manuscriptAnalysisController.current : new ManuscriptAnalysisController(repository, jobId); manuscriptAnalysisController.current = controller; try { await controller.retryFailed(); } catch (error) { setManuscriptAnalysisError(error instanceof Error ? error.message : String(error)); } finally { await refreshManuscriptAnalysis(jobId); } }, [manuscriptAnalysis?.job.id, refreshManuscriptAnalysis]);

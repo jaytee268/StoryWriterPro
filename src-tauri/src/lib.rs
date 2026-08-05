@@ -155,6 +155,7 @@ pub fn run() {
             commands::save_manuscript_structure_proposals,
             commands::review_manuscript_structure_proposal,
             commands::apply_manuscript_structure,
+            commands::apply_reviewed_manuscript_structure,
             commands::list_provisional_entities,
             commands::save_provisional_entity,
             commands::materialize_provisional_entity,
