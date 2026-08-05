@@ -84,10 +84,11 @@ describe('Projekt-Onboarding', () => {
     await act(async () => root.render(createElement(ProjectOnboarding, { repository, onCreated, onContinue: vi.fn(), onOpenLore: vi.fn(), onOpenImport: vi.fn() })));
     await act(async () => { inputValue(container.querySelector('#project-title') as HTMLInputElement, 'Lore-Buch'); container.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); });
     await act(async () => { textareaValue(container.querySelector('#onboarding-lore-notes') as HTMLTextAreaElement, 'Die Stadt schützt ihre Archive durch ein jährliches Ritual.'); (container.querySelector('button.primary-button') as HTMLButtonElement).click(); });
+    await act(async () => textareaValue(container.querySelector('#onboarding-manuscript-text') as HTMLTextAreaElement, 'Kapitel 1\n\nMarek öffnete die Tür.'));
     expect(repository.createProject).not.toHaveBeenCalled();
     await act(async () => (container.querySelector('button.primary-button') as HTMLButtonElement).click());
     await act(async () => [...container.querySelectorAll('button')].find((button) => button.textContent?.includes('Projekt anlegen'))?.click());
-    expect(onCreated).toHaveBeenCalledWith(created, expect.objectContaining({ currentStep: 'completed' }), 'Die Stadt schützt ihre Archive durch ein jährliches Ritual.');
+    expect(onCreated).toHaveBeenCalledWith(created, expect.objectContaining({ currentStep: 'completed' }), 'Die Stadt schützt ihre Archive durch ein jährliches Ritual.', 'Kapitel 1\n\nMarek öffnete die Tür.');
     act(() => root.unmount());
   });
 });

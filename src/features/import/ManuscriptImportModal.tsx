@@ -10,16 +10,17 @@ interface Props {
   bookId: string;
   repository: StoryRepository;
   providerId: string;
+  initialText?: string;
   onClose: () => void;
   onImported: (result: ManuscriptImportWorkflowResult) => Promise<void>;
 }
 
-export function ManuscriptImportModal({ projectId, bookId, repository, providerId, onClose, onImported }: Props) {
+export function ManuscriptImportModal({ projectId, bookId, repository, providerId, initialText, onClose, onImported }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<ManuscriptImportPreview>();
   const [sourceFile, setSourceFile] = useState<File>();
-  const [pasteMode, setPasteMode] = useState(false);
-  const [pasteText, setPasteText] = useState('');
+  const [pasteMode, setPasteMode] = useState(Boolean(initialText?.trim()));
+  const [pasteText, setPasteText] = useState(initialText ?? '');
   const [duplicateDocument, setDuplicateDocument] = useState<{ title: string }>();
   const [allowDuplicateVersion, setAllowDuplicateVersion] = useState(false);
   const [removePageMarkers, setRemovePageMarkers] = useState(true);

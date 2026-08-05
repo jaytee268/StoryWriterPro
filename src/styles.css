@@ -90,6 +90,7 @@
 .onboarding-choice h2 { color: #24344a; font-size: 22px; }
 .onboarding-choice p { max-width: 580px; color: #718096; font-size: 13px; line-height: 1.6; }
 .onboarding-lore-field { max-width: 680px; margin-top: 4px; }
+.onboarding-manuscript-field { max-width: 680px; margin-top: 4px; }
 .onboarding-inline-note { color: #8999ad !important; font-size: 11px !important; }
 .onboarding-choice-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 8px; }
 .onboarding-choice-actions button { min-height: 47px; }
