@@ -97,6 +97,7 @@ pub enum CodexTaskKind {
     AnalyzeLoreDraft,
     BuildLoreSheet,
     DetectBookGenre,
+    ValidateRevealCompliance,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -381,6 +382,7 @@ const BOOK_END_STATE_SCHEMA: &str = r#"{"type":"object","additionalProperties":f
 const GLOBAL_COUNTERCHECK_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["summary","contradictoryFacts","prematureKnowledge","lostOrDestroyedObjects","timeAndLocationConflicts","contradictoryRules","unclearExceptions","uncertainSources","countercheckFindings","warnings"],"properties":{"summary":{"type":"string"},"contradictoryFacts":{"type":"array","items":{"type":"string"}},"prematureKnowledge":{"type":"array","items":{"type":"string"}},"lostOrDestroyedObjects":{"type":"array","items":{"type":"string"}},"timeAndLocationConflicts":{"type":"array","items":{"type":"string"}},"contradictoryRules":{"type":"array","items":{"type":"string"}},"unclearExceptions":{"type":"array","items":{"type":"string"}},"uncertainSources":{"type":"array","items":{"type":"string"}},"countercheckFindings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["severity","category","objectiveConflict","reason","confidence","evidenceExcerpt","sourceReferenceId"],"properties":{"severity":{"enum":["info","warning","critical"]},"category":{"type":"string"},"objectiveConflict":{"type":"string"},"reason":{"type":"string"},"confidence":{"type":"number","minimum":0,"maximum":1},"evidenceExcerpt":{"type":["string","null"]},"sourceReferenceId":{"type":["string","null"]}}}},"warnings":{"type":"array","items":{"type":"string"}}}}"#;
 const LORE_DRAFT_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["understandingSummary","confirmedStatements","proposedWorldRules","prerequisites","effects","limitations","costs","exceptions","terminology","relevantOrganizations","relevantLocations","historicalBackground","unresolvedQuestions","contradictions","excludedContent","clarificationQuestions","confidence","warnings"],"properties":{"understandingSummary":{"type":"string"},"confirmedStatements":{"type":"array","items":{"type":"string"}},"proposedWorldRules":{"type":"array","items":{"type":"string"}},"prerequisites":{"type":"array","items":{"type":"string"}},"effects":{"type":"array","items":{"type":"string"}},"limitations":{"type":"array","items":{"type":"string"}},"costs":{"type":"array","items":{"type":"string"}},"exceptions":{"type":"array","items":{"type":"string"}},"terminology":{"type":"array","items":{"type":"string"}},"relevantOrganizations":{"type":"array","items":{"type":"string"}},"relevantLocations":{"type":"array","items":{"type":"string"}},"historicalBackground":{"type":"array","items":{"type":"string"}},"unresolvedQuestions":{"type":"array","items":{"type":"string"}},"contradictions":{"type":"array","items":{"type":"string"}},"excludedContent":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["content","suggestedTarget","reason"],"properties":{"content":{"type":"string"},"suggestedTarget":{"enum":["character_memory","plot_thread","continuity_state","manuscript","style"]},"reason":{"type":"string"}}}},"clarificationQuestions":{"type":"array","items":{"type":"string"}},"confidence":{"type":"number","minimum":0,"maximum":1},"warnings":{"type":"array","items":{"type":"string"}}}}"#;
 const LORE_SHEET_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["title","premise","categories","worldRules","worldRuleObjects","prerequisites","effects","limitations","costs","exceptions","terminology","organizations","locations","historicalEvents","knownAspects","unknownAspects","ruleConnections","openQuestions","warnings"],"properties":{"title":{"type":"string"},"premise":{"type":"string"},"categories":{"type":"array","items":{"type":"string"}},"worldRules":{"type":"array","items":{"type":"string"}},"worldRuleObjects":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["temporaryId","title","statement","prerequisites","effects","limitations","costs","exceptions","relatedTerminology","connectedItemIds","sourceSpans","confidence"],"properties":{"temporaryId":{"type":"string"},"title":{"type":"string"},"statement":{"type":"string"},"prerequisites":{"type":"array","items":{"type":"string"}},"effects":{"type":"array","items":{"type":"string"}},"limitations":{"type":"array","items":{"type":"string"}},"costs":{"type":"array","items":{"type":"string"}},"exceptions":{"type":"array","items":{"type":"string"}},"relatedTerminology":{"type":"array","items":{"type":"string"}},"connectedItemIds":{"type":"array","items":{"type":"string"}},"sourceSpans":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["excerpt","startOffset","endOffset"],"properties":{"excerpt":{"type":"string"},"startOffset":{"type":"integer","minimum":0},"endOffset":{"type":"integer","minimum":0}}}},"confidence":{"type":"number","minimum":0,"maximum":1}}}},"prerequisites":{"type":"array","items":{"type":"string"}},"effects":{"type":"array","items":{"type":"string"}},"limitations":{"type":"array","items":{"type":"string"}},"costs":{"type":"array","items":{"type":"string"}},"exceptions":{"type":"array","items":{"type":"string"}},"terminology":{"type":"array","items":{"type":"string"}},"organizations":{"type":"array","items":{"type":"string"}},"locations":{"type":"array","items":{"type":"string"}},"historicalEvents":{"type":"array","items":{"type":"string"}},"knownAspects":{"type":"array","items":{"type":"string"}},"unknownAspects":{"type":"array","items":{"type":"string"}},"ruleConnections":{"type":"array","items":{"type":"string"}},"openQuestions":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string"}}}}"#;
+const REVEAL_COMPLIANCE_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["findings","warnings"],"properties":{"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["findingType","severity","contractId","subjectEntityId","characterEntityId","evidenceExcerpt","explanation","expectedKnowledgeLevel","actualDisclosureLevel","confidence","startOffset","endOffset"],"properties":{"findingType":{"enum":["premature_revelation","impossible_character_knowledge","narrator_information_leak","forbidden_clue","reveal_plan_conflict","missing_required_foreshadowing","ambiguous_possible_leak"]},"severity":{"enum":["info","warning","critical"]},"contractId":{"type":"string"},"subjectEntityId":{"type":"string"},"characterEntityId":{"type":["string","null"]},"evidenceExcerpt":{"type":"string"},"explanation":{"type":"string"},"expectedKnowledgeLevel":{"enum":["unknown","suspects","partial","knows","false_belief"]},"actualDisclosureLevel":{"enum":["unknown","suspects","partial","knows","false_belief"]},"confidence":{"type":"number","minimum":0,"maximum":1},"startOffset":{"type":["integer","null"],"minimum":0},"endOffset":{"type":["integer","null"],"minimum":0}}}},"warnings":{"type":"array","items":{"type":"string"}}}}"#;
 const CHAPTER_PLAN_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["chapterTitle","chapterGoal","povCharacterId","startingState","endingState","chapterSummary","endingConnection","newInformation","withheldInformation","assumptions","beats","warnings"],"properties":{"chapterTitle":{"type":"string","minLength":1,"maxLength":300},"chapterGoal":{"type":"string","maxLength":2000},"povCharacterId":{"type":["string","null"]},"startingState":{"type":"string","maxLength":3000},"endingState":{"type":"string","maxLength":3000},"chapterSummary":{"type":"string","maxLength":6000},"endingConnection":{"type":"string","maxLength":3000},"newInformation":{"type":"array","items":{"type":"string","maxLength":1000}},"withheldInformation":{"type":"array","items":{"type":"string","maxLength":1000}},"assumptions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["type","text"],"properties":{"type":{"type":"string"},"text":{"type":"string","maxLength":2000}}}},"beats":{"type":"array","minItems":1,"maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["id","orderIndex","title","purpose","participatingCharacterIds","startingState","event","conflict","newInformation","knowledgeChanges","relationshipChanges","cluesUsed","loreEntityIds","endingHook","targetWords"],"properties":{"id":{"type":"string"},"orderIndex":{"type":"integer","minimum":0},"title":{"type":"string","maxLength":300},"purpose":{"type":"string","maxLength":2000},"participatingCharacterIds":{"type":"array","items":{"type":"string"}},"startingState":{"type":"string"},"event":{"type":"string"},"conflict":{"type":"string"},"newInformation":{"type":"array","items":{"type":"string"}},"knowledgeChanges":{"type":"array","items":{"type":"object"}},"relationshipChanges":{"type":"array","items":{"type":"object"}},"cluesUsed":{"type":"array","items":{"type":"string"}},"loreEntityIds":{"type":"array","items":{"type":"string"}},"endingHook":{"type":"string"},"targetWords":{"type":"integer","minimum":1}}}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
 const CHAPTER_SECTION_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["content","continuationSummary","continuityState","usedEntityIds","usedMemoryIds","usedSourceIds","warnings"],"properties":{"content":{"type":"string","minLength":1,"maxLength":50000},"continuationSummary":{"type":"string","maxLength":3000},"continuityState":{"type":"object","additionalProperties":false,"required":["currentLocation","currentStoryTime","presentCharacterIds","characterStates","establishedFacts","knowledgeChanges","relationshipChanges","movedObjects","injuries","cluesIntroduced","promisesCreated","unresolvedActions","lastParagraphSummary"],"properties":{"currentLocation":{"type":"string"},"currentStoryTime":{"type":"string"},"presentCharacterIds":{"type":"array","items":{"type":"string"}},"characterStates":{"type":"array","items":{"type":"object"}},"establishedFacts":{"type":"array","items":{"type":"string"}},"knowledgeChanges":{"type":"array","items":{"type":"object"}},"relationshipChanges":{"type":"array","items":{"type":"object"}},"movedObjects":{"type":"array","items":{"type":"object"}},"injuries":{"type":"array","items":{"type":"object"}},"cluesIntroduced":{"type":"array","items":{"type":"string"}},"promisesCreated":{"type":"array","items":{"type":"string"}},"unresolvedActions":{"type":"array","items":{"type":"string"}},"lastParagraphSummary":{"type":"string"}}},"usedEntityIds":{"type":"array","items":{"type":"string"}},"usedMemoryIds":{"type":"array","items":{"type":"string"}},"usedSourceIds":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
 const REVIEW_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["issues","warnings"],"properties":{"issues":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["reviewScope","issueType","severity","title","description","relatedEntityIds","relatedSourceIds","suggestedAction","status"],"properties":{"reviewScope":{"enum":["section","chapter"]},"issueType":{"type":"string"},"severity":{"enum":["info","warning","blocking"]},"title":{"type":"string","maxLength":300},"description":{"type":"string","maxLength":4000},"relatedEntityIds":{"type":"array","items":{"type":"string"}},"relatedSourceIds":{"type":"array","items":{"type":"string"}},"suggestedAction":{"type":"string","maxLength":1000},"status":{"type":"string"}}}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
@@ -409,6 +411,7 @@ fn schema_for_task(kind: &CodexTaskKind) -> &'static str {
         CodexTaskKind::AnalyzeLoreDraft => LORE_DRAFT_SCHEMA,
         CodexTaskKind::BuildLoreSheet => LORE_SHEET_SCHEMA,
         CodexTaskKind::DetectBookGenre => GENRE_SCHEMA,
+        CodexTaskKind::ValidateRevealCompliance => REVEAL_COMPLIANCE_SCHEMA,
         CodexTaskKind::PlanChapterDraft => CHAPTER_PLAN_SCHEMA_STRICT,
         CodexTaskKind::DraftChapterSection => CHAPTER_SECTION_SCHEMA_STRICT,
         CodexTaskKind::ReviewChapterSection | CodexTaskKind::ReviewCompleteChapter => REVIEW_SCHEMA,
@@ -439,6 +442,7 @@ fn prompt_for(kind: &CodexTaskKind) -> (&'static str, &'static str) {
         CodexTaskKind::AnalyzeLoreDraft => ("storymemory-lore-draft-v1", "Analysiere ausschließlich freie Lore-Notizen. Erkläre das Verständnis, trenne Weltregeln von Inhalten für andere Storybereiche und übernehme nichts automatisch in Story Bible oder Projektregeln."),
         CodexTaskKind::BuildLoreSheet => ("storymemory-lore-sheet-v1", "Erstelle ausschließlich aus dem geprüften Lore-Verständnis ein vorgeschlagenes Lore Sheet. Erfinde keine Fakten und bestätige keinen Kanon."),
         CodexTaskKind::DetectBookGenre => ("storymemory-genre-v1", "Erkenne optional das Buchgenre ausschließlich aus dem strukturierten Projektkontext. Verwende nur IDs aus dem übergebenen Katalog. Überschreibe kein manuell bestätigtes Genre. Liefere ausschließlich JSON nach output-schema.json."),
+        CodexTaskKind::ValidateRevealCompliance => ("storymemory-reveal-compliance-v1", "Prüfe ausschließlich request.json auf vorzeitige Enthüllungen, unzulässiges Figurenwissen und verbotene Hinweise. AUTHOR TRUTH — NEVER COPY AUTOMATICALLY. Die Autorwahrheit ist kein automatisch sichtbares Erzählerwissen. Verwende nur den zeitlich gültigen Wissensstand der jeweiligen Figur. Melde direkte Enthüllungen vor dem geplanten Reveal; nach dem Reveal sind sie zulässig. Verändere weder Verträge noch Manuskript und liefere ausschließlich JSON nach output-schema.json. Offsets sind Unicode-Codepoints relativ zu request.text."),
     }
 }
 
@@ -792,6 +796,9 @@ fn result_matches_task(value: &Value, task: &CodexTaskKind) -> bool {
         }
         CodexTaskKind::DetectBookGenre => {
             object.contains_key("confidence") && object.contains_key("secondaryGenreIds")
+        }
+        CodexTaskKind::ValidateRevealCompliance => {
+            object.contains_key("findings") && object.contains_key("warnings")
         }
         CodexTaskKind::PlanChapterDraft => {
             object.contains_key("chapterTitle") && object.contains_key("beats")
@@ -1723,6 +1730,106 @@ fn validate_continuity_result(result: &Value, request: &Value) -> Result<Value, 
     Ok(result.clone())
 }
 
+fn validate_reveal_compliance_result(result: &Value, request: &Value) -> Result<Value, CodexError> {
+    let object = result.as_object().ok_or_else(|| {
+        CodexError::new(
+            "CODEX_SCHEMA_VALIDATION_FAILED",
+            "Reveal-Prüfergebnis ist kein Objekt.",
+        )
+    })?;
+    let findings = object
+        .get("findings")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            CodexError::new(
+                "CODEX_SCHEMA_VALIDATION_FAILED",
+                "Reveal-Prüfergebnis benötigt findings.",
+            )
+        })?;
+    if object.get("warnings").and_then(Value::as_array).is_none() {
+        return Err(CodexError::new(
+            "CODEX_SCHEMA_VALIDATION_FAILED",
+            "Reveal-Prüfergebnis benötigt warnings.",
+        ));
+    }
+    let text: Vec<char> = request
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .chars()
+        .collect();
+    let contract_ids: std::collections::HashSet<&str> = request
+        .pointer("/revealContext/confirmedAuthorTruths")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("id").and_then(Value::as_str))
+        .collect();
+    let subject_ids: std::collections::HashSet<&str> = request
+        .pointer("/revealContext/confirmedAuthorTruths")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("subjectEntityId").and_then(Value::as_str))
+        .collect();
+    let participant_ids: std::collections::HashSet<&str> = request
+        .get("participatingCharacterIds")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let pov_id = request.get("povCharacterId").and_then(Value::as_str);
+    for finding in findings {
+        let contract_id = valid_string(finding, "contractId", 200)?;
+        if !contract_ids.contains(contract_id) {
+            return Err(CodexError::new(
+                "CODEX_INVALID_REFERENCE",
+                "Reveal-Finding verweist auf einen nicht angeforderten Contract.",
+            ));
+        }
+        let subject_id = valid_string(finding, "subjectEntityId", 200)?;
+        if !subject_ids.contains(subject_id) {
+            return Err(CodexError::new(
+                "CODEX_INVALID_REFERENCE",
+                "Reveal-Finding verweist auf eine nicht angeforderte Wahrheits-Entität.",
+            ));
+        }
+        if let Some(character_id) = finding.get("characterEntityId").and_then(Value::as_str) {
+            if Some(character_id) != pov_id && !participant_ids.contains(character_id) {
+                return Err(CodexError::new(
+                    "CODEX_INVALID_REFERENCE",
+                    "Reveal-Finding verweist auf eine nicht beteiligte Figur.",
+                ));
+            }
+        }
+        let start = finding.get("startOffset").and_then(Value::as_i64);
+        let end = finding.get("endOffset").and_then(Value::as_i64);
+        if start.is_some() != end.is_some() {
+            return Err(CodexError::new(
+                "CODEX_INVALID_OFFSET",
+                "Reveal-Offsets müssen gemeinsam gesetzt werden.",
+            ));
+        }
+        if let (Some(start), Some(end)) = (start, end) {
+            if start < 0 || end < start || end as usize > text.len() {
+                return Err(CodexError::new(
+                    "CODEX_INVALID_OFFSET",
+                    "Reveal-Offset liegt außerhalb des Textes.",
+                ));
+            }
+            let excerpt: String = text[start as usize..end as usize].iter().collect();
+            if finding.get("evidenceExcerpt").and_then(Value::as_str) != Some(excerpt.as_str()) {
+                return Err(CodexError::new(
+                    "CODEX_EVIDENCE_OFFSET_MISMATCH",
+                    "Reveal-Belegstelle stimmt nicht mit den Unicode-Offsets überein.",
+                ));
+            }
+        }
+    }
+    Ok(result.clone())
+}
+
 fn validate_longform_result_for_task(
     result: &Value,
     kind: &CodexTaskKind,
@@ -1829,6 +1936,7 @@ fn validate_longform_result_for_task(
             "alternativeGenres",
             "audienceNotes",
         ],
+        CodexTaskKind::ValidateRevealCompliance => &["findings", "warnings"],
         CodexTaskKind::PlanChapterDraft => &[
             "chapterTitle",
             "chapterGoal",
@@ -2288,6 +2396,9 @@ pub fn run_task(
             validate_continuity_result(&raw, &input.request_json)?
         }
         CodexTaskKind::DetectBookGenre => validate_genre_result(&raw, &input.request_json)?,
+        CodexTaskKind::ValidateRevealCompliance => {
+            validate_reveal_compliance_result(&raw, &input.request_json)?
+        }
         CodexTaskKind::AnalyzeManuscriptStructure => {
             validate_longform_result_for_task(&raw, &input.task_kind)?
         }
@@ -2390,6 +2501,7 @@ mod tests {
             CHAPTER_PLAN_SCHEMA_STRICT,
             CHAPTER_SECTION_SCHEMA_STRICT,
             continuity_schema(),
+            REVEAL_COMPLIANCE_SCHEMA,
         ] {
             serde_json::from_str::<Value>(schema).expect("structured task schema must be JSON");
         }
@@ -2731,6 +2843,9 @@ mod tests {
             CodexTaskKind::DetectBookGenre => {
                 json!({"primaryGenreId":"fantasy","customPrimaryGenre":null,"secondaryGenreIds":["mystery"],"customSecondaryGenres":[],"confidence":0.68,"reasoning":"Die synthetischen Signale verbinden eine fantastische Welt mit einer offenen Ermittlungsfrage.","supportingSignals":["Weltregel mit übernatürlicher Wirkung","Zentrale offene Frage"],"contradictingSignals":[],"alternativeGenres":[{"genreId":"thriller","customGenre":null,"reason":"Die Spannung ist ebenfalls stark ausgeprägt."}],"audienceNotes":["Für erwachsene Leserinnen und Leser geeignet."],"warnings":[]})
             }
+            CodexTaskKind::ValidateRevealCompliance => {
+                json!({"findings":[],"warnings":[]})
+            }
             CodexTaskKind::PlanChapterDraft => {
                 json!({"chapterTitle":"Kapitel","chapterGoal":"Den Zettel einordnen.","povCharacterId":"char-1","startingState":"Der Zettel liegt bereit.","endingState":"Malik fasst eine Spur.","chapterSummary":"Malik untersucht einen Zettel.","endingConnection":"Eine neue Spur öffnet sich.","newInformation":["Der Zettel ist wichtig."],"withheldInformation":["Wer ihn hinterließ."],"assumptions":[{"type":"continuity","text":"Der Zettel bleibt erhalten."}],"beats":[{"id":"beat-1","orderIndex":0,"title":"Beobachtung","purpose":"Spur einführen.","participatingCharacterIds":["char-1"],"startingState":"Ruhe","event":"Malik findet den Zettel.","conflict":"Er versteht ihn nicht.","newInformation":["Eine Spur erscheint."],"knowledgeChanges":[{"characterId":"char-1","factEntityId":"entity-1","nextState":"suspects","reason":"Der Text ist auffällig."}],"relationshipChanges":[],"cluesUsed":["entity-1"],"loreEntityIds":["entity-1"],"endingHook":"Eine Frage bleibt.","targetWords":120}],"warnings":[]})
             }
@@ -2776,6 +2891,7 @@ mod tests {
             CodexTaskKind::AnalyzeLoreDraft,
             CodexTaskKind::BuildLoreSheet,
             CodexTaskKind::DetectBookGenre,
+            CodexTaskKind::ValidateRevealCompliance,
         ];
         for kind in kinds {
             let result = synthetic_task_result(kind.clone());
@@ -2800,6 +2916,10 @@ mod tests {
                     validate_continuity_result(&parsed, &input.request_json)
                         .expect("continuity fixture")
                 }
+                CodexTaskKind::ValidateRevealCompliance => {
+                    validate_reveal_compliance_result(&parsed, &input.request_json)
+                        .expect("reveal fixture")
+                }
                 _ => validate_longform_result_for_task(&parsed, &kind).expect("longform fixture"),
             };
         }
@@ -2813,6 +2933,25 @@ mod tests {
                 .unwrap_err()
                 .code,
             "CODEX_PROCESS_FAILED"
+        );
+    }
+
+    #[test]
+    fn reveal_compliance_rejects_foreign_contract_and_accepts_unicode_evidence() {
+        let request = json!({
+            "text": "😀 Kaelen war Daniel.",
+            "povCharacterId": "daniel",
+            "participatingCharacterIds": ["daniel"],
+            "revealContext": {"confirmedAuthorTruths": [{"id":"contract-1","subjectEntityId":"secret-1"}]}
+        });
+        let valid = json!({"findings":[{"findingType":"premature_revelation","severity":"critical","contractId":"contract-1","subjectEntityId":"secret-1","characterEntityId":null,"evidenceExcerpt":"Kaelen war Daniel.","explanation":"Direkte Identitätsaussage vor dem Finale.","expectedKnowledgeLevel":"unknown","actualDisclosureLevel":"knows","confidence":1.0,"startOffset":2,"endOffset":20}],"warnings":[]});
+        validate_reveal_compliance_result(&valid, &request).expect("valid Unicode finding");
+        let foreign = json!({"findings":[{"findingType":"premature_revelation","severity":"critical","contractId":"contract-foreign","subjectEntityId":"secret-1","characterEntityId":null,"evidenceExcerpt":"Kaelen war Daniel.","explanation":"Fremder Contract.","expectedKnowledgeLevel":"unknown","actualDisclosureLevel":"knows","confidence":1.0,"startOffset":2,"endOffset":20}],"warnings":[]});
+        assert_eq!(
+            validate_reveal_compliance_result(&foreign, &request)
+                .unwrap_err()
+                .code,
+            "CODEX_INVALID_REFERENCE"
         );
     }
 

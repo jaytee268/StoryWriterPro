@@ -3258,3 +3258,204 @@ pub fn validate_review_status(value: &str) -> Result<(), String> {
         _ => Err(format!("Ungültiger Review-Status: {value}")),
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RevealScope {
+    Series,
+    Book,
+    Arc,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RevealContractStatus {
+    Proposed,
+    Confirmed,
+    Rejected,
+    Retired,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RevealState {
+    AuthorOnly,
+    Foreshadowed,
+    ReaderRevealed,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RevealAudienceKind {
+    Reader,
+    Character,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RevealKnowledgeLevel {
+    Unknown,
+    Suspects,
+    Partial,
+    Knows,
+    FalseBelief,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RevealClueRuleKind {
+    Allowed,
+    Forbidden,
+    Required,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RevealExplicitness {
+    Subtle,
+    Suggestive,
+    Strong,
+    Direct,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RevealReviewStatus {
+    Proposed,
+    Confirmed,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RevealPosition {
+    pub book_id: Option<String>,
+    pub chapter_id: Option<String>,
+    pub scene_id: Option<String>,
+    pub book_order_index: Option<i64>,
+    pub chapter_order_index: Option<i64>,
+    pub scene_order_index: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevealContract {
+    pub id: String,
+    pub project_id: String,
+    pub subject_entity_id: String,
+    pub title: String,
+    pub truth_statement: String,
+    pub scope: RevealScope,
+    pub status: RevealContractStatus,
+    pub author_confirmed: bool,
+    pub reveal_state: RevealState,
+    pub planned_reveal_book_id: Option<String>,
+    pub planned_reveal_chapter_id: Option<String>,
+    pub planned_reveal_scene_id: Option<String>,
+    pub planned_reveal_offset: Option<i64>,
+    pub reveal_condition_text: String,
+    pub notes: String,
+    pub source_reference_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveRevealContractInput {
+    pub id: Option<String>,
+    pub project_id: String,
+    pub subject_entity_id: String,
+    pub title: String,
+    pub truth_statement: String,
+    pub scope: RevealScope,
+    pub status: RevealContractStatus,
+    pub author_confirmed: bool,
+    pub reveal_state: RevealState,
+    pub planned_reveal_book_id: Option<String>,
+    pub planned_reveal_chapter_id: Option<String>,
+    pub planned_reveal_scene_id: Option<String>,
+    pub planned_reveal_offset: Option<i64>,
+    #[serde(default)]
+    pub reveal_condition_text: String,
+    #[serde(default)]
+    pub notes: String,
+    pub source_reference_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevealAudienceState {
+    pub id: String,
+    pub contract_id: String,
+    pub project_id: String,
+    pub audience_kind: RevealAudienceKind,
+    pub character_entity_id: Option<String>,
+    pub knowledge_level: RevealKnowledgeLevel,
+    pub belief_text: String,
+    pub valid_from_position: RevealPosition,
+    pub valid_until_position: Option<RevealPosition>,
+    pub source_reference_id: Option<String>,
+    pub status: RevealReviewStatus,
+    pub author_confirmed: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveRevealAudienceStateInput {
+    pub id: Option<String>,
+    pub contract_id: String,
+    pub project_id: String,
+    pub audience_kind: RevealAudienceKind,
+    pub character_entity_id: Option<String>,
+    pub knowledge_level: RevealKnowledgeLevel,
+    pub belief_text: String,
+    pub valid_from_position: RevealPosition,
+    pub valid_until_position: Option<RevealPosition>,
+    pub source_reference_id: Option<String>,
+    pub status: RevealReviewStatus,
+    pub author_confirmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevealClueRule {
+    pub id: String,
+    pub contract_id: String,
+    pub project_id: String,
+    pub rule_kind: RevealClueRuleKind,
+    pub clue_type: String,
+    pub description: String,
+    pub maximum_explicitness: RevealExplicitness,
+    pub valid_from_position: Option<RevealPosition>,
+    pub valid_until_position: Option<RevealPosition>,
+    pub source_reference_id: Option<String>,
+    pub status: RevealReviewStatus,
+    pub author_confirmed: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveRevealClueRuleInput {
+    pub id: Option<String>,
+    pub contract_id: String,
+    pub project_id: String,
+    pub rule_kind: RevealClueRuleKind,
+    pub clue_type: String,
+    pub description: String,
+    pub maximum_explicitness: RevealExplicitness,
+    pub valid_from_position: Option<RevealPosition>,
+    pub valid_until_position: Option<RevealPosition>,
+    pub source_reference_id: Option<String>,
+    pub status: RevealReviewStatus,
+    pub author_confirmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevealContext {
+    pub confirmed_author_truths: Vec<RevealContract>,
+    pub reader_knowledge_at_position: Vec<RevealAudienceState>,
+    pub pov_character_knowledge_at_position: Vec<RevealAudienceState>,
+    pub participant_knowledge_at_position: Vec<RevealAudienceState>,
+    pub allowed_clues: Vec<RevealClueRule>,
+    pub forbidden_clues: Vec<RevealClueRule>,
+    pub required_clues: Vec<RevealClueRule>,
+    pub planned_reveals: Vec<RevealContract>,
+    pub warnings: Vec<String>,
+}

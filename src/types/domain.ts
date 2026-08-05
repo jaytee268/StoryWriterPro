@@ -86,6 +86,30 @@ export interface ContinuityContradictionProposal { findingType: Exclude<Continui
 export interface ContinuityLoreMatch { ruleId: string; rationale: string; confidence: number; }
 export interface ContinuityPlotThreadChangeProposal { entityId: string; proposedStatus: Exclude<PlotThreadLifecycleStatus, 'resolved'>; evidenceExcerpt: string; sourceReferenceId?: string; startOffset?: number; endOffset?: number; reason: string; confidence: number; }
 export interface ContinuityAnalysisResult { observedActions: ContinuityObservedPassage[]; proposedStateChanges: ContinuityStateChangeProposal[]; objectiveContradictions: ContinuityContradictionProposal[]; missingExplanations: ContinuityContradictionProposal[]; matchedLoreRules: ContinuityLoreMatch[]; newRuleProposals: SaveProjectRuleProposalInput[]; plotThreadChanges: ContinuityPlotThreadChangeProposal[]; confidence: number; evidence: ChatSource[]; warnings: string[]; }
+
+export type RevealScope = 'series' | 'book' | 'arc';
+export type RevealContractStatus = 'proposed' | 'confirmed' | 'rejected' | 'retired';
+export type RevealState = 'author_only' | 'foreshadowed' | 'reader_revealed';
+export type RevealAudienceKind = 'reader' | 'character';
+export type RevealKnowledgeLevel = 'unknown' | 'suspects' | 'partial' | 'knows' | 'false_belief';
+export type RevealClueRuleKind = 'allowed' | 'forbidden' | 'required';
+export type RevealExplicitness = 'subtle' | 'suggestive' | 'strong' | 'direct';
+export type RevealReviewStatus = 'proposed' | 'confirmed' | 'rejected';
+export interface RevealPosition { bookId?: string; chapterId?: string; sceneId?: string; bookOrderIndex?: number; chapterOrderIndex?: number; sceneOrderIndex?: number; offset?: number; }
+export interface RevealContract { id: string; projectId: string; subjectEntityId: string; title: string; truthStatement: string; scope: RevealScope; status: RevealContractStatus; authorConfirmed: boolean; revealState: RevealState; plannedRevealBookId?: string; plannedRevealChapterId?: string; plannedRevealSceneId?: string; plannedRevealOffset?: number; revealConditionText: string; notes: string; sourceReferenceId?: string; createdAt: string; updatedAt: string; }
+export interface SaveRevealContractInput extends Omit<RevealContract, 'id' | 'createdAt' | 'updatedAt'> { id?: string; }
+export interface RevealAudienceState { id: string; contractId: string; projectId: string; audienceKind: RevealAudienceKind; characterEntityId?: string; knowledgeLevel: RevealKnowledgeLevel; beliefText: string; validFromPosition: RevealPosition; validUntilPosition?: RevealPosition; sourceReferenceId?: string; status: RevealReviewStatus; authorConfirmed: boolean; createdAt: string; updatedAt: string; }
+export interface SaveRevealAudienceStateInput extends Omit<RevealAudienceState, 'id' | 'createdAt' | 'updatedAt'> { id?: string; }
+export interface RevealClueRule { id: string; contractId: string; projectId: string; ruleKind: RevealClueRuleKind; clueType: string; description: string; maximumExplicitness: RevealExplicitness; validFromPosition?: RevealPosition; validUntilPosition?: RevealPosition; sourceReferenceId?: string; status: RevealReviewStatus; authorConfirmed: boolean; createdAt: string; updatedAt: string; }
+export interface SaveRevealClueRuleInput extends Omit<RevealClueRule, 'id' | 'createdAt' | 'updatedAt'> { id?: string; }
+export interface RevealContext { confirmedAuthorTruths: RevealContract[]; readerKnowledgeAtPosition: RevealAudienceState[]; povCharacterKnowledgeAtPosition: RevealAudienceState[]; participantKnowledgeAtPosition: RevealAudienceState[]; allowedClues: RevealClueRule[]; forbiddenClues: RevealClueRule[]; requiredClues: RevealClueRule[]; plannedReveals: RevealContract[]; warnings: string[]; }
+export type RevealComplianceFindingType = 'premature_revelation' | 'impossible_character_knowledge' | 'narrator_information_leak' | 'forbidden_clue' | 'reveal_plan_conflict' | 'missing_required_foreshadowing' | 'ambiguous_possible_leak';
+export type RevealComplianceSeverity = 'info' | 'warning' | 'critical';
+export interface RevealComplianceFinding { findingType: RevealComplianceFindingType; severity: RevealComplianceSeverity; contractId: string; subjectEntityId: string; characterEntityId?: string; evidenceExcerpt: string; explanation: string; expectedKnowledgeLevel: RevealKnowledgeLevel; actualDisclosureLevel: RevealKnowledgeLevel; confidence: number; startOffset?: number; endOffset?: number; }
+export interface RevealComplianceResult { findings: RevealComplianceFinding[]; warnings: string[]; }
+export type RevealTextKind = 'manuscript' | 'generated_draft' | 'dialogue' | 'summary';
+export interface RevealComplianceInput { projectId: string; manuscriptPosition: RevealPosition; text: string; textKind: RevealTextKind; povCharacterId?: string; participatingCharacterIds: string[]; revealContext: RevealContext; }
+export interface LegacyRevealContractProposal { subjectEntityId?: string; title: string; truthStatement: string; revealState: RevealState; scope: RevealScope; status: 'proposed'; authorConfirmed: false; revealConditionText: string; notes: string; }
 export type ManuscriptAnalysisPhase = 'structure' | 'passage_continuity' | 'bible_extraction' | 'character_memory' | 'scene_or_chapter_synthesis' | 'narrative_summaries' | 'plot_thread_synthesis' | 'book_end_state' | 'global_countercheck' | 'user_review' | 'completed';
 export type StructureTransitionType = 'location_change' | 'time_jump' | 'pov_change' | 'character_group_change' | 'flashback_start' | 'flashback_end' | 'dream_start' | 'dream_end' | 'action_break' | 'narrative_transition' | 'chapter_continuation';
 export type ManuscriptStructureReviewStatus = 'proposed' | 'accepted' | 'edited' | 'rejected' | 'uncertain';
@@ -224,7 +248,7 @@ export interface ProviderStatus { available: boolean; label: string; detail: str
 export type CodexAuthenticationState = 'authenticated' | 'notAuthenticated' | 'unknown';
 export interface CodexCliCapabilities { installed: boolean; binaryPath?: string; version?: string; supportsExec: boolean; supportsJson: boolean; supportsEphemeral: boolean; supportsOutputSchema: boolean; supportsReadOnlySandbox: boolean; supportsSkipGitCheck: boolean; supportsModel: boolean; supportsDisableFeatures: boolean; authentication: CodexAuthenticationState; compatible: boolean; detail: string; }
 export interface AiProviderSettings { activeProvider: AiProviderMode; codexBinaryPath?: string; codexModelOverride?: string; apiModelOverride?: string; apiKeyConfigured?: boolean; bibleUpdateTimeoutSeconds: number; chatTimeoutSeconds: number; allowLocalFallback: boolean; codexPrivacyAcknowledgedAt?: string; }
-export type CodexTaskKind = 'extractBiblePatch' | 'extractCharacterMemoryPatch' | 'answerWithProjectContext' | 'analyzeProjectStyle' | 'summarizeScene' | 'summarizeChapter' | 'summarizeBook' | 'planChapterDraft' | 'draftChapterSection' | 'reviewChapterSection' | 'reviewCompleteChapter' | 'analyzeContinuityPassage' | 'analyzeLoreDraft' | 'buildLoreSheet' | 'detectBookGenre';
+export type CodexTaskKind = 'extractBiblePatch' | 'extractCharacterMemoryPatch' | 'answerWithProjectContext' | 'analyzeProjectStyle' | 'summarizeScene' | 'summarizeChapter' | 'summarizeBook' | 'planChapterDraft' | 'draftChapterSection' | 'reviewChapterSection' | 'reviewCompleteChapter' | 'analyzeContinuityPassage' | 'analyzeLoreDraft' | 'buildLoreSheet' | 'detectBookGenre' | 'validateRevealCompliance';
 export interface GroundedChatResult { answer: string; usedEntityIds: string[]; usedSourceIds: string[]; uncertainty: 'low' | 'medium' | 'high'; warnings: string[]; }
 export interface Correction { id: string; kind: CorrectionKind; from: string; to: string; reason: string; start: number; end: number; }
 export interface CorrectionResult { id: string; sourceText: string; corrections: Correction[]; provider: string; message?: string; }

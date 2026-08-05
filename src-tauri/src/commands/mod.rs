@@ -46,7 +46,9 @@ use crate::{
         ProjectSourceDocument, ProjectStyle, ProjectStyleAnalysisRun, ProjectStyleObservation,
         ProviderStatus, ProvisionalEntity, ProvisionalEntityMention, ProvisionalEvent,
         ProvisionalMergeProposal, ProvisionalRelation, ReconcileContinuityTextCorrectionInput,
-        RelationshipMemory, RestoreSceneVersionInput, ReviewBibleProposalInput,
+        RelationshipMemory, RestoreSceneVersionInput, RevealAudienceKind, RevealAudienceState,
+        RevealClueRule, RevealClueRuleKind, RevealContext, RevealContract, RevealContractStatus,
+        RevealKnowledgeLevel, RevealPosition, RevealReviewStatus, ReviewBibleProposalInput,
         ReviewCharacterMemoryProposalInput, SaveBookGenresInput,
         SaveChapterGenerationDraftLedgerInput, SaveChapterGenerationPlanInput,
         SaveChapterGenerationReviewInput, SaveChapterGenerationSectionInput,
@@ -65,7 +67,8 @@ use crate::{
         SaveProjectOnboardingStateInput, SaveProjectRuleInput, SaveProjectRuleProposalInput,
         SaveProjectStyleInput, SaveProjectStyleObservationInput, SaveProvisionalEntityInput,
         SaveProvisionalEventInput, SaveProvisionalMentionInput, SaveProvisionalMergeProposalInput,
-        SaveProvisionalRelationInput, SaveRelationshipMemoryInput, SaveStoryDirectionInput,
+        SaveProvisionalRelationInput, SaveRelationshipMemoryInput, SaveRevealAudienceStateInput,
+        SaveRevealClueRuleInput, SaveRevealContractInput, SaveStoryDirectionInput,
         SaveStoryGraphEdgeInput, SaveWritingPreferencesInput, Scene, SceneInput, SceneVersion,
         StoryDirection, StoryEntity, StoryEntityInput, StoryEntityRelation, StoryGraphEdge,
         StorySourceReference, StyleReference, UpdateChapterInput, UpdateLoreCrafterRunInput,
@@ -92,6 +95,818 @@ fn new_id() -> String {
 }
 fn now() -> String {
     Utc::now().to_rfc3339()
+}
+
+fn reveal_enum<T: Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|item| item.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+fn reveal_position_json(position: &RevealPosition) -> Result<String, String> {
+    validate_reveal_position_values(position)?;
+    serde_json::to_string(position)
+        .map_err(|error| format!("Reveal-Position konnte nicht gespeichert werden: {error}"))
+}
+fn validate_reveal_position_values(position: &RevealPosition) -> Result<(), String> {
+    for (label, value) in [
+        ("Bandreihenfolge", position.book_order_index),
+        ("Offset", position.offset),
+        ("Kapitelreihenfolge", position.chapter_order_index),
+        ("Szenenreihenfolge", position.scene_order_index),
+    ] {
+        if value.is_some_and(|item| item < 0) {
+            return Err(format!("{label} darf nicht negativ sein."));
+        }
+    }
+    Ok(())
+}
+fn validate_reveal_position_db(
+    db: &Connection,
+    project_id: &str,
+    position: &RevealPosition,
+) -> Result<(), String> {
+    validate_reveal_position_values(position)?;
+    if let Some(book_id) = &position.book_id {
+        let exists: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM books WHERE id=?1 AND project_id=?2)",
+                params![book_id, project_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| sql_error("Reveal-Band konnte nicht geprüft werden", error))?;
+        if !exists {
+            return Err("Reveal-Position verweist auf einen fremden oder unbekannten Band.".into());
+        }
+    }
+    if let Some(chapter_id) = &position.chapter_id {
+        let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM chapters c JOIN books b ON b.id=c.book_id WHERE c.id=?1 AND b.project_id=?2)", params![chapter_id, project_id], |row| row.get(0)).map_err(|error| sql_error("Reveal-Kapitel konnte nicht geprüft werden", error))?;
+        if !exists {
+            return Err(
+                "Reveal-Position verweist auf ein fremdes oder unbekanntes Kapitel.".into(),
+            );
+        }
+    }
+    if let Some(scene_id) = &position.scene_id {
+        let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM scenes s JOIN chapters c ON c.id=s.chapter_id JOIN books b ON b.id=c.book_id WHERE s.id=?1 AND b.project_id=?2)", params![scene_id, project_id], |row| row.get(0)).map_err(|error| sql_error("Reveal-Szene konnte nicht geprüft werden", error))?;
+        if !exists {
+            return Err("Reveal-Position verweist auf eine fremde oder unbekannte Szene.".into());
+        }
+    }
+    if let (Some(book_id), Some(chapter_id)) = (&position.book_id, &position.chapter_id) {
+        let related: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM chapters WHERE id=?1 AND book_id=?2)",
+                params![chapter_id, book_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| {
+                sql_error(
+                    "Reveal-Band/Kapitel-Zuordnung konnte nicht geprüft werden",
+                    error,
+                )
+            })?;
+        if !related {
+            return Err("Reveal-Kapitel gehört nicht zum angegebenen Band.".into());
+        }
+    }
+    if let (Some(chapter_id), Some(scene_id)) = (&position.chapter_id, &position.scene_id) {
+        let related: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM scenes WHERE id=?1 AND chapter_id=?2)",
+                params![scene_id, chapter_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| {
+                sql_error(
+                    "Reveal-Kapitel/Szenen-Zuordnung konnte nicht geprüft werden",
+                    error,
+                )
+            })?;
+        if !related {
+            return Err("Reveal-Szene gehört nicht zum angegebenen Kapitel.".into());
+        }
+    }
+    Ok(())
+}
+fn decode_reveal_position(value: String) -> Result<RevealPosition, String> {
+    serde_json::from_str(&value).map_err(|error| format!("Ungültige Reveal-Position: {error}"))
+}
+
+fn reveal_contract_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RevealContract> {
+    Ok(RevealContract {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        subject_entity_id: row.get(2)?,
+        title: row.get(3)?,
+        truth_statement: row.get(4)?,
+        scope: serde_json::from_value(serde_json::Value::String(row.get::<_, String>(5)?)).unwrap(),
+        status: serde_json::from_value(serde_json::Value::String(row.get::<_, String>(6)?))
+            .unwrap(),
+        author_confirmed: row.get::<_, i64>(7)? != 0,
+        reveal_state: serde_json::from_value(serde_json::Value::String(row.get::<_, String>(8)?))
+            .unwrap(),
+        planned_reveal_book_id: row.get(9)?,
+        planned_reveal_chapter_id: row.get(10)?,
+        planned_reveal_scene_id: row.get(11)?,
+        planned_reveal_offset: row.get(12)?,
+        reveal_condition_text: row.get(13)?,
+        notes: row.get(14)?,
+        source_reference_id: row.get(15)?,
+        created_at: row.get(16)?,
+        updated_at: row.get(17)?,
+    })
+}
+fn reveal_audience_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RevealAudienceState> {
+    let from: String = row.get(8)?;
+    let until: Option<String> = row.get(9)?;
+    Ok(RevealAudienceState {
+        id: row.get(0)?,
+        contract_id: row.get(1)?,
+        project_id: row.get(2)?,
+        audience_kind: serde_json::from_value(serde_json::Value::String(row.get::<_, String>(3)?))
+            .unwrap(),
+        character_entity_id: row.get(4)?,
+        knowledge_level: serde_json::from_value(serde_json::Value::String(
+            row.get::<_, String>(5)?,
+        ))
+        .unwrap(),
+        belief_text: row.get(6)?,
+        valid_from_position: decode_reveal_position(from).unwrap_or_default(),
+        valid_until_position: until.and_then(|item| decode_reveal_position(item).ok()),
+        source_reference_id: row.get(10)?,
+        status: serde_json::from_value(serde_json::Value::String(row.get::<_, String>(11)?))
+            .unwrap(),
+        author_confirmed: row.get::<_, i64>(12)? != 0,
+        created_at: row.get(13)?,
+        updated_at: row.get(14)?,
+    })
+}
+fn reveal_clue_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RevealClueRule> {
+    let from: Option<String> = row.get(7)?;
+    let until: Option<String> = row.get(8)?;
+    Ok(RevealClueRule {
+        id: row.get(0)?,
+        contract_id: row.get(1)?,
+        project_id: row.get(2)?,
+        rule_kind: serde_json::from_value(serde_json::Value::String(row.get::<_, String>(3)?))
+            .unwrap(),
+        clue_type: row.get(4)?,
+        description: row.get(5)?,
+        maximum_explicitness: serde_json::from_value(serde_json::Value::String(
+            row.get::<_, String>(6)?,
+        ))
+        .unwrap(),
+        valid_from_position: from.and_then(|item| decode_reveal_position(item).ok()),
+        valid_until_position: until.and_then(|item| decode_reveal_position(item).ok()),
+        source_reference_id: row.get(9)?,
+        status: serde_json::from_value(serde_json::Value::String(row.get::<_, String>(10)?))
+            .unwrap(),
+        author_confirmed: row.get::<_, i64>(11)? != 0,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
+    })
+}
+
+#[tauri::command]
+pub fn save_reveal_contract(
+    state: State<'_, DbState>,
+    input: SaveRevealContractInput,
+) -> Result<RevealContract, String> {
+    let db = lock_db(&state)?;
+    let entity_project: Option<String> = db
+        .query_row(
+            "SELECT project_id FROM story_entities WHERE id=?1",
+            [&input.subject_entity_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| sql_error("Reveal-Entität konnte nicht geprüft werden", error))?;
+    if entity_project.as_deref() != Some(input.project_id.as_str()) {
+        return Err("Reveal-Contract benötigt eine Entität aus demselben Projekt.".into());
+    }
+    if input.author_confirmed && !matches!(input.status, RevealContractStatus::Confirmed) {
+        return Err(
+            "authorConfirmed ist nur mit einem bestätigten Reveal-Contract zulässig.".into(),
+        );
+    }
+    if let Some(id) = &input.id {
+        let existing_project: Option<String> = db
+            .query_row(
+                "SELECT project_id FROM reveal_contracts WHERE id=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| sql_error("Reveal-Contract konnte nicht zugeordnet werden", error))?;
+        if existing_project
+            .as_deref()
+            .is_some_and(|project| project != input.project_id)
+        {
+            return Err("Reveal-Contract-ID gehört zu einem anderen Projekt.".into());
+        }
+    }
+    if let Some(source) = &input.source_reference_id {
+        let valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM project_source_references WHERE id=?1 AND project_id=?2)", params![source, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Reveal-Quelle konnte nicht geprüft werden", error))?;
+        if !valid {
+            return Err("Reveal-Quelle gehört nicht zum Projekt.".into());
+        }
+    }
+    validate_reveal_position_db(
+        &db,
+        &input.project_id,
+        &RevealPosition {
+            book_id: input.planned_reveal_book_id.clone(),
+            chapter_id: input.planned_reveal_chapter_id.clone(),
+            scene_id: input.planned_reveal_scene_id.clone(),
+            book_order_index: None,
+            chapter_order_index: None,
+            scene_order_index: None,
+            offset: input.planned_reveal_offset,
+        },
+    )?;
+    let id = input.id.clone().unwrap_or_else(new_id);
+    let stamp = now();
+    db.execute("INSERT INTO reveal_contracts(id,project_id,subject_entity_id,title,truth_statement,scope,status,author_confirmed,reveal_state,planned_reveal_book_id,planned_reveal_chapter_id,planned_reveal_scene_id,planned_reveal_offset,reveal_condition_text,notes,source_reference_id,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,COALESCE((SELECT created_at FROM reveal_contracts WHERE id=?1),?17),?17) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,subject_entity_id=excluded.subject_entity_id,title=excluded.title,truth_statement=excluded.truth_statement,scope=excluded.scope,status=excluded.status,author_confirmed=excluded.author_confirmed,reveal_state=excluded.reveal_state,planned_reveal_book_id=excluded.planned_reveal_book_id,planned_reveal_chapter_id=excluded.planned_reveal_chapter_id,planned_reveal_scene_id=excluded.planned_reveal_scene_id,planned_reveal_offset=excluded.planned_reveal_offset,reveal_condition_text=excluded.reveal_condition_text,notes=excluded.notes,source_reference_id=excluded.source_reference_id,updated_at=excluded.updated_at", params![id, input.project_id, input.subject_entity_id, input.title, input.truth_statement, reveal_enum(&input.scope), reveal_enum(&input.status), input.author_confirmed as i64, reveal_enum(&input.reveal_state), input.planned_reveal_book_id, input.planned_reveal_chapter_id, input.planned_reveal_scene_id, input.planned_reveal_offset, input.reveal_condition_text, input.notes, input.source_reference_id, stamp]).map_err(|error| sql_error("Reveal-Contract konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT id,project_id,subject_entity_id,title,truth_statement,scope,status,author_confirmed,reveal_state,planned_reveal_book_id,planned_reveal_chapter_id,planned_reveal_scene_id,planned_reveal_offset,reveal_condition_text,notes,source_reference_id,created_at,updated_at FROM reveal_contracts WHERE id=?1 AND project_id=?2", params![id, input.project_id], reveal_contract_from_row).map_err(|error| sql_error("Reveal-Contract konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn get_reveal_contract(
+    state: State<'_, DbState>,
+    id: String,
+    project_id: Option<String>,
+) -> Result<Option<RevealContract>, String> {
+    let db = lock_db(&state)?;
+    let mut sql = "SELECT id,project_id,subject_entity_id,title,truth_statement,scope,status,author_confirmed,reveal_state,planned_reveal_book_id,planned_reveal_chapter_id,planned_reveal_scene_id,planned_reveal_offset,reveal_condition_text,notes,source_reference_id,created_at,updated_at FROM reveal_contracts WHERE id=?1".to_owned();
+    if project_id.is_some() {
+        sql.push_str(" AND project_id=?2");
+    }
+    let result = if let Some(project) = project_id {
+        db.query_row(&sql, params![id, project], reveal_contract_from_row)
+            .optional()
+    } else {
+        db.query_row(&sql, [&id], reveal_contract_from_row)
+            .optional()
+    };
+    result.map_err(|error| sql_error("Reveal-Contract konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn list_reveal_contracts(
+    state: State<'_, DbState>,
+    project_id: String,
+) -> Result<Vec<RevealContract>, String> {
+    let db = lock_db(&state)?;
+    let mut statement = db.prepare("SELECT id,project_id,subject_entity_id,title,truth_statement,scope,status,author_confirmed,reveal_state,planned_reveal_book_id,planned_reveal_chapter_id,planned_reveal_scene_id,planned_reveal_offset,reveal_condition_text,notes,source_reference_id,created_at,updated_at FROM reveal_contracts WHERE project_id=?1 ORDER BY created_at ASC").map_err(|error| sql_error("Reveal-Contracts konnten nicht geladen werden", error))?;
+    let rows = statement
+        .query_map([project_id], reveal_contract_from_row)
+        .map_err(|error| sql_error("Reveal-Contracts konnten nicht geladen werden", error))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| sql_error("Reveal-Contracts konnten nicht gelesen werden", error))
+}
+
+#[tauri::command]
+pub fn retire_reveal_contract(
+    state: State<'_, DbState>,
+    project_id: String,
+    id: String,
+) -> Result<RevealContract, String> {
+    let db = lock_db(&state)?;
+    let changed = db.execute("UPDATE reveal_contracts SET status='retired',updated_at=?1 WHERE id=?2 AND project_id=?3", params![now(), id, project_id]).map_err(|error| sql_error("Reveal-Contract konnte nicht archiviert werden", error))?;
+    if changed == 0 {
+        return Err("Reveal-Contract nicht gefunden.".into());
+    }
+    db.query_row("SELECT id,project_id,subject_entity_id,title,truth_statement,scope,status,author_confirmed,reveal_state,planned_reveal_book_id,planned_reveal_chapter_id,planned_reveal_scene_id,planned_reveal_offset,reveal_condition_text,notes,source_reference_id,created_at,updated_at FROM reveal_contracts WHERE id=?1 AND project_id=?2", params![id, project_id], reveal_contract_from_row).map_err(|error| sql_error("Reveal-Contract konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn save_reveal_audience_state(
+    state: State<'_, DbState>,
+    input: SaveRevealAudienceStateInput,
+) -> Result<RevealAudienceState, String> {
+    let db = lock_db(&state)?;
+    let contract_project: Option<String> = db
+        .query_row(
+            "SELECT project_id FROM reveal_contracts WHERE id=?1",
+            [&input.contract_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| sql_error("Reveal-Contract konnte nicht geprüft werden", error))?;
+    if contract_project.as_deref() != Some(input.project_id.as_str()) {
+        return Err("Reveal-Wissensstand gehört nicht zum Projekt des Contracts.".into());
+    }
+    validate_reveal_position_db(&db, &input.project_id, &input.valid_from_position)?;
+    if let Some(until) = &input.valid_until_position {
+        validate_reveal_position_db(&db, &input.project_id, until)?;
+    }
+    match input.audience_kind {
+        RevealAudienceKind::Reader
+            if input.character_entity_id.is_some()
+                || matches!(input.knowledge_level, RevealKnowledgeLevel::FalseBelief) =>
+        {
+            return Err(
+                "Leserwissen darf keine Figuren-ID oder falsche Überzeugung besitzen.".into(),
+            )
+        }
+        RevealAudienceKind::Character => {
+            let id = input
+                .character_entity_id
+                .as_ref()
+                .ok_or_else(|| "Figurenwissen benötigt eine Figur.".to_string())?;
+            let valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM story_entities WHERE id=?1 AND project_id=?2 AND entity_type='character')", params![id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Figur konnte nicht geprüft werden", error))?;
+            if !valid {
+                return Err(
+                    "Figur gehört nicht zum Projekt oder ist keine Character-Entity.".into(),
+                );
+            }
+        }
+        _ => {}
+    }
+    if let Some(source) = &input.source_reference_id {
+        let valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM project_source_references WHERE id=?1 AND project_id=?2)", params![source, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Reveal-Wissensquelle konnte nicht geprüft werden", error))?;
+        if !valid {
+            return Err("Reveal-Wissensquelle gehört nicht zum Projekt.".into());
+        }
+    }
+    if input.author_confirmed && !matches!(input.status, RevealReviewStatus::Confirmed) {
+        return Err("authorConfirmed ist nur mit bestätigtem Wissensstand zulässig.".into());
+    }
+    if let Some(id) = &input.id {
+        let existing_project: Option<String> = db
+            .query_row(
+                "SELECT project_id FROM reveal_audience_states WHERE id=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| {
+                sql_error("Reveal-Wissensstand konnte nicht zugeordnet werden", error)
+            })?;
+        if existing_project
+            .as_deref()
+            .is_some_and(|project| project != input.project_id)
+        {
+            return Err("Reveal-Wissensstand-ID gehört zu einem anderen Projekt.".into());
+        }
+    }
+    let from = reveal_position_json(&input.valid_from_position)?;
+    let until = input
+        .valid_until_position
+        .as_ref()
+        .map(reveal_position_json)
+        .transpose()?;
+    let id = input.id.clone().unwrap_or_else(new_id);
+    let stamp = now();
+    db.execute("INSERT INTO reveal_audience_states(id,contract_id,project_id,audience_kind,character_entity_id,knowledge_level,belief_text,valid_from_position_json,valid_until_position_json,source_reference_id,status,author_confirmed,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,COALESCE((SELECT created_at FROM reveal_audience_states WHERE id=?1),?13),?13) ON CONFLICT(id) DO UPDATE SET contract_id=excluded.contract_id,project_id=excluded.project_id,audience_kind=excluded.audience_kind,character_entity_id=excluded.character_entity_id,knowledge_level=excluded.knowledge_level,belief_text=excluded.belief_text,valid_from_position_json=excluded.valid_from_position_json,valid_until_position_json=excluded.valid_until_position_json,source_reference_id=excluded.source_reference_id,status=excluded.status,author_confirmed=excluded.author_confirmed,updated_at=excluded.updated_at", params![id, input.contract_id, input.project_id, reveal_enum(&input.audience_kind), input.character_entity_id, reveal_enum(&input.knowledge_level), input.belief_text, from, until, input.source_reference_id, reveal_enum(&input.status), input.author_confirmed as i64, stamp]).map_err(|error| sql_error("Reveal-Wissensstand konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT id,contract_id,project_id,audience_kind,character_entity_id,knowledge_level,belief_text,valid_from_position_json,valid_until_position_json,source_reference_id,status,author_confirmed,created_at,updated_at FROM reveal_audience_states WHERE id=?1", [&id], reveal_audience_from_row).map_err(|error| sql_error("Reveal-Wissensstand konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn list_reveal_audience_states(
+    state: State<'_, DbState>,
+    project_id: String,
+    contract_id: Option<String>,
+) -> Result<Vec<RevealAudienceState>, String> {
+    let db = lock_db(&state)?;
+    let mut statement = db.prepare("SELECT id,contract_id,project_id,audience_kind,character_entity_id,knowledge_level,belief_text,valid_from_position_json,valid_until_position_json,source_reference_id,status,author_confirmed,created_at,updated_at FROM reveal_audience_states WHERE project_id=?1 AND (?2 IS NULL OR contract_id=?2) ORDER BY created_at ASC").map_err(|error| sql_error("Reveal-Wissensstände konnten nicht geladen werden", error))?;
+    let rows = statement
+        .query_map(params![project_id, contract_id], reveal_audience_from_row)
+        .map_err(|error| sql_error("Reveal-Wissensstände konnten nicht geladen werden", error))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| sql_error("Reveal-Wissensstände konnten nicht gelesen werden", error))
+}
+
+#[tauri::command]
+pub fn save_reveal_clue_rule(
+    state: State<'_, DbState>,
+    input: SaveRevealClueRuleInput,
+) -> Result<RevealClueRule, String> {
+    let db = lock_db(&state)?;
+    let contract_project: Option<String> = db
+        .query_row(
+            "SELECT project_id FROM reveal_contracts WHERE id=?1",
+            [&input.contract_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| sql_error("Reveal-Contract konnte nicht geprüft werden", error))?;
+    if contract_project.as_deref() != Some(input.project_id.as_str()) {
+        return Err("Reveal-Hinweisregel gehört nicht zum Projekt des Contracts.".into());
+    }
+    if let Some(from) = &input.valid_from_position {
+        validate_reveal_position_db(&db, &input.project_id, from)?;
+    }
+    if let Some(until) = &input.valid_until_position {
+        validate_reveal_position_db(&db, &input.project_id, until)?;
+    }
+    if let Some(source) = &input.source_reference_id {
+        let valid: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM project_source_references WHERE id=?1 AND project_id=?2)",
+                params![source, input.project_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| sql_error("Reveal-Hinweisquelle konnte nicht geprüft werden", error))?;
+        if !valid {
+            return Err("Reveal-Hinweisquelle gehört nicht zum Projekt.".into());
+        }
+    }
+    if let Some(id) = &input.id {
+        let existing_project: Option<String> = db
+            .query_row(
+                "SELECT project_id FROM reveal_clue_rules WHERE id=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| {
+                sql_error("Reveal-Hinweisregel konnte nicht zugeordnet werden", error)
+            })?;
+        if existing_project
+            .as_deref()
+            .is_some_and(|project| project != input.project_id)
+        {
+            return Err("Reveal-Hinweisregel-ID gehört zu einem anderen Projekt.".into());
+        }
+    }
+    let id = input.id.clone().unwrap_or_else(new_id);
+    let stamp = now();
+    let from = input
+        .valid_from_position
+        .as_ref()
+        .map(reveal_position_json)
+        .transpose()?;
+    let until = input
+        .valid_until_position
+        .as_ref()
+        .map(reveal_position_json)
+        .transpose()?;
+    db.execute("INSERT INTO reveal_clue_rules(id,contract_id,project_id,rule_kind,clue_type,description,maximum_explicitness,valid_from_position_json,valid_until_position_json,source_reference_id,status,author_confirmed,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,COALESCE((SELECT created_at FROM reveal_clue_rules WHERE id=?1),?13),?13) ON CONFLICT(id) DO UPDATE SET contract_id=excluded.contract_id,project_id=excluded.project_id,rule_kind=excluded.rule_kind,clue_type=excluded.clue_type,description=excluded.description,maximum_explicitness=excluded.maximum_explicitness,valid_from_position_json=excluded.valid_from_position_json,valid_until_position_json=excluded.valid_until_position_json,source_reference_id=excluded.source_reference_id,status=excluded.status,author_confirmed=excluded.author_confirmed,updated_at=excluded.updated_at", params![id, input.contract_id, input.project_id, reveal_enum(&input.rule_kind), input.clue_type, input.description, reveal_enum(&input.maximum_explicitness), from, until, input.source_reference_id, reveal_enum(&input.status), input.author_confirmed as i64, stamp]).map_err(|error| sql_error("Reveal-Hinweisregel konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT id,contract_id,project_id,rule_kind,clue_type,description,maximum_explicitness,valid_from_position_json,valid_until_position_json,source_reference_id,status,author_confirmed,created_at,updated_at FROM reveal_clue_rules WHERE id=?1", [&id], reveal_clue_from_row).map_err(|error| sql_error("Reveal-Hinweisregel konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn list_reveal_clue_rules(
+    state: State<'_, DbState>,
+    project_id: String,
+    contract_id: Option<String>,
+) -> Result<Vec<RevealClueRule>, String> {
+    let db = lock_db(&state)?;
+    let mut statement = db.prepare("SELECT id,contract_id,project_id,rule_kind,clue_type,description,maximum_explicitness,valid_from_position_json,valid_until_position_json,source_reference_id,status,author_confirmed,created_at,updated_at FROM reveal_clue_rules WHERE project_id=?1 AND (?2 IS NULL OR contract_id=?2) ORDER BY created_at ASC").map_err(|error| sql_error("Reveal-Hinweisregeln konnten nicht geladen werden", error))?;
+    let rows = statement
+        .query_map(params![project_id, contract_id], reveal_clue_from_row)
+        .map_err(|error| sql_error("Reveal-Hinweisregeln konnten nicht geladen werden", error))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| sql_error("Reveal-Hinweisregeln konnten nicht gelesen werden", error))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildRevealContextInput {
+    pub project_id: String,
+    pub position: RevealPosition,
+    pub pov_character_id: Option<String>,
+    #[serde(default)]
+    pub participating_character_ids: Vec<String>,
+}
+
+fn reveal_position_key(
+    db: &Connection,
+    project_id: &str,
+    position: &RevealPosition,
+) -> Result<(i64, i64, i64, i64), String> {
+    validate_reveal_position_db(db, project_id, position)?;
+    let mut book_order = position.book_order_index.unwrap_or(0);
+    let mut chapter_order = position.chapter_order_index.unwrap_or(0);
+    let mut scene_order = position.scene_order_index.unwrap_or(0);
+    if let Some(chapter_id) = &position.chapter_id {
+        let row: (i64, i64) = db.query_row("SELECT b.volume,c.order_index FROM chapters c JOIN books b ON b.id=c.book_id WHERE c.id=?1 AND b.project_id=?2", params![chapter_id, project_id], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|error| sql_error("Reveal-Kapitelposition konnte nicht aufgelöst werden", error))?;
+        book_order = row.0;
+        chapter_order = position.chapter_order_index.unwrap_or(row.1);
+    }
+    if let Some(book_id) = &position.book_id {
+        book_order = db
+            .query_row(
+                "SELECT volume FROM books WHERE id=?1 AND project_id=?2",
+                params![book_id, project_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| {
+                sql_error("Reveal-Bandposition konnte nicht aufgelöst werden", error)
+            })?;
+    }
+    if let Some(scene_id) = &position.scene_id {
+        let row: (i64, i64, i64) = db.query_row("SELECT b.volume,c.order_index,s.order_index FROM scenes s JOIN chapters c ON c.id=s.chapter_id JOIN books b ON b.id=c.book_id WHERE s.id=?1 AND b.project_id=?2", params![scene_id, project_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).map_err(|error| sql_error("Reveal-Szenenposition konnte nicht aufgelöst werden", error))?;
+        book_order = position
+            .book_id
+            .as_ref()
+            .map(|_| book_order)
+            .unwrap_or(row.0);
+        chapter_order = position.chapter_order_index.unwrap_or(row.1);
+        scene_order = position.scene_order_index.unwrap_or(row.2);
+    }
+    Ok((
+        book_order,
+        chapter_order,
+        scene_order,
+        position.offset.unwrap_or(0),
+    ))
+}
+fn reveal_position_applies(
+    db: &Connection,
+    project_id: &str,
+    current: (i64, i64, i64, i64),
+    from: &RevealPosition,
+    until: Option<&RevealPosition>,
+) -> Result<bool, String> {
+    let from_key = reveal_position_key(db, project_id, from)?;
+    if from_key > current {
+        return Ok(false);
+    }
+    if let Some(end) = until {
+        return Ok(current < reveal_position_key(db, project_id, end)?);
+    }
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn build_reveal_context(
+    state: State<'_, DbState>,
+    input: BuildRevealContextInput,
+) -> Result<RevealContext, String> {
+    let db = lock_db(&state)?;
+    let current = reveal_position_key(&db, &input.project_id, &input.position)?;
+    let contracts = list_reveal_contracts_locked(&db, &input.project_id)?
+        .into_iter()
+        .filter(|item| {
+            matches!(item.status, RevealContractStatus::Confirmed) && item.author_confirmed
+        })
+        .collect::<Vec<_>>();
+    let contract_ids = contracts
+        .iter()
+        .map(|item| item.id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let states = list_reveal_audience_locked(&db, &input.project_id)?
+        .into_iter()
+        .filter(|item| {
+            contract_ids.contains(&item.contract_id)
+                && matches!(item.status, RevealReviewStatus::Confirmed)
+                && item.author_confirmed
+        })
+        .filter(|item| {
+            reveal_position_applies(
+                &db,
+                &input.project_id,
+                current,
+                &item.valid_from_position,
+                item.valid_until_position.as_ref(),
+            )
+            .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    let mut warnings = Vec::new();
+    let mut selected = std::collections::HashMap::<String, RevealAudienceState>::new();
+    for state_item in states {
+        let key = format!(
+            "{}:{}:{}",
+            state_item.contract_id,
+            reveal_enum(&state_item.audience_kind),
+            state_item
+                .character_entity_id
+                .clone()
+                .unwrap_or_else(|| "reader".into())
+        );
+        if let Some(previous) = selected.get(&key) {
+            let previous_start =
+                reveal_position_key(&db, &input.project_id, &previous.valid_from_position)?;
+            let current_start =
+                reveal_position_key(&db, &input.project_id, &state_item.valid_from_position)?;
+            if previous.knowledge_level != state_item.knowledge_level
+                && previous_start == current_start
+            {
+                warnings.push(format!(
+                    "Widersprüchliche gleichrangige Wissensstände für {key}."
+                ));
+            }
+            if current_start > previous_start {
+                selected.insert(key, state_item);
+            }
+        } else {
+            selected.insert(key, state_item);
+        }
+    }
+    let selected = selected.into_values().collect::<Vec<_>>();
+    let reader = selected
+        .iter()
+        .filter(|item| matches!(item.audience_kind, RevealAudienceKind::Reader))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut participant_ids = input.participating_character_ids;
+    if let Some(id) = input.pov_character_id.clone() {
+        participant_ids.push(id);
+    }
+    let characters = selected
+        .iter()
+        .filter(|item| {
+            matches!(item.audience_kind, RevealAudienceKind::Character)
+                && item
+                    .character_entity_id
+                    .as_ref()
+                    .is_some_and(|id| participant_ids.contains(id))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let pov = input
+        .pov_character_id
+        .as_ref()
+        .map(|id| {
+            characters
+                .iter()
+                .filter(|item| item.character_entity_id.as_ref() == Some(id))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    let participant = characters
+        .iter()
+        .filter(|item| input.pov_character_id.as_ref() != item.character_entity_id.as_ref())
+        .cloned()
+        .collect();
+    let clues = list_reveal_clues_locked(&db, &input.project_id)?
+        .into_iter()
+        .filter(|item| {
+            contract_ids.contains(&item.contract_id)
+                && matches!(item.status, RevealReviewStatus::Confirmed)
+                && item.author_confirmed
+                && reveal_position_applies(
+                    &db,
+                    &input.project_id,
+                    current,
+                    item.valid_from_position
+                        .as_ref()
+                        .unwrap_or(&RevealPosition::default()),
+                    item.valid_until_position.as_ref(),
+                )
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    let planned = contracts
+        .iter()
+        .filter(|item| {
+            item.planned_reveal_book_id.is_some()
+                || item.planned_reveal_chapter_id.is_some()
+                || item.planned_reveal_scene_id.is_some()
+        })
+        .cloned()
+        .collect();
+    Ok(RevealContext {
+        confirmed_author_truths: contracts,
+        reader_knowledge_at_position: reader,
+        pov_character_knowledge_at_position: pov,
+        participant_knowledge_at_position: participant,
+        allowed_clues: clues
+            .iter()
+            .filter(|item| matches!(item.rule_kind, RevealClueRuleKind::Allowed))
+            .cloned()
+            .collect(),
+        forbidden_clues: clues
+            .iter()
+            .filter(|item| matches!(item.rule_kind, RevealClueRuleKind::Forbidden))
+            .cloned()
+            .collect(),
+        required_clues: clues
+            .into_iter()
+            .filter(|item| matches!(item.rule_kind, RevealClueRuleKind::Required))
+            .collect(),
+        planned_reveals: planned,
+        warnings,
+    })
+}
+
+fn list_reveal_contracts_locked(
+    db: &Connection,
+    project_id: &str,
+) -> Result<Vec<RevealContract>, String> {
+    let mut statement = db.prepare("SELECT id,project_id,subject_entity_id,title,truth_statement,scope,status,author_confirmed,reveal_state,planned_reveal_book_id,planned_reveal_chapter_id,planned_reveal_scene_id,planned_reveal_offset,reveal_condition_text,notes,source_reference_id,created_at,updated_at FROM reveal_contracts WHERE project_id=?1 ORDER BY created_at ASC").map_err(|error| sql_error("Reveal-Contracts konnten nicht geladen werden", error))?;
+    let rows = statement
+        .query_map([project_id], reveal_contract_from_row)
+        .map_err(|error| sql_error("Reveal-Contracts konnten nicht geladen werden", error))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| sql_error("Reveal-Contracts konnten nicht gelesen werden", error))
+}
+fn list_reveal_audience_locked(
+    db: &Connection,
+    project_id: &str,
+) -> Result<Vec<RevealAudienceState>, String> {
+    let mut statement = db.prepare("SELECT id,contract_id,project_id,audience_kind,character_entity_id,knowledge_level,belief_text,valid_from_position_json,valid_until_position_json,source_reference_id,status,author_confirmed,created_at,updated_at FROM reveal_audience_states WHERE project_id=?1 ORDER BY created_at ASC").map_err(|error| sql_error("Reveal-Wissensstände konnten nicht geladen werden", error))?;
+    let rows = statement
+        .query_map([project_id], reveal_audience_from_row)
+        .map_err(|error| sql_error("Reveal-Wissensstände konnten nicht geladen werden", error))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| sql_error("Reveal-Wissensstände konnten nicht gelesen werden", error))
+}
+fn list_reveal_clues_locked(
+    db: &Connection,
+    project_id: &str,
+) -> Result<Vec<RevealClueRule>, String> {
+    let mut statement = db.prepare("SELECT id,contract_id,project_id,rule_kind,clue_type,description,maximum_explicitness,valid_from_position_json,valid_until_position_json,source_reference_id,status,author_confirmed,created_at,updated_at FROM reveal_clue_rules WHERE project_id=?1 ORDER BY created_at ASC").map_err(|error| sql_error("Reveal-Hinweisregeln konnten nicht geladen werden", error))?;
+    let rows = statement
+        .query_map([project_id], reveal_clue_from_row)
+        .map_err(|error| sql_error("Reveal-Hinweisregeln konnten nicht geladen werden", error))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| sql_error("Reveal-Hinweisregeln konnten nicht gelesen werden", error))
+}
+
+#[tauri::command]
+pub fn validate_reveal_compliance_result(
+    input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let text = input
+        .get("text")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let context = input
+        .pointer("/revealContext/confirmedAuthorTruths")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| "Reveal-Kontext enthält keine bestätigten Wahrheiten.".to_string())?;
+    let allowed = context
+        .iter()
+        .filter_map(|item| item.get("id").and_then(|value| value.as_str()))
+        .collect::<std::collections::HashSet<_>>();
+    let subjects = context
+        .iter()
+        .filter_map(|item| item.get("subjectEntityId").and_then(|value| value.as_str()))
+        .collect::<std::collections::HashSet<_>>();
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut character_ids = input
+        .get("participatingCharacterIds")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    if let Some(pov) = input.get("povCharacterId").and_then(|value| value.as_str()) {
+        character_ids.insert(pov);
+    }
+    for finding in input
+        .pointer("/result/findings")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| "Reveal-Ergebnis benötigt findings.".to_string())?
+    {
+        let contract = finding
+            .get("contractId")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| "Reveal-Finding benötigt contractId.".to_string())?;
+        if !allowed.contains(contract) {
+            return Err("CODEX_INVALID_REFERENCE: Unbekannter Reveal-Contract.".into());
+        }
+        let subject = finding
+            .get("subjectEntityId")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| "Reveal-Finding benötigt subjectEntityId.".to_string())?;
+        if !subjects.contains(subject) {
+            return Err("CODEX_INVALID_REFERENCE: Unbekannte Reveal-Entität.".into());
+        }
+        if let Some(character) = finding
+            .get("characterEntityId")
+            .and_then(|value| value.as_str())
+        {
+            if !character_ids.contains(character) {
+                return Err(
+                    "CODEX_INVALID_REFERENCE: Nicht beteiligte Figur im Reveal-Finding.".into(),
+                );
+            }
+        }
+        if finding.get("startOffset").is_some() != finding.get("endOffset").is_some() {
+            return Err(
+                "CODEX_INVALID_OFFSET: Reveal-Offsets müssen gemeinsam gesetzt werden.".into(),
+            );
+        }
+        if let (Some(start), Some(end)) = (
+            finding.get("startOffset").and_then(|value| value.as_u64()),
+            finding.get("endOffset").and_then(|value| value.as_u64()),
+        ) {
+            if end < start || end as usize > chars.len() {
+                return Err(
+                    "CODEX_INVALID_OFFSET: Reveal-Beleg liegt außerhalb des Textes.".into(),
+                );
+            }
+            let excerpt: String = chars[start as usize..end as usize].iter().collect();
+            if finding
+                .get("evidenceExcerpt")
+                .and_then(|value| value.as_str())
+                != Some(excerpt.as_str())
+            {
+                return Err("CODEX_EVIDENCE_OFFSET_MISMATCH: Reveal-Beleg passt nicht zu den Unicode-Offsets.".into());
+            }
+        }
+    }
+    Ok(input
+        .get("result")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({"findings":[],"warnings":[]})))
 }
 
 fn genre_catalog_has(id: &str) -> bool {
@@ -11563,7 +12378,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            38
+            39
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);
