@@ -20,6 +20,8 @@ const manuscript = [
   'Kapitel 3\nSeite 37\nDas verlorene Relikt liegt wieder auf dem Tisch.\n\nAlexander kennt nun die Bedingung und erkennt den Fahrer.\n\nDie scheinbar geschlossene Spur bleibt wegen der Belegregel fraglich.\n\n„Immer weiter“, sagt Mira.'
 ].join('\n\n');
 
+const manuscript54Pages = Array.from({ length: 3 }, (_, chapterIndex) => `Kapitel ${chapterIndex + 1}\n${Array.from({ length: 18 }, (_, pageIndex) => `Seite ${chapterIndex * 18 + pageIndex + 1}\n😀 Figur ${chapterIndex + 1}-${pageIndex + 1} e\u0301 verfolgt die Spur.`).join('\n\n')}`).join('\n\n');
+
 function excerpt(text: string): { value: string; end: number } { const value = Array.from(text).slice(0, Math.min(18, Array.from(text).length)).join(''); return { value, end: Array.from(value).length }; }
 
 function fakeProvider(keeperId: string, threadId: string): StoryAiProvider {
@@ -68,7 +70,7 @@ function fakeProvider(keeperId: string, threadId: string): StoryAiProvider {
   return provider;
 }
 
-async function runFullBrowserWorkflow(providerOverride?: StoryAiProvider) {
+async function runFullBrowserWorkflow(providerOverride?: StoryAiProvider, manuscriptText = manuscript, usePageUnits = false) {
   const repository = new BrowserDemoRepository();
   const created = await repository.createProject({ title: 'E2E ohne Genre', author: '', volumeTitle: 'E2E ohne Genre', description: '' });
   const workspace = await repository.loadWorkspace(created.id);
@@ -84,12 +86,13 @@ async function runFullBrowserWorkflow(providerOverride?: StoryAiProvider) {
   await confirmLoreCrafterRule(repository, acceptedRuleItem);
   await finishLoreCrafterReview(repository, await repository.getLoreCrafterRun(loreRun.id), [acceptedRuleItem]);
 
-  const preview = parseManuscriptText(manuscript, 'paste.txt', 'txt');
+  const preview = parseManuscriptText(manuscriptText, 'paste.txt', 'txt');
   expect(preview.chapters).toHaveLength(3);
-  expect(preview.pageMarkersFound).toBe(3);
+  expect(preview.pageMarkersFound).toBe(usePageUnits ? 54 : 3);
   const imported = await repository.importManuscript({ projectId: created.id, bookId: workspace.books[0]!.id, chapters: preview.chapters.map((chapter) => ({ title: chapter.title, content: chapter.content })) });
   const pageMarkers = preview.chapters.flatMap((chapter, index) => chapter.pageMarkers.map((marker) => ({ chapterId: imported.chapters[index]!.id, pageNumber: marker.page, label: marker.label, sourceOffset: marker.sourceOffset, textOffset: marker.textOffset })));
-  const units = imported.chapters.map((chapter, index) => ({ chapterId: chapter.id, sceneId: chapter.scenes[0]!.id, orderIndex: index, pageNumber: index * 18 + 1, startOffset: 0, endOffset: Array.from(chapter.scenes[0]!.content).length, content: chapter.scenes[0]!.content, contentHash: contentHash(chapter.scenes[0]!.content) }));
+  let largeOrderIndex = 0;
+  const units = usePageUnits ? imported.chapters.flatMap((chapter, index) => splitContinuityUnits(chapter.scenes[0]!.content, preview.chapters[index]!.pageMarkers, 300).map((unit) => ({ chapterId: chapter.id, sceneId: chapter.scenes[0]!.id, orderIndex: largeOrderIndex++, pageNumber: unit.page, startOffset: unit.startOffset, endOffset: unit.endOffset, content: unit.text, contentHash: contentHash(unit.text) }))) : imported.chapters.map((chapter, index) => ({ chapterId: chapter.id, sceneId: chapter.scenes[0]!.id, orderIndex: index, pageNumber: index * 18 + 1, startOffset: 0, endOffset: Array.from(chapter.scenes[0]!.content).length, content: chapter.scenes[0]!.content, contentHash: contentHash(chapter.scenes[0]!.content) }));
   const job = await repository.createManuscriptAnalysisJob({ projectId: created.id, bookId: workspace.books[0]!.id, importReference: 'complete-import-e2e', providerId: provider.id, pageMarkers, units });
   const controller = new ManuscriptAnalysisController(repository, job.id, provider);
   await controller.start();
@@ -100,7 +103,7 @@ async function runFullBrowserWorkflow(providerOverride?: StoryAiProvider) {
   await repository.applyReviewedManuscriptStructure(job.id);
   await controller.start();
   await repository.getManuscriptAnalysisJob(job.id);
-  expect(await repository.listManuscriptAnalysisUnits(job.id)).toHaveLength(12);
+  expect((await repository.listManuscriptAnalysisUnits(job.id)).length).toBeGreaterThanOrEqual(usePageUnits ? 54 : 12);
   expect(await repository.listManuscriptAnalysisPhaseResults(job.id)).not.toHaveLength(0);
   expect(await repository.listProvisionalEntities(job.id)).not.toHaveLength(0);
   expect(await repository.listContinuityReviewFindings(created.id)).not.toHaveLength(0);
@@ -179,7 +182,15 @@ describe('vollständiger Erststart- und Manuskriptimport-Workflow', () => {
     expect(visible.chapters.filter((chapter) => chapter.importVersionId === second.importVersion.id)).toHaveLength(1);
   });
 
-  it('Lasttest hält 54 Seiten, 3 Kapitel, Unicode und 12 strukturierte Prüfeinheiten ohne Zeichenverlust', async () => {
+  it('verwirft einen ungültigen atomaren Import vollständig', async () => {
+    const repository = new BrowserDemoRepository();
+    const project = await repository.createProject({ title: 'Rollback', author: '' });
+    const workspace = await repository.loadWorkspace(project.id);
+    await expect(repository.createManuscriptImport({ projectId: project.id, bookId: workspace.books[0]!.id, originalText: 'Kapitel 1', originalContentHash: 'rollback-hash', fileName: 'rollback.txt', sourceKind: 'external_text', providerId: 'fake-provider', chapters: [{ title: 'Kapitel 1', content: 'Text', pageMarkers: [], units: [{ startOffset: 0, endOffset: 999, content: 'falscher Ausschnitt', contentHash: 'bad' }] }] })).rejects.toThrow();
+    expect((await repository.loadWorkspace(project.id)).chapters).toHaveLength(0);
+  });
+
+  it('Lasttest hält 54 Seiten, 3 Kapitel, Unicode und 54 seitenweise Prüfeinheiten ohne Zeichenverlust', async () => {
     let page = 1;
     const chapterTexts = Array.from({ length: 3 }, (_, chapterIndex) => `Kapitel ${chapterIndex + 1}\n${Array.from({ length: 18 }, (_, sceneIndex) => { const text = `Seite ${page}\n😀 Figur ${chapterIndex + 1}-${sceneIndex + 1} e\u0301 verfolgt die Spur.`; page += 1; return text; }).join('\n\n')}`);
     const lastText = chapterTexts.join('\n\n');
@@ -196,6 +207,20 @@ describe('vollständiger Erststart- und Manuskriptimport-Workflow', () => {
     expect(structuralScenes.every((scene) => scene.endOffset > scene.startOffset)).toBe(true);
     expect(Array.from(lastText).length).toBeLessThan(100_000);
   });
+
+  it('führt den vollständigen Fake-Provider-Workflow mit allen 54 Seiten aus', async () => {
+    const result = await runFullBrowserWorkflow(undefined, manuscript54Pages, true);
+    expect(result.report).toBeTruthy();
+    expect(result.finalUnits.length).toBeGreaterThanOrEqual(54);
+    expect(result.finalUnits.map((unit) => unit.orderIndex).sort((left, right) => left - right)).toEqual(Array.from({ length: result.finalUnits.length }, (_, index) => index));
+    expect(result.finalUnits.every((unit) => unit.status === 'completed')).toBe(true);
+    expect(new Set(result.finalWorkspace.chapters.map((chapter) => chapter.id)).size).toBe(3);
+    expect(result.finalWorkspace.chapters.flatMap((chapter) => chapter.scenes).every((scene) => scene.content.includes('😀'))).toBe(true);
+    for (const unit of result.finalUnits) {
+      const scene = result.finalWorkspace.chapters.flatMap((chapter) => chapter.scenes).find((candidate) => candidate.id === unit.sceneId)!;
+      expect(unit.content).toBe(Array.from(scene.content).slice(unit.startOffset, unit.endOffset).join(''));
+    }
+  }, 15_000);
 
   it('führt den vollständigen Live-Codex-Workflow nur opt-in aus', async (context) => {
     const env = (globalThis as typeof globalThis & { process?: { env?: Record<string, string | undefined> } }).process?.env;

@@ -758,6 +758,11 @@ export class BrowserDemoRepository implements StoryRepository {
     if (state.project.id !== input.projectId) throw new Error('Das ausgewählte Projekt wurde nicht gefunden.');
     if (!state.books.some((book) => book.id === input.bookId && book.projectId === input.projectId)) throw new Error('Der Zielband wurde nicht gefunden.');
     if (!input.chapters.length || input.chapters.some((chapter) => !chapter.title.trim())) throw new Error('Alle importierten Kapitel benötigen einen Titel.');
+    for (const chapter of input.chapters) {
+      const chars = Array.from(chapter.content);
+      if (chapter.units.some((unit) => unit.startOffset < 0 || unit.endOffset < unit.startOffset || unit.endOffset > chars.length || !unit.content || chars.slice(unit.startOffset, unit.endOffset).join('') !== unit.content)) throw new Error('Eine Prüfeinheit stimmt nicht mit dem vollständigen Kapiteltext überein.');
+      if (chapter.pageMarkers.some((marker) => marker.textOffset < 0 || marker.textOffset > chars.length)) throw new Error('Ein Seitenmarker besitzt eine ungültige Unicode-Position.');
+    }
     const versions = state.manuscriptImportVersions ?? [];
     const sameHash = versions.filter((version) => version.projectId === input.projectId && version.bookId === input.bookId && version.originalContentHash === input.originalContentHash).sort((a, b) => b.versionNumber - a.versionNumber);
     if (sameHash[0] && !input.newVersion) {

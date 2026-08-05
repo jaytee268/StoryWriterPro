@@ -9706,6 +9706,159 @@ mod tests {
     }
 
     #[test]
+    fn sqlite_complete_54_page_import_is_resumable_and_lossless() {
+        let (path, db) = connection("sqlite-54-page-e2e");
+        let project = create_project_in_db(
+            &db,
+            CreateProjectInput {
+                title: "SQLite Gesamttest".into(),
+                author: "".into(),
+                description: "Synthetisches Testprojekt".into(),
+                volume_title: "SQLite Gesamttest".into(),
+                volume: 1,
+            },
+        )
+        .unwrap();
+        let book_id: String = db
+            .query_row(
+                "SELECT id FROM books WHERE project_id=?1 ORDER BY volume LIMIT 1",
+                params![project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let mut page_number = 1_i64;
+        let mut chapters = Vec::new();
+        let mut original_parts = Vec::new();
+        for chapter_number in 1..=3 {
+            let mut parts = Vec::new();
+            let mut offset = 0_i64;
+            let mut markers = Vec::new();
+            let mut units = Vec::new();
+            for scene_number in 1..=18 {
+                let text = format!(
+                    "Seite {page_number} 😀 Figur {chapter_number}-{scene_number} e\u{301} verfolgt die Spur."
+                );
+                markers.push(ManuscriptImportPageMarkerInput {
+                    page_number,
+                    label: format!("Seite {page_number}"),
+                    source_offset: page_number * 10,
+                    text_offset: offset,
+                });
+                let end = offset + text.chars().count() as i64;
+                units.push(ManuscriptImportUnitInput {
+                    page_number: Some(page_number),
+                    start_offset: offset,
+                    end_offset: end,
+                    content: text.clone(),
+                    content_hash: format!("hash-{page_number}"),
+                });
+                parts.push(text);
+                offset = end + 2;
+                page_number += 1;
+            }
+            let content = parts.join("\n\n");
+            original_parts.push(content.clone());
+            chapters.push(CreateManuscriptImportChapterInput {
+                title: format!("Kapitel {chapter_number}"),
+                content,
+                page_markers: markers,
+                units,
+            });
+        }
+        let original_text = original_parts.join("\n\n");
+        let input = CreateManuscriptImportInput {
+            project_id: project.id.clone(),
+            book_id: book_id.clone(),
+            original_text,
+            original_content_hash: "sqlite-54-pages".into(),
+            file_name: "54-seiten.txt".into(),
+            source_kind: "external_text".into(),
+            chapters,
+            page_markers: Vec::new(),
+            provider_id: "fake-provider".into(),
+            new_version: false,
+            onboarding: None,
+        };
+        let first = create_manuscript_import_in_db(&db, input.clone()).unwrap();
+        assert_eq!(first.import.chapters.len(), 3);
+        assert_eq!(first.import.scenes.len(), 3);
+        assert!(first.import.scenes.iter().all(|scene| scene.is_implicit));
+        assert_eq!(
+            db.query_row(
+                "SELECT COUNT(*) FROM manuscript_analysis_units WHERE job_id=?1",
+                params![first.analysis_job.id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            54
+        );
+        let order_indexes: Vec<i64> = db
+            .prepare("SELECT order_index FROM manuscript_analysis_units WHERE job_id=?1 ORDER BY order_index")
+            .unwrap()
+            .query_map(params![first.analysis_job.id], |row| row.get(0))
+            .unwrap()
+            .collect::<SqlResult<Vec<_>>>()
+            .unwrap();
+        assert_eq!(order_indexes, (0_i64..54).collect::<Vec<_>>());
+        let unit_rows: Vec<(String, String, i64, i64)> = db
+            .prepare("SELECT u.content,s.content,u.start_offset,u.end_offset FROM manuscript_analysis_units u JOIN scenes s ON s.id=u.scene_id WHERE u.job_id=?1 ORDER BY u.order_index")
+            .unwrap()
+            .query_map(params![first.analysis_job.id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+            .unwrap()
+            .collect::<SqlResult<Vec<_>>>()
+            .unwrap();
+        for (unit_content, scene_content, start, end) in unit_rows {
+            let chars: Vec<char> = scene_content.chars().collect();
+            assert_eq!(
+                unit_content,
+                chars[start as usize..end as usize]
+                    .iter()
+                    .collect::<String>()
+            );
+        }
+        let unit_text_total: i64 = db
+            .query_row(
+                "SELECT COALESCE(SUM(length(content)),0) FROM manuscript_analysis_units WHERE job_id=?1",
+                params![first.analysis_job.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let chapter_text_total: i64 = db
+            .query_row(
+                "SELECT COALESCE(SUM(length(content)),0) FROM scenes WHERE chapter_id IN (SELECT id FROM chapters WHERE import_version_id=?1)",
+                params![first.import_version.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(unit_text_total < chapter_text_total);
+        let resumed = create_manuscript_import_in_db(&db, input).unwrap();
+        assert_eq!(resumed.analysis_job.id, first.analysis_job.id);
+        assert_eq!(
+            db.query_row(
+                "SELECT COUNT(*) FROM manuscript_import_versions WHERE project_id=?1 AND book_id=?2",
+                params![project.id, book_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            1
+        );
+        drop(db);
+        let reopened = database_path_for_test(&path).unwrap();
+        assert_eq!(
+            reopened
+                .query_row(
+                    "SELECT COUNT(*) FROM manuscript_analysis_units WHERE job_id=?1",
+                    params![first.analysis_job.id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            54
+        );
+        drop(reopened);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn manuscript_import_rolls_back_when_one_chapter_is_invalid() {
         let (path, db) = connection("manuscript-import-rollback");
         let before: i64 = db
