@@ -5217,10 +5217,12 @@ pub fn apply_manuscript_structure(
         .map_err(|e| sql_error("Alte implizite Szenen konnten nicht bereinigt werden", e))?;
     let structure_jobs: Vec<(String, String)> = {
         let mut statement = transaction
-            .prepare("SELECT id,provider_id FROM manuscript_analysis_jobs WHERE project_id=?1 AND ((current_phase='structure' AND status='awaiting_structure_review') OR (current_phase='passage_continuity' AND status='pending'))")
+            .prepare("SELECT j.id,j.provider_id FROM manuscript_analysis_jobs j WHERE j.project_id=?1 AND ((j.current_phase='structure' AND j.status='awaiting_structure_review') OR (j.current_phase='passage_continuity' AND j.status='pending')) AND EXISTS (SELECT 1 FROM manuscript_analysis_units u WHERE u.job_id=j.id AND u.chapter_id=?2) ORDER BY j.updated_at DESC LIMIT 1")
             .map_err(|e| sql_error("Strukturreview-Jobs konnten nicht geladen werden", e))?;
         let rows = statement
-            .query_map(params![project_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .query_map(params![project_id, run.chapter_id], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
             .map_err(|e| sql_error("Strukturreview-Jobs konnten nicht gelesen werden", e))?
             .collect::<SqlResult<Vec<_>>>()
             .map_err(|e| sql_error("Strukturreview-Jobs konnten nicht gelesen werden", e))?;
@@ -5270,7 +5272,14 @@ pub fn apply_manuscript_structure(
                 params![job_id, run.chapter_id],
             )
             .map_err(|e| sql_error("Alte Analyse-Units konnten nicht entfernt werden", e))?;
-        let mut order_index = 0_i64;
+        let base_order_index: i64 = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM manuscript_analysis_units u JOIN chapters c ON c.id=u.chapter_id WHERE u.job_id=?1 AND c.order_index < (SELECT order_index FROM chapters WHERE id=?2)",
+                params![job_id, run.chapter_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| sql_error("Globale Unit-Reihenfolge konnte nicht bestimmt werden", e))?;
+        let mut order_index = base_order_index;
         for (old_id, old_order, page_number, unit_start, unit_end) in old_units {
             for (scene_index, proposal) in proposals.iter().enumerate() {
                 let start = unit_start.max(proposal.start_offset);
@@ -5278,19 +5287,37 @@ pub fn apply_manuscript_structure(
                 if end <= start {
                     continue;
                 }
-                let content: String = chars[start as usize..end as usize].iter().collect();
-                transaction.execute("INSERT INTO manuscript_analysis_units (id,job_id,project_id,chapter_id,scene_id,order_index,page_number,start_offset,end_offset,content,content_hash,status,retry_count,requested_provider,prompt_version,input_hash,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'pending',0,?12,'manuscript-analysis-v1',?11,?13,?13)", params![format!("{old_id}-{scene_index}"), job_id, project_id, run.chapter_id, result[scene_index].id, order_index, page_number, start, end, content, canonical_content_hash(&content), provider_id, timestamp]) .map_err(|e| sql_error("Neue Analyse-Unit konnte nicht gespeichert werden", e))?;
+                let scene_start = proposals[scene_index].start_offset;
+                let new_start = start - scene_start;
+                let new_end = end - scene_start;
+                let scene_text = &result[scene_index].content;
+                let content: String = scene_text
+                    .chars()
+                    .skip(new_start as usize)
+                    .take((new_end - new_start) as usize)
+                    .collect();
+                let expected: String = chars[start as usize..end as usize].iter().collect();
+                if content != expected {
+                    return Err(
+                        "Analyse-Unit stimmt nicht mit dem neuen Szenentext überein.".into(),
+                    );
+                }
+                transaction.execute("INSERT INTO manuscript_analysis_units (id,job_id,project_id,chapter_id,scene_id,order_index,page_number,start_offset,end_offset,content,content_hash,status,retry_count,requested_provider,prompt_version,input_hash,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'pending',0,?12,'manuscript-analysis-v1',?11,?13,?13)", params![format!("{old_id}-{scene_index}"), job_id, project_id, run.chapter_id, result[scene_index].id, order_index, page_number, new_start, new_end, content, canonical_content_hash(&content), provider_id, timestamp]) .map_err(|e| sql_error("Neue Analyse-Unit konnte nicht gespeichert werden", e))?;
                 order_index += 1;
             }
             let _ = old_order;
         }
-        transaction.execute("UPDATE manuscript_analysis_jobs SET status='pending',current_phase='passage_continuity',phase_progress_json='{}',phase_errors_json='{}',total_units=?1,completed_units=0,failed_units=0,current_unit_id=NULL,last_successful_unit_id=NULL,error_message=NULL,updated_at=?2 WHERE id=?3", params![order_index, timestamp, job_id]).map_err(|e| sql_error("Analysejob konnte nach Strukturübernahme nicht zurückgesetzt werden", e))?;
+        transaction.execute("UPDATE manuscript_analysis_jobs SET status='pending',current_phase='passage_continuity',phase_progress_json='{}',phase_errors_json='{}',total_units=(SELECT COUNT(*) FROM manuscript_analysis_units WHERE job_id=?2),completed_units=0,failed_units=0,current_unit_id=NULL,last_successful_unit_id=NULL,error_message=NULL,updated_at=?1 WHERE id=?2", params![timestamp, job_id]).map_err(|e| sql_error("Analysejob konnte nach Strukturübernahme nicht zurückgesetzt werden", e))?;
     }
+    transaction
+        .execute(
+            "UPDATE manuscript_structure_runs SET status='reviewed',error_message=NULL,updated_at=?1 WHERE id=?2",
+            params![timestamp, run_id],
+        )
+        .map_err(|e| sql_error("Strukturlauf konnte nicht abgeschlossen werden", e))?;
     transaction
         .commit()
         .map_err(|e| sql_error("Strukturübernahme konnte nicht abgeschlossen werden", e))?;
-    drop(db);
-    update_manuscript_structure_run(state, run_id, "reviewed".into(), None)?;
     Ok(result)
 }
 
@@ -5299,43 +5326,238 @@ pub fn apply_reviewed_manuscript_structure(
     state: State<'_, DbState>,
     job_id: String,
 ) -> Result<Vec<Scene>, String> {
-    let (project_id, chapter_ids) = {
-        let db = lock_db(&state)?;
-        let project_id: String = db
-            .query_row(
-                "SELECT project_id FROM manuscript_analysis_units WHERE job_id=?1 ORDER BY order_index LIMIT 1",
-                params![job_id],
-                |row| row.get(0),
-            )
-            .map_err(|e| sql_error("Analysejob konnte nicht geladen werden", e))?;
+    let mut db = lock_db(&state)?;
+    apply_reviewed_manuscript_structure_atomically(&mut db, &job_id)
+}
+
+fn apply_reviewed_manuscript_structure_atomically(
+    db: &mut Connection,
+    job_id: &str,
+) -> Result<Vec<Scene>, String> {
+    struct StructurePlan {
+        chapter_id: String,
+        run: ManuscriptStructureRun,
+        proposals: Vec<ManuscriptStructureProposal>,
+        chapter_chars: Vec<char>,
+        old_scene: Scene,
+        old_units: Vec<ManuscriptAnalysisUnit>,
+    }
+
+    let (project_id, book_id, provider_id): (String, String, String) = db
+        .query_row(
+            "SELECT project_id,book_id,provider_id FROM manuscript_analysis_jobs WHERE id=?1",
+            params![job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|e| sql_error("Analysejob konnte nicht geladen werden", e))?;
+    let chapters: Vec<(String, i64)> = {
         let mut statement = db
-            .prepare("SELECT DISTINCT chapter_id FROM manuscript_analysis_units WHERE job_id=?1 ORDER BY chapter_id")
+            .prepare("SELECT DISTINCT c.id,c.order_index FROM manuscript_analysis_units u JOIN chapters c ON c.id=u.chapter_id WHERE u.job_id=?1 AND c.book_id=?2 ORDER BY c.order_index")
             .map_err(|e| sql_error("Analysekapitel konnten nicht geladen werden", e))?;
-        let chapter_ids = statement
-            .query_map(params![job_id], |row| row.get::<_, String>(0))
+        let rows = statement
+            .query_map(params![job_id, book_id], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
             .map_err(|e| sql_error("Analysekapitel konnten nicht gelesen werden", e))?
             .collect::<SqlResult<Vec<_>>>()
             .map_err(|e| sql_error("Analysekapitel konnten nicht gelesen werden", e))?;
-        (project_id, chapter_ids)
+        rows
     };
-    let mut result = Vec::new();
-    for chapter_id in chapter_ids {
-        let db = lock_db(&state)?;
-        let run_id: String = db
-            .query_row(
-                "SELECT id FROM manuscript_structure_runs WHERE project_id=?1 AND chapter_id=?2 AND status IN ('completed','reviewed') ORDER BY updated_at DESC LIMIT 1",
-                params![project_id, chapter_id],
-                |row| row.get(0),
-            )
-            .map_err(|e| sql_error("Strukturlauf konnte nicht geladen werden", e))?;
-        drop(db);
-        result.extend(apply_manuscript_structure(
-            state.clone(),
-            project_id.clone(),
-            run_id,
-        )?);
+    if chapters.is_empty() {
+        return Err("Der Analysejob enthält keine Kapitel.".into());
     }
-    Ok(result)
+
+    let mut plans = Vec::with_capacity(chapters.len());
+    for (chapter_id, _) in chapters {
+        let run = db
+            .query_row(
+                "SELECT id,project_id,chapter_id,content_hash,provider_id,prompt_version,status,error_message,created_at,updated_at FROM manuscript_structure_runs WHERE project_id=?1 AND chapter_id=?2 AND status IN ('completed','reviewed') ORDER BY updated_at DESC LIMIT 1",
+                params![project_id, chapter_id],
+                structure_run_from_row,
+            )
+            .map_err(|e| sql_error("Entschiedener Strukturlauf konnte nicht geladen werden", e))?;
+        let chapter_text = chapter_plain_text(db, &chapter_id)?;
+        if canonical_content_hash(&chapter_text) != run.content_hash {
+            return Err("Der Strukturlauf ist für den aktuellen Kapiteltext veraltet.".into());
+        }
+        let proposals = {
+            let mut statement = db
+                .prepare("SELECT id,run_id,project_id,chapter_id,temporary_id,start_offset,end_offset,title,pov_character_name,pov_entity_id,location,story_time,participating_character_names_json,goal,conflict,important_events_json,transition_type,boundary_reason,confidence,evidence_excerpt,review_status,manual_changes_json,created_at,updated_at FROM manuscript_structure_proposals WHERE run_id=?1 ORDER BY start_offset")
+                .map_err(|e| sql_error("Szenenvorschläge konnten nicht geladen werden", e))?;
+            let rows = statement
+                .query_map(params![run.id], structure_proposal_from_row)
+                .map_err(|e| sql_error("Szenenvorschläge konnten nicht gelesen werden", e))?
+                .collect::<SqlResult<Vec<_>>>()
+                .map_err(|e| sql_error("Szenenvorschläge konnten nicht gelesen werden", e))?;
+            rows
+        };
+        if proposals.is_empty()
+            || proposals
+                .iter()
+                .any(|proposal| !matches!(proposal.review_status.as_str(), "accepted" | "edited"))
+        {
+            return Err(
+                "Alle Szenenvorschläge müssen vor der Gesamtübernahme entschieden sein.".into(),
+            );
+        }
+        let chapter_chars: Vec<char> = chapter_text.chars().collect();
+        let mut expected = 0_i64;
+        for proposal in &proposals {
+            if proposal.start_offset != expected
+                || proposal.end_offset < proposal.start_offset
+                || proposal.end_offset as usize > chapter_chars.len()
+            {
+                return Err("Szenenvorschläge sind nicht lückenlos oder überlappen sich.".into());
+            }
+            let excerpt: String = chapter_chars
+                [proposal.start_offset as usize..proposal.end_offset as usize]
+                .iter()
+                .collect();
+            if excerpt != proposal.evidence_excerpt {
+                return Err(
+                    "Szenenbeleg stimmt nicht mit dem aktuellen Kapiteltext überein.".into(),
+                );
+            }
+            expected = proposal.end_offset;
+        }
+        if expected != chapter_chars.len() as i64 {
+            return Err("Szenenvorschläge decken das Kapitel nicht vollständig ab.".into());
+        }
+        let old_scene = db
+            .query_row("SELECT id,chapter_id,title,order_index,content,pov,location,story_time,status,goal,notes,is_implicit,created_at,updated_at FROM scenes WHERE chapter_id=?1 ORDER BY order_index LIMIT 1", params![chapter_id], scene_from_row)
+            .map_err(|e| sql_error("Implizite Importszene konnte nicht geladen werden", e))?;
+        let old_units = {
+            let mut statement = db
+                .prepare("SELECT id,job_id,project_id,chapter_id,scene_id,order_index,page_number,start_offset,end_offset,content,content_hash,status,retry_count,continuity_run_id,requested_provider,actual_provider,prompt_version,input_hash,output_hash,error_code,error_message,created_at,updated_at,completed_at FROM manuscript_analysis_units WHERE job_id=?1 AND chapter_id=?2 ORDER BY order_index")
+                .map_err(|e| sql_error("Analyse-Units konnten nicht geladen werden", e))?;
+            let rows = statement
+                .query_map(
+                    params![job_id, chapter_id],
+                    manuscript_analysis_unit_from_row,
+                )
+                .map_err(|e| sql_error("Analyse-Units konnten nicht gelesen werden", e))?
+                .collect::<SqlResult<Vec<_>>>()
+                .map_err(|e| sql_error("Analyse-Units konnten nicht gelesen werden", e))?;
+            rows
+        };
+        plans.push(StructurePlan {
+            chapter_id,
+            run,
+            proposals,
+            chapter_chars,
+            old_scene,
+            old_units,
+        });
+    }
+
+    let timestamp = now();
+    let transaction = db
+        .transaction()
+        .map_err(|e| sql_error("Atomare Strukturübernahme konnte nicht gestartet werden", e))?;
+    let mut all_scenes = Vec::new();
+    let mut remapped_units: Vec<(ManuscriptAnalysisUnit, String, i64, i64, i64, String)> =
+        Vec::new();
+    let mut global_order_index = 0_i64;
+    for plan in &plans {
+        insert_scene_version_in_transaction(
+            &transaction,
+            &plan.old_scene,
+            &timestamp,
+            "structure_review",
+        )?;
+        for (scene_index, proposal) in plan.proposals.iter().enumerate() {
+            let content: String = plan.chapter_chars
+                [proposal.start_offset as usize..proposal.end_offset as usize]
+                .iter()
+                .collect();
+            let id = if scene_index == 0 {
+                plan.old_scene.id.clone()
+            } else {
+                new_id()
+            };
+            transaction.execute("INSERT INTO scenes(id,chapter_id,title,order_index,content,pov,location,story_time,status,goal,notes,is_implicit,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'draft',?9,?10,0,?11,?11) ON CONFLICT(id) DO UPDATE SET title=excluded.title,order_index=excluded.order_index,content=excluded.content,pov=excluded.pov,location=excluded.location,story_time=excluded.story_time,status=excluded.status,goal=excluded.goal,notes=excluded.notes,is_implicit=0,updated_at=excluded.updated_at", params![id,plan.chapter_id,proposal.title,scene_index as i64 + 1,content,proposal.pov_character_name.clone().unwrap_or_default(),proposal.location,proposal.story_time,proposal.goal,proposal.boundary_reason,timestamp]).map_err(|e| sql_error("Szene konnte nicht atomar übernommen werden", e))?;
+            let scene = transaction.query_row("SELECT id,chapter_id,title,order_index,content,pov,location,story_time,status,goal,notes,is_implicit,created_at,updated_at FROM scenes WHERE id=?1", params![id], scene_from_row).map_err(|e| sql_error("Übernommene Szene konnte nicht geladen werden", e))?;
+            transaction.execute("INSERT INTO scene_versions(id,scene_id,content,reason,created_at,version_number,snapshot_json) VALUES(?1,?2,?3,'structure_review',?4,1,'')", params![new_id(),scene.id,scene.content,timestamp]).map_err(|e| sql_error("Anfangsversion der Szene konnte nicht gespeichert werden", e))?;
+            for unit in &plan.old_units {
+                let intersection_start = unit.start_offset.max(proposal.start_offset);
+                let intersection_end = unit.end_offset.min(proposal.end_offset);
+                if intersection_end <= intersection_start {
+                    continue;
+                }
+                let new_start = intersection_start - proposal.start_offset;
+                let new_end = intersection_end - proposal.start_offset;
+                let content: String = scene
+                    .content
+                    .chars()
+                    .skip(new_start as usize)
+                    .take((new_end - new_start) as usize)
+                    .collect();
+                let expected: String = plan.chapter_chars
+                    [intersection_start as usize..intersection_end as usize]
+                    .iter()
+                    .collect();
+                if content != expected {
+                    return Err(
+                        "Analyse-Unit stimmt nicht mit dem neuen Szenentext überein.".into(),
+                    );
+                }
+                remapped_units.push((
+                    unit.clone(),
+                    scene.id.clone(),
+                    global_order_index,
+                    new_start,
+                    new_end,
+                    content,
+                ));
+                global_order_index += 1;
+            }
+            all_scenes.push(scene);
+        }
+        transaction
+            .execute(
+                "DELETE FROM scenes WHERE chapter_id=?1 AND id<>?2 AND is_implicit=1",
+                params![plan.chapter_id, plan.old_scene.id],
+            )
+            .map_err(|e| sql_error("Alte implizite Szenen konnten nicht bereinigt werden", e))?;
+    }
+    transaction
+        .execute(
+            "DELETE FROM manuscript_analysis_draft_ledger WHERE job_id=?1",
+            params![job_id],
+        )
+        .map_err(|e| sql_error("Job-Draft-Zustände konnten nicht entfernt werden", e))?;
+    transaction
+        .execute(
+            "DELETE FROM manuscript_analysis_artifacts WHERE job_id=?1",
+            params![job_id],
+        )
+        .map_err(|e| sql_error("Job-Artefakte konnten nicht entfernt werden", e))?;
+    transaction
+        .execute(
+            "DELETE FROM manuscript_analysis_phase_results WHERE job_id=?1",
+            params![job_id],
+        )
+        .map_err(|e| sql_error("Job-Phasenergebnisse konnten nicht entfernt werden", e))?;
+    transaction
+        .execute(
+            "DELETE FROM manuscript_analysis_units WHERE job_id=?1",
+            params![job_id],
+        )
+        .map_err(|e| sql_error("Alte Analyse-Units konnten nicht entfernt werden", e))?;
+    for (unit, scene_id, order_index, start_offset, end_offset, content) in remapped_units {
+        transaction.execute("INSERT INTO manuscript_analysis_units (id,job_id,project_id,chapter_id,scene_id,order_index,page_number,start_offset,end_offset,content,content_hash,status,retry_count,requested_provider,prompt_version,input_hash,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'pending',0,?12,'manuscript-analysis-v1',?10,?13,?13)", params![format!("{}-{}", unit.id, scene_id), job_id, project_id, unit.chapter_id, scene_id, order_index, unit.page_number, start_offset, end_offset, content, canonical_content_hash(&content), provider_id, timestamp]).map_err(|e| sql_error("Neue Analyse-Unit konnte nicht gespeichert werden", e))?;
+    }
+    transaction.execute("UPDATE manuscript_analysis_jobs SET status='pending',current_phase='passage_continuity',phase_progress_json='{}',phase_errors_json='{}',total_units=?1,completed_units=0,failed_units=0,current_unit_id=NULL,last_successful_unit_id=NULL,error_message=NULL,updated_at=?2 WHERE id=?3", params![global_order_index, timestamp, job_id]).map_err(|e| sql_error("Analysejob konnte nicht zurückgesetzt werden", e))?;
+    for plan in &plans {
+        transaction.execute("UPDATE manuscript_structure_runs SET status='reviewed',error_message=NULL,updated_at=?1 WHERE id=?2", params![timestamp, plan.run.id]).map_err(|e| sql_error("Strukturlauf konnte nicht abgeschlossen werden", e))?;
+    }
+    transaction.commit().map_err(|e| {
+        sql_error(
+            "Atomare Strukturübernahme konnte nicht abgeschlossen werden",
+            e,
+        )
+    })?;
+    Ok(all_scenes)
 }
 
 fn provisional_entity_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ProvisionalEntity> {

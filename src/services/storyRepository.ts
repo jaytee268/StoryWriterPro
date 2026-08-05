@@ -612,6 +612,64 @@ export class TauriStoryRepository implements StoryRepository {
 }
 
 interface BrowserState { project: Project; onboarding?: ProjectOnboardingState; books: Book[]; chapters: Chapter[]; entities: StoryEntity[]; versions: SceneVersion[]; editorPreferences: EditorPreferences; sources: StorySourceReference[]; sourceDocuments?: ProjectSourceDocument[]; runs: BibleUpdateRun[]; proposals: BibleProposal[]; lore: LoreMetadata[]; loreCrafterRuns?: LoreCrafterRun[]; loreCrafterClarifications?: LoreCrafterClarification[]; loreCrafterSources?: LoreCrafterSourceReference[]; loreSheetDrafts?: LoreSheetDraft[]; loreSheetItems?: LoreSheetItem[]; characterProfiles: CharacterProfile[]; characterStates: CharacterSceneState[]; projectStyle?: ProjectStyle; styleReferences: StyleReference[]; styleRuns: ProjectStyleAnalysisRun[]; styleObservations: ProjectStyleObservation[]; summaries: NarrativeSummary[]; relations: StoryEntityRelation[]; rules: ProjectRule[]; ruleProposals: ProjectRuleProposal[]; continuityLedger: ContinuityStateLedgerEntry[]; continuitySettings: ContinuityReviewSettings; continuityRuns: ContinuityReviewRun[]; continuityFindings: ContinuityReviewFinding[]; continuityDecisions: ContinuityFindingDecision[]; continuityCanonAudits: ContinuityCanonChangeAudit[]; manuscriptAnalysisJobs: ManuscriptAnalysisJob[]; manuscriptAnalysisUnits: ManuscriptAnalysisUnit[]; manuscriptAnalysisDraftLedger: ManuscriptAnalysisDraftLedgerEntry[]; manuscriptAnalysisPhaseResults?: ManuscriptAnalysisPhaseResult[]; manuscriptAnalysisArtifacts?: ManuscriptAnalysisArtifact[]; manuscriptAnalysisReviewAudits?: ManuscriptAnalysisReviewAudit[]; manuscriptStructureRuns?: ManuscriptStructureRun[]; manuscriptStructureProposals?: ManuscriptStructureProposal[]; provisionalEntities?: ProvisionalEntity[]; provisionalMentions?: ProvisionalEntityMention[]; provisionalMergeProposals?: ProvisionalMergeProposal[]; provisionalRelations?: ProvisionalRelation[]; provisionalEvents?: ProvisionalEvent[]; timelineEvents?: PersistentTimelineEvent[]; graphEdges?: StoryGraphEdge[]; mindmapLayouts?: MindmapLayout[]; plotThreadLifecycles: PlotThreadLifecycle[]; plotThreadProposals: PlotThreadLifecycleProposal[]; voicePatterns: CharacterVoicePattern[]; experiences: CharacterExperience[]; dialogueMemories: CharacterDialogueMemory[]; relationshipMemories: RelationshipMemory[]; knowledgeStates: CharacterKnowledgeState[]; knowledgeHistory: CharacterKnowledgeState[]; memoryEvidence: CharacterMemoryEvidence[]; memoryRuns: CharacterMemoryUpdateRun[]; memoryProposals: CharacterMemoryProposal[]; }
+function applyReviewedManuscriptStructureInBrowser(state: BrowserState, jobId: string): Scene[] {
+  const job = state.manuscriptAnalysisJobs.find((item) => item.id === jobId);
+  if (!job) throw new Error('Analysejob nicht gefunden.');
+  const jobUnits = state.manuscriptAnalysisUnits.filter((unit) => unit.jobId === jobId);
+  const chapters = [...new Map(jobUnits.map((unit) => [unit.chapterId, state.chapters.find((chapter) => chapter.id === unit.chapterId)])).values()]
+    .filter((chapter): chapter is Chapter => Boolean(chapter))
+    .sort((left, right) => left.orderIndex - right.orderIndex);
+  const runs = (state.manuscriptStructureRuns ?? [])
+    .filter((run) => run.projectId === job.projectId && chapters.some((chapter) => chapter.id === run.chapterId) && ['completed', 'reviewed'].includes(run.status))
+    .sort((left, right) => chapters.findIndex((chapter) => chapter.id === left.chapterId) - chapters.findIndex((chapter) => chapter.id === right.chapterId));
+  if (runs.length !== chapters.length || new Set(runs.map((run) => run.chapterId)).size !== chapters.length) throw new Error('Für jedes importierte Kapitel muss die Struktur geprüft werden.');
+
+  const stamp = now();
+  const chapterPlans = chapters.map((chapter) => {
+    const run = runs.find((item) => item.chapterId === chapter.id)!;
+    const text = chapter.scenes.map((scene) => editorContentToPlainText(scene.content)).join('\n\n');
+    if (contentHash(text) !== run.contentHash) throw new Error('Der Strukturlauf ist für den aktuellen Kapiteltext veraltet.');
+    const proposals = (state.manuscriptStructureProposals ?? []).filter((proposal) => proposal.runId === run.id).sort((left, right) => left.startOffset - right.startOffset);
+    if (!proposals.length || proposals.some((proposal) => !['accepted', 'edited'].includes(proposal.reviewStatus))) throw new Error('Alle Szenenvorschläge müssen vor der Übernahme bestätigt oder bearbeitet werden.');
+    validateManuscriptStructure(text, proposals);
+    const chars = Array.from(text);
+    const oldScene = chapter.scenes[0];
+    if (!oldScene) throw new Error('Implizite Importszene fehlt.');
+    const scenes = proposals.map((proposal, index) => ({ ...oldScene, id: index === 0 ? oldScene.id : crypto.randomUUID(), title: proposal.title, orderIndex: index + 1, content: chars.slice(proposal.startOffset, proposal.endOffset).join(''), pov: proposal.povCharacterName ?? '', location: proposal.location, storyTime: proposal.storyTime, goal: proposal.goal, notes: proposal.boundaryReason, isImplicit: proposals.length === 1 }));
+    return { chapter, run, proposals, chars, scenes, oldUnits: jobUnits.filter((unit) => unit.chapterId === chapter.id).sort((left, right) => left.startOffset - right.startOffset) };
+  });
+
+  let globalOrderIndex = 0;
+  const remappedUnits: ManuscriptAnalysisUnit[] = [];
+  for (const plan of chapterPlans) {
+    for (const unit of plan.oldUnits) {
+      for (const [sceneIndex, proposal] of plan.proposals.entries()) {
+        const intersectionStart = Math.max(unit.startOffset, proposal.startOffset);
+        const intersectionEnd = Math.min(unit.endOffset, proposal.endOffset);
+        if (intersectionEnd <= intersectionStart) continue;
+        const newStartOffset = intersectionStart - proposal.startOffset;
+        const newEndOffset = intersectionEnd - proposal.startOffset;
+        const sceneChars = Array.from(plan.scenes[sceneIndex]!.content);
+        const content = sceneChars.slice(newStartOffset, newEndOffset).join('');
+        const expected = plan.chars.slice(intersectionStart, intersectionEnd).join('');
+        if (content !== expected) throw new Error('Analyse-Unit stimmt nicht mit dem neuen Szenentext überein.');
+        remappedUnits.push({ ...unit, id: `${unit.id}-${plan.scenes[sceneIndex]!.id}`, sceneId: plan.scenes[sceneIndex]!.id, orderIndex: globalOrderIndex++, startOffset: newStartOffset, endOffset: newEndOffset, content, contentHash: contentHash(content), status: 'pending', retryCount: 0, continuityRunId: undefined, requestedProvider: job.providerId, actualProvider: undefined, outputHash: undefined, errorCode: undefined, errorMessage: undefined, completedAt: undefined, updatedAt: stamp });
+      }
+    }
+  }
+
+  const result = chapterPlans.flatMap((plan) => plan.scenes);
+  const chapterById = new Map(chapterPlans.map((plan) => [plan.chapter.id, plan.scenes]));
+  state.chapters = state.chapters.map((chapter) => chapterById.has(chapter.id) ? { ...chapter, scenes: chapterById.get(chapter.id)! } : chapter);
+  state.manuscriptAnalysisUnits = [...state.manuscriptAnalysisUnits.filter((unit) => unit.jobId !== jobId), ...remappedUnits];
+  state.manuscriptAnalysisDraftLedger = state.manuscriptAnalysisDraftLedger.filter((entry) => entry.jobId !== jobId);
+  state.manuscriptAnalysisPhaseResults = (state.manuscriptAnalysisPhaseResults ?? []).filter((item) => item.jobId !== jobId);
+  state.manuscriptAnalysisArtifacts = (state.manuscriptAnalysisArtifacts ?? []).filter((item) => item.jobId !== jobId);
+  state.manuscriptStructureRuns = (state.manuscriptStructureRuns ?? []).map((run) => runs.some((used) => used.id === run.id) ? { ...run, status: 'reviewed', updatedAt: stamp } : run);
+  state.manuscriptAnalysisJobs = state.manuscriptAnalysisJobs.map((item) => item.id === jobId ? { ...item, status: 'pending', currentPhase: 'passage_continuity', currentUnitId: undefined, lastSuccessfulUnitId: undefined, completedUnits: 0, failedUnits: 0, totalUnits: remappedUnits.length, errorMessage: undefined, updatedAt: stamp } : item);
+  return result;
+}
+
 const browserKey = 'storymemory-browser-demo-workspace';
 const browserPreferencesKey = 'storymemory-browser-demo-editor-preferences';
 const defaultEditorPreferences: EditorPreferences = { fontFamily: 'serif', fontSize: 18, lineHeight: 1.95 };
@@ -1016,7 +1074,7 @@ export class BrowserDemoRepository implements StoryRepository {
   async listCharacterMemoryProposals(runId: string): Promise<CharacterMemoryProposal[]> { return this.read().memoryProposals.filter((x) => x.runId === runId).map(clone); }
   async reviewCharacterMemoryProposal(input: ReviewCharacterMemoryProposalInput): Promise<CharacterMemoryProposal> { const state = this.read(); const reviewed = applyBrowserCharacterMemoryReview(state, input); syncManuscriptArtifact(state, 'character_memory_proposal', input.proposalId, input.reviewStatus === 'rejected' ? 'rejected' : input.reviewStatus === 'accepted' || input.reviewStatus === 'edited' ? 'confirmed' : 'uncertain'); this.write(state); return clone(reviewed); }
   async completeCharacterMemoryReview(runId: string): Promise<CharacterMemoryUpdateRun> { const state = this.read(); if (state.memoryProposals.some((x) => x.runId === runId && x.reviewStatus === 'pending')) throw new Error('Bitte prüfe zuerst alle Vorschläge.'); const run = state.memoryRuns.find((x) => x.id === runId); if (!run) throw new Error('Character-Memory-Lauf nicht gefunden.'); const saved = { ...run, status: 'reviewed' as const, completedAt: run.completedAt ?? now() }; state.memoryRuns = state.memoryRuns.map((x) => x.id === runId ? saved : x); this.write(state); return clone(saved); }
-  async applyReviewedManuscriptStructure(jobId: string): Promise<Scene[]> { const state = this.read(); const job = state.manuscriptAnalysisJobs.find((item) => item.id === jobId); if (!job) throw new Error('Analysejob nicht gefunden.'); const chapterIds = [...new Set(state.manuscriptAnalysisUnits.filter((unit) => unit.jobId === jobId).map((unit) => unit.chapterId))]; const runs = (state.manuscriptStructureRuns ?? []).filter((run) => run.projectId === job.projectId && chapterIds.includes(run.chapterId) && ['completed', 'reviewed'].includes(run.status)).sort((a, b) => (state.chapters.find((chapter) => chapter.id === a.chapterId)?.orderIndex ?? 0) - (state.chapters.find((chapter) => chapter.id === b.chapterId)?.orderIndex ?? 0)); if (runs.length !== chapterIds.length) throw new Error('Für jedes importierte Kapitel muss die Struktur geprüft werden.'); const before = localStorage.getItem(browserKey); try { const scenes: Scene[] = []; for (const run of runs) scenes.push(...await this.applyManuscriptStructure(job.projectId, run.id)); return scenes; } catch (error) { if (before !== null) localStorage.setItem(browserKey, before); throw error; } }
+  async applyReviewedManuscriptStructure(jobId: string): Promise<Scene[]> { const state = this.read(); const result = applyReviewedManuscriptStructureInBrowser(state, jobId); this.write(state); return clone(result); }
   async deleteStyleReference(id: string): Promise<void> { const state = this.read(); state.styleReferences = state.styleReferences.filter((item) => item.id !== id); this.write(state); }
 }
 

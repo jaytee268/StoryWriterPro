@@ -117,13 +117,14 @@ function normalizeRelativeOffsets<T extends { startOffset?: number; endOffset?: 
   if (start === undefined && end === undefined) return item;
   if (start === undefined || end === undefined || start < 0 || end < start || end > codepoints(text).length) throw new Error('Der AI-Provider lieferte ungültige passage-relative Unicode-Offsets.');
   const excerpt = codepoints(text).slice(start, end).join('');
-  if (item.evidenceExcerpt?.trim() && excerpt !== item.evidenceExcerpt.trim()) throw new Error('Die AI-Belegstelle stimmt nicht mit ihren Unicode-Offsets überein.');
+  if (item.evidenceExcerpt?.trim() && excerpt.trim() !== item.evidenceExcerpt.trim()) throw new Error('Die AI-Belegstelle stimmt nicht mit ihren Unicode-Offsets überein.');
   return { ...item, startOffset: passageStartOffset + start, endOffset: passageStartOffset + end };
 }
 
 function normalizeContinuityOffsets(result: ContinuityAnalysisResult, text: string, passageStartOffset: number): ContinuityAnalysisResult {
   const normalized = normalizeContinuityResultNulls(result);
   const counter = (item: ContinuityCounterEvidence): ContinuityCounterEvidence => {
+    if (item.sourceReferenceId) return item;
     const normalizedCounter = normalizeRelativeOffsets({ ...item, evidenceExcerpt: item.excerpt }, text, passageStartOffset);
     return { ...item, startOffset: normalizedCounter.startOffset, endOffset: normalizedCounter.endOffset };
   };
@@ -135,7 +136,7 @@ function normalizeContinuityOffsets(result: ContinuityAnalysisResult, text: stri
     missingExplanations: normalized.missingExplanations.map((item) => ({ ...normalizeRelativeOffsets(item, text, passageStartOffset), counterEvidence: item.counterEvidence?.map(counter) })),
     newRuleProposals: normalized.newRuleProposals.map((item) => normalizeRelativeOffsets(item, text, passageStartOffset)),
     plotThreadChanges: normalized.plotThreadChanges.map((item) => normalizeRelativeOffsets(item, text, passageStartOffset)),
-    evidence: normalized.evidence.map((item) => normalizeRelativeOffsets({ ...item, evidenceExcerpt: item.excerpt }, text, passageStartOffset) as typeof item),
+    evidence: normalized.evidence.map((item) => ('sourceReferenceId' in item && item.sourceReferenceId) ? item : normalizeRelativeOffsets({ ...item, evidenceExcerpt: item.excerpt }, text, passageStartOffset) as typeof item),
   };
 }
 
