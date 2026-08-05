@@ -28,6 +28,7 @@ pub fn run() {
             commands::create_project,
             commands::get_project_onboarding_state,
             commands::save_project_onboarding_state,
+            commands::save_book_genres,
             commands::import_manuscript,
             commands::create_chapter,
             commands::update_chapter,

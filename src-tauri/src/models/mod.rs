@@ -1385,8 +1385,33 @@ pub struct Book {
     pub project_id: String,
     pub title: String,
     pub volume: i64,
+    pub primary_genre_id: Option<String>,
+    pub secondary_genre_ids: Vec<String>,
+    pub custom_genre_names: Vec<String>,
+    pub genre_source: Option<String>,
+    pub genre_confidence: Option<f64>,
+    pub genre_reason: Option<String>,
+    pub genre_author_confirmed: bool,
+    pub genre_detected_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveBookGenresInput {
+    pub book_id: String,
+    pub project_id: String,
+    pub primary_genre_id: Option<String>,
+    #[serde(default)]
+    pub secondary_genre_ids: Vec<String>,
+    #[serde(default)]
+    pub custom_genre_names: Vec<String>,
+    pub genre_source: Option<String>,
+    pub genre_confidence: Option<f64>,
+    pub genre_reason: Option<String>,
+    pub genre_author_confirmed: bool,
+    pub genre_detected_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -96,6 +96,7 @@ pub enum CodexTaskKind {
     GlobalCountercheck,
     AnalyzeLoreDraft,
     BuildLoreSheet,
+    DetectBookGenre,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -366,6 +367,7 @@ fn continuity_schema() -> &'static str {
 const CHARACTER_MEMORY_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["proposals","warnings"],"properties":{"proposals":{"type":"array","maxItems":100,"items":{"type":"object","required":["proposalKind","subjectCharacterId","relatedCharacterId","targetEntityId","payload","classification","confidence","evidenceExcerpt","startOffset","endOffset","reason"],"properties":{"proposalKind":{"enum":["voice_pattern","experience","dialogue_memory","relationship_memory","knowledge_change","profile_observation","character_relation"]},"subjectCharacterId":{"type":["string","null"]},"relatedCharacterId":{"type":["string","null"]},"targetEntityId":{"type":["string","null"]},"payload":{"type":"object"},"classification":{"enum":["observable","interpretation","author_decision_required","possible_contradiction"]},"confidence":{"type":"number","minimum":0,"maximum":1},"evidenceExcerpt":{"type":"string","maxLength":1000},"startOffset":{"type":["integer","null"],"minimum":0},"endOffset":{"type":["integer","null"],"minimum":0},"reason":{"type":"string","maxLength":1000}}}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
 const STYLE_ANALYSIS_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["observations","overallSummary","warnings"],"properties":{"observations":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["observationType","observationText","recommendation","confidence","evidence"],"properties":{"observationType":{"type":"string"},"observationText":{"type":"string","maxLength":4000},"recommendation":{"type":"string","maxLength":2000},"confidence":{"type":"number","minimum":0,"maximum":1},"evidence":{"type":"array","maxItems":10,"items":{"type":"string"}}}}},"overallSummary":{"type":"string","maxLength":6000},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
 const SUMMARY_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["summary","importantEvents","openThreads","characterChanges","knowledgeChanges","relationshipEffects","warnings"],"properties":{"summary":{"type":"string","maxLength":8000},"importantEvents":{"type":"array","items":{"type":"string","maxLength":1000}},"openThreads":{"type":"array","items":{"type":"string","maxLength":1000}},"characterChanges":{"type":"array","items":{"type":"string","maxLength":1000}},"knowledgeChanges":{"type":"array","items":{"type":"string","maxLength":1000}},"relationshipEffects":{"type":"array","items":{"type":"string","maxLength":1000}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
+const GENRE_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["primaryGenreId","customPrimaryGenre","secondaryGenreIds","customSecondaryGenres","confidence","reasoning","supportingSignals","contradictingSignals","alternativeGenres","audienceNotes","warnings"],"properties":{"primaryGenreId":{"type":["string","null"]},"customPrimaryGenre":{"type":["string","null"]},"secondaryGenreIds":{"type":"array","items":{"type":"string"}},"customSecondaryGenres":{"type":"array","items":{"type":"string"}},"confidence":{"type":"number","minimum":0,"maximum":1},"reasoning":{"type":"string","maxLength":4000},"supportingSignals":{"type":"array","items":{"type":"string","maxLength":1000}},"contradictingSignals":{"type":"array","items":{"type":"string","maxLength":1000}},"alternativeGenres":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["genreId","customGenre","reason"],"properties":{"genreId":{"type":["string","null"]},"customGenre":{"type":["string","null"]},"reason":{"type":"string","maxLength":1000}}}},"audienceNotes":{"type":"array","items":{"type":"string","maxLength":1000}},"warnings":{"type":"array","items":{"type":"string","maxLength":500}}}}"#;
 const STRUCTURE_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["scenes","warnings"],"properties":{"scenes":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["temporaryId","chapterId","startOffset","endOffset","title","povCharacterName","povEntityId","location","storyTime","participatingCharacterNames","goal","conflict","importantEvents","transitionType","boundaryReason","confidence","evidenceExcerpt"],"properties":{"temporaryId":{"type":"string"},"chapterId":{"type":"string"},"startOffset":{"type":"integer","minimum":0},"endOffset":{"type":"integer","minimum":0},"title":{"type":"string"},"povCharacterName":{"type":["string","null"]},"povEntityId":{"type":["string","null"]},"location":{"type":"string"},"storyTime":{"type":"string"},"participatingCharacterNames":{"type":"array","items":{"type":"string"}},"goal":{"type":"string"},"conflict":{"type":"string"},"importantEvents":{"type":"array","items":{"type":"string"}},"transitionType":{"enum":["location_change","time_jump","pov_change","character_group_change","flashback_start","flashback_end","dream_start","dream_end","action_break","narrative_transition","chapter_continuation"]},"boundaryReason":{"type":"string"},"confidence":{"type":"number","minimum":0,"maximum":1},"evidenceExcerpt":{"type":"string"}}}},"warnings":{"type":"array","items":{"type":"string"}}}}"#;
 const ENTITY_RESOLUTION_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["entities","mentions","relations","events","mergeProposals","warnings"],"properties":{"entities":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["temporaryId","entityType","canonicalName","aliases","description","confidence","existingEntityId"],"properties":{"temporaryId":{"type":"string"},"entityType":{"enum":["character","place","organization","object","event","fact","clue","secret","plot_thread","open_question","world_rule_candidate","author_note"]},"canonicalName":{"type":"string"},"aliases":{"type":"array","items":{"type":"string"}},"description":{"type":"string"},"confidence":{"type":"number","minimum":0,"maximum":1},"existingEntityId":{"type":["string","null"]}}}},"mentions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["mentionText","startOffset","endOffset","temporaryEntityId","alternativeTemporaryIds","confidence","resolutionReason","excerpt"],"properties":{"mentionText":{"type":"string"},"startOffset":{"type":"integer","minimum":0},"endOffset":{"type":"integer","minimum":0},"temporaryEntityId":{"type":["string","null"]},"alternativeTemporaryIds":{"type":"array","items":{"type":"string"}},"confidence":{"type":"number","minimum":0,"maximum":1},"resolutionReason":{"type":"string"},"excerpt":{"type":"string"}}}},"relations":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["sourceTemporaryId","targetTemporaryId","relationType","label","confidence"],"properties":{"sourceTemporaryId":{"type":"string"},"targetTemporaryId":{"type":"string"},"relationType":{"type":"string"},"label":{"type":"string"},"confidence":{"type":"number","minimum":0,"maximum":1}}}},"events":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["title","summary","participantTemporaryIds","startOffset","endOffset","confidence","excerpt"],"properties":{"title":{"type":"string"},"summary":{"type":"string"},"participantTemporaryIds":{"type":"array","items":{"type":"string"}},"startOffset":{"type":"integer","minimum":0},"endOffset":{"type":"integer","minimum":0},"confidence":{"type":"number","minimum":0,"maximum":1},"excerpt":{"type":"string"}}}},"mergeProposals":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["leftTemporaryId","rightTemporaryId","existingEntityId","reason","confidence"],"properties":{"leftTemporaryId":{"type":"string"},"rightTemporaryId":{"type":["string","null"]},"existingEntityId":{"type":["string","null"]},"reason":{"type":"string"},"confidence":{"type":"number","minimum":0,"maximum":1}}}},"warnings":{"type":"array","items":{"type":"string"}}}}"#;
 const PLOT_THREAD_SYNTHESIS_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["summary","openQuestions","threadGoals","developments","closureCandidates","partiallyResolved","reopened","threadProposals","warnings"],"properties":{"summary":{"type":"string"},"openQuestions":{"type":"array","items":{"type":"string"}},"threadGoals":{"type":"array","items":{"type":"string"}},"developments":{"type":"array","items":{"type":"string"}},"closureCandidates":{"type":"array","items":{"type":"string"}},"partiallyResolved":{"type":"array","items":{"type":"string"}},"reopened":{"type":"array","items":{"type":"string"}},"threadProposals":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["entityId","proposedStatus","evidenceExcerpt","reason","confidence","sourceReferenceId"],"properties":{"entityId":{"type":"string"},"proposedStatus":{"enum":["open","closure_candidate","partially_resolved","reopened","abandoned"]},"evidenceExcerpt":{"type":"string"},"reason":{"type":"string"},"confidence":{"type":"number","minimum":0,"maximum":1},"sourceReferenceId":{"type":["string","null"]}}}},"warnings":{"type":"array","items":{"type":"string"}}}}"#;
@@ -400,6 +402,7 @@ fn schema_for_task(kind: &CodexTaskKind) -> &'static str {
         CodexTaskKind::GlobalCountercheck => GLOBAL_COUNTERCHECK_SCHEMA,
         CodexTaskKind::AnalyzeLoreDraft => LORE_DRAFT_SCHEMA,
         CodexTaskKind::BuildLoreSheet => LORE_SHEET_SCHEMA,
+        CodexTaskKind::DetectBookGenre => GENRE_SCHEMA,
         CodexTaskKind::PlanChapterDraft => CHAPTER_PLAN_SCHEMA_STRICT,
         CodexTaskKind::DraftChapterSection => CHAPTER_SECTION_SCHEMA_STRICT,
         CodexTaskKind::ReviewChapterSection | CodexTaskKind::ReviewCompleteChapter => REVIEW_SCHEMA,
@@ -429,6 +432,7 @@ fn prompt_for(kind: &CodexTaskKind) -> (&'static str, &'static str) {
         CodexTaskKind::GlobalCountercheck => ("storymemory-global-countercheck-v1", "Führe ausschließlich eine globale Gegenprüfung aus. Ändere keinen bestätigten Kanon und liefere Quellenunsicherheiten als Vorschläge."),
         CodexTaskKind::AnalyzeLoreDraft => ("storymemory-lore-draft-v1", "Analysiere ausschließlich freie Lore-Notizen. Erkläre das Verständnis, trenne Weltregeln von Inhalten für andere Storybereiche und übernehme nichts automatisch in Story Bible oder Projektregeln."),
         CodexTaskKind::BuildLoreSheet => ("storymemory-lore-sheet-v1", "Erstelle ausschließlich aus dem geprüften Lore-Verständnis ein vorgeschlagenes Lore Sheet. Erfinde keine Fakten und bestätige keinen Kanon."),
+        CodexTaskKind::DetectBookGenre => ("storymemory-genre-v1", "Erkenne optional das Buchgenre ausschließlich aus dem strukturierten Projektkontext. Verwende nur IDs aus dem übergebenen Katalog. Überschreibe kein manuell bestätigtes Genre. Liefere ausschließlich JSON nach output-schema.json."),
     }
 }
 
@@ -779,6 +783,9 @@ fn result_matches_task(value: &Value, task: &CodexTaskKind) -> bool {
         }
         CodexTaskKind::BuildLoreSheet => {
             object.contains_key("title") && object.contains_key("worldRules")
+        }
+        CodexTaskKind::DetectBookGenre => {
+            object.contains_key("confidence") && object.contains_key("secondaryGenreIds")
         }
         CodexTaskKind::PlanChapterDraft => {
             object.contains_key("chapterTitle") && object.contains_key("beats")
@@ -1731,6 +1738,18 @@ fn validate_longform_result_for_task(
             "ruleConnections",
             "openQuestions",
         ],
+        CodexTaskKind::DetectBookGenre => &[
+            "primaryGenreId",
+            "customPrimaryGenre",
+            "secondaryGenreIds",
+            "customSecondaryGenres",
+            "confidence",
+            "reasoning",
+            "supportingSignals",
+            "contradictingSignals",
+            "alternativeGenres",
+            "audienceNotes",
+        ],
         CodexTaskKind::PlanChapterDraft => &[
             "chapterTitle",
             "chapterGoal",
@@ -2143,6 +2162,7 @@ pub fn run_task(
         | CodexTaskKind::GlobalCountercheck
         | CodexTaskKind::AnalyzeLoreDraft
         | CodexTaskKind::BuildLoreSheet
+        | CodexTaskKind::DetectBookGenre
         | CodexTaskKind::PlanChapterDraft
         | CodexTaskKind::DraftChapterSection
         | CodexTaskKind::ReviewChapterSection
@@ -2484,6 +2504,9 @@ mod tests {
             CodexTaskKind::BuildLoreSheet => {
                 json!({"title":"Vorgeschlagenes Lore Sheet","premise":"Eine vorläufig strukturierte Weltbeschreibung.","categories":["world_rule"],"worldRules":["Das System hat eine erkennbare Grenze."],"worldRuleObjects":[{"temporaryId":"rule-1","title":"Grenze des Systems","statement":"Das System hat eine erkennbare Grenze.","prerequisites":["Eine bestimmte Voraussetzung."],"effects":["Eine beobachtbare Auswirkung."],"limitations":["Die Wirkung ist nicht unbegrenzt."],"costs":["Die Anwendung hat einen Preis."],"exceptions":["Eine mögliche Ausnahme."],"relatedTerminology":["System"],"connectedItemIds":[],"sourceSpans":[{"excerpt":"😀 Zettel","startOffset":0,"endOffset":8}],"confidence":0.74}],"prerequisites":["Eine bestimmte Voraussetzung."],"effects":["Eine beobachtbare Auswirkung."],"limitations":["Die Wirkung ist nicht unbegrenzt."],"costs":["Die Anwendung hat einen Preis."],"exceptions":["Eine mögliche Ausnahme."],"terminology":["System"],"organizations":[],"locations":[],"historicalEvents":[],"knownAspects":["Die Notiz beschreibt ein System."],"unknownAspects":["Welche Bedingung gilt genau?"],"ruleConnections":[],"openQuestions":["Soll die Grenze immer gelten?"],"warnings":[]})
             }
+            CodexTaskKind::DetectBookGenre => {
+                json!({"primaryGenreId":"fantasy","customPrimaryGenre":null,"secondaryGenreIds":["mystery"],"customSecondaryGenres":[],"confidence":0.68,"reasoning":"Die synthetischen Signale verbinden eine fantastische Welt mit einer offenen Ermittlungsfrage.","supportingSignals":["Weltregel mit übernatürlicher Wirkung","Zentrale offene Frage"],"contradictingSignals":[],"alternativeGenres":[{"genreId":"thriller","customGenre":null,"reason":"Die Spannung ist ebenfalls stark ausgeprägt."}],"audienceNotes":["Für erwachsene Leserinnen und Leser geeignet."],"warnings":[]})
+            }
             CodexTaskKind::PlanChapterDraft => {
                 json!({"chapterTitle":"Kapitel","chapterGoal":"Den Zettel einordnen.","povCharacterId":"char-1","startingState":"Der Zettel liegt bereit.","endingState":"Malik fasst eine Spur.","chapterSummary":"Malik untersucht einen Zettel.","endingConnection":"Eine neue Spur öffnet sich.","newInformation":["Der Zettel ist wichtig."],"withheldInformation":["Wer ihn hinterließ."],"assumptions":[{"type":"continuity","text":"Der Zettel bleibt erhalten."}],"beats":[{"id":"beat-1","orderIndex":0,"title":"Beobachtung","purpose":"Spur einführen.","participatingCharacterIds":["char-1"],"startingState":"Ruhe","event":"Malik findet den Zettel.","conflict":"Er versteht ihn nicht.","newInformation":["Eine Spur erscheint."],"knowledgeChanges":[{"characterId":"char-1","factEntityId":"entity-1","nextState":"suspects","reason":"Der Text ist auffällig."}],"relationshipChanges":[],"cluesUsed":["entity-1"],"loreEntityIds":["entity-1"],"endingHook":"Eine Frage bleibt.","targetWords":120}],"warnings":[]})
             }
@@ -2528,6 +2551,7 @@ mod tests {
             CodexTaskKind::GlobalCountercheck,
             CodexTaskKind::AnalyzeLoreDraft,
             CodexTaskKind::BuildLoreSheet,
+            CodexTaskKind::DetectBookGenre,
         ];
         for kind in kinds {
             let result = synthetic_task_result(kind.clone());

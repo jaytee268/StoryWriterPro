@@ -44,7 +44,7 @@ use crate::{
         ProvisionalEntity, ProvisionalEntityMention, ProvisionalEvent, ProvisionalMergeProposal,
         ProvisionalRelation, ReconcileContinuityTextCorrectionInput, RelationshipMemory,
         RestoreSceneVersionInput, ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput,
-        SaveChapterGenerationDraftLedgerInput, SaveChapterGenerationPlanInput,
+        SaveBookGenresInput, SaveChapterGenerationDraftLedgerInput, SaveChapterGenerationPlanInput,
         SaveChapterGenerationReviewInput, SaveChapterGenerationSectionInput,
         SaveCharacterDialogueMemoryInput, SaveCharacterExperienceInput,
         SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput, SaveCharacterSceneStateInput,
@@ -178,8 +178,16 @@ fn book_from_row(row: &rusqlite::Row<'_>) -> SqlResult<Book> {
         project_id: row.get(1)?,
         title: row.get(2)?,
         volume: row.get(3)?,
-        created_at: row.get(4)?,
-        updated_at: row.get(5)?,
+        primary_genre_id: row.get(4)?,
+        secondary_genre_ids: vec_from_json(&row.get::<_, String>(5)?),
+        custom_genre_names: vec_from_json(&row.get::<_, String>(6)?),
+        genre_source: row.get(7)?,
+        genre_confidence: row.get(8)?,
+        genre_reason: row.get(9)?,
+        genre_author_confirmed: row.get::<_, i64>(10)? != 0,
+        genre_detected_at: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
     })
 }
 
@@ -381,13 +389,59 @@ fn load_chapter(db: &Connection, chapter_id: &str) -> Result<Chapter, String> {
 }
 
 fn load_books(db: &Connection, project_id: &str) -> Result<Vec<Book>, String> {
-    let mut statement = db.prepare("SELECT id, project_id, title, volume, created_at, updated_at FROM books WHERE project_id=?1 ORDER BY volume, created_at").map_err(|error| sql_error("Bücher konnten nicht geladen werden", error))?;
+    let mut statement = db.prepare("SELECT id, project_id, title, volume, primary_genre_id, secondary_genre_ids_json, custom_genre_names_json, genre_source, genre_confidence, genre_reason, genre_author_confirmed, genre_detected_at, created_at, updated_at FROM books WHERE project_id=?1 ORDER BY volume, created_at").map_err(|error| sql_error("Bücher konnten nicht geladen werden", error))?;
     let result = statement
         .query_map(params![project_id], book_from_row)
         .map_err(|error| sql_error("Bücher konnten nicht geladen werden", error))?
         .collect::<SqlResult<Vec<_>>>()
         .map_err(|error| sql_error("Bücher konnten nicht geladen werden", error));
     result
+}
+
+#[tauri::command]
+pub fn save_book_genres(
+    state: State<'_, DbState>,
+    input: SaveBookGenresInput,
+) -> Result<Book, String> {
+    if input
+        .genre_confidence
+        .is_some_and(|value| !(0.0..=1.0).contains(&value))
+        || input
+            .secondary_genre_ids
+            .iter()
+            .any(|id| id.trim().is_empty())
+        || input
+            .primary_genre_id
+            .as_deref()
+            .is_some_and(|id| id.trim().is_empty())
+    {
+        return Err("Ungültige Buchgenre-Daten.".into());
+    }
+    if input.genre_author_confirmed
+        && input.primary_genre_id.is_none()
+        && input.custom_genre_names.is_empty()
+    {
+        return Err("Eine bestätigte Genreauswahl benötigt mindestens ein Genre.".into());
+    }
+    let db = lock_db(&state)?;
+    validate_book_project(&db, &input.project_id, &input.book_id)?;
+    let current_confirmed: bool = db
+        .query_row(
+            "SELECT genre_author_confirmed FROM books WHERE id=?1 AND project_id=?2",
+            params![input.book_id, input.project_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| sql_error("Buchgenre konnte nicht geprüft werden", error))?
+        != 0;
+    if current_confirmed && input.genre_source.as_deref() == Some("ai_detected") {
+        return db.query_row("SELECT id, project_id, title, volume, primary_genre_id, secondary_genre_ids_json, custom_genre_names_json, genre_source, genre_confidence, genre_reason, genre_author_confirmed, genre_detected_at, created_at, updated_at FROM books WHERE id=?1 AND project_id=?2", params![input.book_id, input.project_id], book_from_row).map_err(|error| sql_error("Buchgenre konnte nicht geladen werden", error));
+    }
+    let secondary = serde_json::to_string(&input.secondary_genre_ids)
+        .map_err(|error| format!("Nebengenres konnten nicht gespeichert werden: {error}"))?;
+    let custom = serde_json::to_string(&input.custom_genre_names)
+        .map_err(|error| format!("Eigene Genres konnten nicht gespeichert werden: {error}"))?;
+    db.execute("UPDATE books SET primary_genre_id=?1, secondary_genre_ids_json=?2, custom_genre_names_json=?3, genre_source=?4, genre_confidence=?5, genre_reason=?6, genre_author_confirmed=?7, genre_detected_at=?8, updated_at=?9 WHERE id=?10 AND project_id=?11", params![input.primary_genre_id, secondary, custom, input.genre_source, input.genre_confidence, input.genre_reason, input.genre_author_confirmed as i64, input.genre_detected_at, now(), input.book_id, input.project_id]).map_err(|error| sql_error("Buchgenre konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT id, project_id, title, volume, primary_genre_id, secondary_genre_ids_json, custom_genre_names_json, genre_source, genre_confidence, genre_reason, genre_author_confirmed, genre_detected_at, created_at, updated_at FROM books WHERE id=?1 AND project_id=?2", params![input.book_id, input.project_id], book_from_row).map_err(|error| sql_error("Buchgenre konnte nicht geladen werden", error))
 }
 
 fn load_chapters(db: &Connection, books: &[Book]) -> Result<Vec<Chapter>, String> {
@@ -4745,6 +4799,18 @@ pub fn review_manuscript_analysis_artifact_decision(
                 if changed == 0 {
                     return Err("Zugehöriger Merge-Vorschlag wurde nicht gefunden.".into());
                 }
+            }
+        }
+        "genre_detection" => {
+            let changed = if status == "confirmed" {
+                transaction.execute("UPDATE books SET genre_author_confirmed=1,updated_at=?1 WHERE id=?2 AND project_id=?3", params![now(), artifact.artifact_id, artifact.project_id]).map_err(|e| sql_error("Buchgenre konnte nicht bestätigt werden", e))?
+            } else if status == "rejected" || status == "skipped" {
+                transaction.execute("UPDATE books SET primary_genre_id=NULL,secondary_genre_ids_json='[]',custom_genre_names_json='[]',genre_source=NULL,genre_confidence=NULL,genre_reason=NULL,genre_author_confirmed=0,genre_detected_at=NULL,updated_at=?1 WHERE id=?2 AND project_id=?3 AND genre_author_confirmed=0", params![now(), artifact.artifact_id, artifact.project_id]).map_err(|e| sql_error("Buchgenre konnte nicht verworfen werden", e))?
+            } else {
+                transaction.execute("UPDATE books SET genre_author_confirmed=0,updated_at=?1 WHERE id=?2 AND project_id=?3", params![now(), artifact.artifact_id, artifact.project_id]).map_err(|e| sql_error("Buchgenre konnte nicht als unsicher gespeichert werden", e))?
+            };
+            if changed == 0 {
+                return Err("Buchgenre des Analyseartefakts wurde nicht gefunden oder ist bereits manuell bestätigt.".into());
             }
         }
         "book_end_state_proposal" => {}
@@ -9270,7 +9336,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            31
+            32
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);
