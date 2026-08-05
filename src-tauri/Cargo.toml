@@ -19,6 +19,10 @@ serde_json = "1"
 rusqlite = { version = "0.37", features = ["bundled"] }
 uuid = { version = "1.18", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6.2", default-features = false, features = ["apple-native"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

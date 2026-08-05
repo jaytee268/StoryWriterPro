@@ -126,6 +126,10 @@ pub struct AiProviderSettings {
     pub active_provider: String,
     pub codex_binary_path: Option<String>,
     pub codex_model_override: Option<String>,
+    #[serde(default)]
+    pub api_model_override: Option<String>,
+    #[serde(default)]
+    pub api_key_configured: bool,
     pub bible_update_timeout_seconds: u64,
     pub chat_timeout_seconds: u64,
     pub allow_local_fallback: bool,
@@ -136,9 +140,11 @@ pub struct AiProviderSettings {
 impl Default for AiProviderSettings {
     fn default() -> Self {
         Self {
-            active_provider: "local-prototype".into(),
+            active_provider: "offline".into(),
             codex_binary_path: None,
             codex_model_override: None,
+            api_model_override: None,
+            api_key_configured: false,
             bible_update_timeout_seconds: 120,
             chat_timeout_seconds: 90,
             allow_local_fallback: true,

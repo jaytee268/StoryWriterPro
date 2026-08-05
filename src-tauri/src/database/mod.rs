@@ -710,6 +710,15 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
         ))?;
         connection.execute("INSERT INTO schema_migrations (version) VALUES (36)", [])?;
     }
+    let has_ai_setup: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 37",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_ai_setup == 0 {
+        connection.execute_batch(include_str!("../../../migrations/037_ai_setup.sql"))?;
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (37)", [])?;
+    }
     Ok(())
 }
 
@@ -865,7 +874,7 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            36
+            37
         );
         assert_eq!(
             connection
@@ -1193,7 +1202,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                36
+                37
             );
             // Running startup migrations again must not change the assignment
             // or fail on the ALTER TABLE statement.

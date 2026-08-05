@@ -3,7 +3,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { BookOpen, BrainCircuit, FileText, Gauge, MessageCircle, PanelLeftClose, PanelLeftOpen, RefreshCw, Settings2, Upload, X } from 'lucide-react';
 import { useAppStore } from './stores/useAppStore';
 import { createStoryRepository, type RuntimeMode, type StoryRepository } from './services/storyRepository';
-import type { AiProviderSettings, AppView, BibleProposal, BibleUpdateRun, CharacterMemoryProposal, CharacterMemoryUpdateRun, ChatMessage, Chapter, ContinuityFindingDecisionKind, ContinuityFindingDecisionStatus, CreateStyleReferenceInput, ManuscriptAnalysisArtifact, ManuscriptAnalysisJob, ManuscriptAnalysisPhaseResult, ManuscriptAnalysisUnit, ManuscriptStructureProposal, ManuscriptStructureRun, MindEdge, MindNode, MindmapLayout, PendingSourceNavigation, PersistentTimelineEvent, Project, ProjectOnboardingState, ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput, Scene, StoryEntity, StoryGraphEdge, StorySourceReference, StyleReference, UpdateChapterInput, WorkspaceSnapshot } from './types/domain';
+import type { AiProviderSettings, AiSetupState, AppView, BibleProposal, BibleUpdateRun, CharacterMemoryProposal, CharacterMemoryUpdateRun, ChatMessage, Chapter, ContinuityFindingDecisionKind, ContinuityFindingDecisionStatus, CreateStyleReferenceInput, ManuscriptAnalysisArtifact, ManuscriptAnalysisJob, ManuscriptAnalysisPhaseResult, ManuscriptAnalysisUnit, ManuscriptStructureProposal, ManuscriptStructureRun, MindEdge, MindNode, MindmapLayout, PendingSourceNavigation, PersistentTimelineEvent, Project, ProjectOnboardingState, ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput, Scene, StoryEntity, StoryGraphEdge, StorySourceReference, StyleReference, UpdateChapterInput, WorkspaceSnapshot } from './types/domain';
 import { DeterministicProjectContextBuilder } from './services/contextBuilder';
 import { changedRange } from './services/bibleExtractor';
 import { Dashboard } from './features/projects/Dashboard';
@@ -22,6 +22,8 @@ import { ManuscriptImportModal } from './features/import/ManuscriptImportModal';
 import { ManuscriptAnalysisProgress } from './features/import/ManuscriptAnalysisProgress';
 import { runContinuityReview } from './services/continuityReview';
 import { loadManuscriptAnalysisProgress, loadManuscriptAnalysisReviewDetails, ManuscriptAnalysisController } from './services/manuscriptAnalysis';
+import { getAiSetupState } from './services/aiSetupService';
+import { AiProviderOnboarding } from './features/setup/AiProviderOnboarding';
 
 const repository: StoryRepository = createStoryRepository();
 const longformRepository = createLongformRepository();
@@ -54,6 +56,7 @@ export function App() {
   const [memoryProposals, setMemoryProposals] = useState<CharacterMemoryProposal[]>([]);
   const [resumeMemoryReview, setResumeMemoryReview] = useState<{ run: CharacterMemoryUpdateRun; proposals: CharacterMemoryProposal[] }>();
   const [providerSettings, setProviderSettings] = useState<AiProviderSettings>(defaultAiProviderSettings);
+  const [aiSetupState, setAiSetupState] = useState<AiSetupState>();
   const [providerNotice, setProviderNotice] = useState('');
   const [bibleUpdateProvider, setBibleUpdateProvider] = useState<StoryAiProvider>();
   const contextBuilder = useMemo(() => new DeterministicProjectContextBuilder(repository), []);
@@ -85,6 +88,7 @@ export function App() {
   }, []);
   useEffect(() => { void loadWorkspace(); }, [loadWorkspace]);
   useEffect(() => { void providerRouter.getSettings().then(setProviderSettings).catch(() => setProviderSettings(defaultAiProviderSettings)); }, []);
+  useEffect(() => { void getAiSetupState().then(setAiSetupState).catch(() => setAiSetupState(undefined)); }, []);
 
   const workspace = loadState.status === 'ready' ? loadState.workspace : (undefined as unknown as WorkspaceSnapshot);
   const projects = loadState.status === 'ready' ? loadState.projects : loadState.status === 'empty' ? loadState.projects : [];
@@ -434,6 +438,8 @@ export function App() {
   const topLabel = view === 'dashboard' ? 'Übersicht' : view === 'settings' ? 'Einstellungen' : navItems.find((item) => item.view === view)?.label ?? 'Arbeitsbereich';
 
   const onboardingProject = onboarding?.project ?? (loadState.status === 'ready' ? loadState.workspace.project : undefined);
+  if (!aiSetupState) return <main className="ai-setup-screen"><section className="ai-setup-card ai-setup-loading"><span className="eyebrow">STORYMEMORY</span><h1>StoryMemory wird vorbereitet …</h1><p>Deine lokale Einrichtung wird geladen.</p></section></main>;
+  if (aiSetupState.status !== 'completed') return <AiProviderOnboarding settings={providerSettings} onSettingsChange={setProviderSettings} onCompleted={setAiSetupState} />;
   if (loadState.status === 'empty' || onboarding) return <div className="onboarding-screen"><ProjectOnboarding repository={repository} project={onboardingProject} state={onboarding?.state} onCreated={(createdProject, _state, loreNotes, manuscriptText) => { setOnboarding(undefined); setOnboardingLoreNotes(loreNotes ?? ''); setOnboardingManuscriptText(manuscriptText ?? ''); if (manuscriptText?.trim()) setActiveModal('import'); else if (loreNotes?.trim()) { setBibleInitialTab('lore_crafter'); setView('bible'); } void loadWorkspace(createdProject.id); }} onContinue={(nextState) => { if (nextState.currentStep === 'completed') { setOnboarding(undefined); void loadWorkspace(nextState.projectId); } else setOnboarding((current) => current ? { ...current, state: nextState } : current); }} onOpenLore={() => { setBibleInitialTab('lore_crafter'); setOnboarding(undefined); void requestViewChange('bible'); }} onOpenImport={() => { setOnboarding(undefined); void openImport(); }} onAbort={() => { setOnboarding(undefined); void loadWorkspace(onboardingProject?.id); }} /></div>;
 
   return <div className={`app-shell simple-mode ${sidebarOpen ? 'sidebar-open' : 'sidebar-collapsed'} ${view === 'editor' ? 'writing-mode' : ''}`}>

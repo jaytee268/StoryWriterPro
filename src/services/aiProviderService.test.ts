@@ -63,6 +63,11 @@ describe('nullable Codex-Providerdaten', () => {
     expect(() => settingsSchema.parse({ ...rustSettings, allowLocalFallback: 'yes' })).toThrow();
   });
 
+  it('akzeptiert die globalen Offline- und OpenAI-Modi ohne den alten Local-Prototype anzubieten', () => {
+    expect(settingsSchema.parse({ ...rustSettings, activeProvider: 'offline' }).activeProvider).toBe('offline');
+    expect(settingsSchema.parse({ ...rustSettings, activeProvider: 'openai-api', apiKeyConfigured: false }).activeProvider).toBe('openai-api');
+  });
+
   it('speichert und lädt die normalisierten Einstellungen erneut', async () => {
     let saved = rustSettings;
     invoke.mockImplementation(async (...callArgs) => {

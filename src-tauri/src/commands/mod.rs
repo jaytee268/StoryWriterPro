@@ -2,6 +2,7 @@ use crate::providers::codex::{
     self, AiProviderSettings, CodexCliCapabilities, CodexError, CodexRuntimeState,
     RunCodexTaskInput,
 };
+use crate::services::credentials;
 use crate::{
     database::DbState,
     models::{
@@ -71,6 +72,7 @@ use crate::{
 };
 use chrono::Utc;
 use rusqlite::{params, types::Type, Connection, OptionalExtension, Result as SqlResult};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
 
@@ -2840,17 +2842,23 @@ fn load_ai_provider_settings(db: &Connection) -> Result<AiProviderSettings, Stri
                 error,
             )
         })?;
-    match value {
+    let mut settings = match value {
         Some(json) => serde_json::from_str(&json)
             .map_err(|error| sql_error("KI-Anbieter-Einstellungen sind ungültig", error)),
         None => Ok(AiProviderSettings::default()),
+    }?;
+    if settings.active_provider == "openai-api" {
+        settings.api_key_configured = credentials::has_openai_api_key()
+            .map(|status| status.configured)
+            .unwrap_or(false);
     }
+    Ok(settings)
 }
 
 fn validate_ai_provider_settings(settings: &AiProviderSettings) -> Result<(), String> {
     if !matches!(
         settings.active_provider.as_str(),
-        "local-prototype" | "codex-cli"
+        "local-prototype" | "offline" | "openai-api" | "codex-cli"
     ) {
         return Err("Unbekannter KI-Anbieter.".into());
     }
@@ -2873,6 +2881,13 @@ fn validate_ai_provider_settings(settings: &AiProviderSettings) -> Result<(), St
     {
         return Err("Die optionale Modellkennung ist ungültig.".into());
     }
+    if settings
+        .api_model_override
+        .as_deref()
+        .is_some_and(|model| model.len() > 100 || model.starts_with('-'))
+    {
+        return Err("Die optionale API-Modellkennung ist ungültig.".into());
+    }
     codex::validate_codex_privacy(settings).map_err(|error| error.to_string())?;
     Ok(())
 }
@@ -2881,6 +2896,252 @@ fn validate_ai_provider_settings(settings: &AiProviderSettings) -> Result<(), St
 pub fn get_ai_provider_settings(state: State<'_, DbState>) -> Result<AiProviderSettings, String> {
     let db = lock_db(&state)?;
     load_ai_provider_settings(&db)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiSetupState {
+    pub status: String,
+    pub selected_mode: Option<String>,
+    pub selected_provider: Option<String>,
+    pub completed_at: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveAiSetupStateInput {
+    pub status: String,
+    pub selected_mode: Option<String>,
+    pub selected_provider: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiCredentialStatus {
+    pub configured: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiConnectionStatus {
+    pub connected: bool,
+    pub detail: String,
+}
+
+#[tauri::command]
+pub fn get_ai_setup_state(state: State<'_, DbState>) -> Result<AiSetupState, String> {
+    let db = lock_db(&state)?;
+    db.query_row(
+        "SELECT status, selected_mode, selected_provider, completed_at, updated_at FROM ai_setup_state WHERE id=1",
+        [],
+        |row| {
+            Ok(AiSetupState {
+                status: row.get(0)?,
+                selected_mode: row.get(1)?,
+                selected_provider: row.get(2)?,
+                completed_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|error| sql_error("KI-Einrichtungsstatus konnte nicht geladen werden", error))
+    .map(|state| state.unwrap_or(AiSetupState {
+        status: "pending".into(),
+        selected_mode: None,
+        selected_provider: None,
+        completed_at: None,
+        updated_at: now(),
+    }))
+}
+
+#[tauri::command]
+pub fn save_ai_setup_state(
+    state: State<'_, DbState>,
+    input: SaveAiSetupStateInput,
+) -> Result<AiSetupState, String> {
+    if !matches!(input.status.as_str(), "pending" | "completed") {
+        return Err("Ungültiger KI-Einrichtungsstatus.".into());
+    }
+    if input.status == "completed"
+        && !matches!(
+            input.selected_mode.as_deref(),
+            Some("api" | "codex-cli" | "offline")
+        )
+    {
+        return Err("Eine abgeschlossene KI-Einrichtung benötigt eine gültige Auswahl.".into());
+    }
+    if input
+        .selected_provider
+        .as_deref()
+        .is_some_and(|provider| provider != "openai-api")
+    {
+        return Err("Unbekannter KI-Provider.".into());
+    }
+    if input.selected_mode.as_deref() == Some("api")
+        && input.selected_provider.as_deref() != Some("openai-api")
+    {
+        return Err("Der API-Modus benötigt den OpenAI-Provider.".into());
+    }
+    let db = lock_db(&state)?;
+    let updated_at = now();
+    db.execute(
+        "INSERT INTO ai_setup_state (id, status, selected_mode, selected_provider, completed_at, updated_at) VALUES (1, ?1, ?2, ?3, ?4, ?5) ON CONFLICT(id) DO UPDATE SET status=excluded.status, selected_mode=excluded.selected_mode, selected_provider=excluded.selected_provider, completed_at=excluded.completed_at, updated_at=excluded.updated_at",
+        params![input.status, input.selected_mode, input.selected_provider, input.completed_at, updated_at],
+    )
+    .map_err(|error| sql_error("KI-Einrichtungsstatus konnte nicht gespeichert werden", error))?;
+    Ok(AiSetupState {
+        status: input.status,
+        selected_mode: input.selected_mode,
+        selected_provider: input.selected_provider,
+        completed_at: input.completed_at,
+        updated_at,
+    })
+}
+
+#[tauri::command]
+pub fn get_openai_api_key_status() -> Result<ApiCredentialStatus, String> {
+    credentials::has_openai_api_key().map(|status| ApiCredentialStatus {
+        configured: status.configured,
+    })
+}
+
+#[tauri::command]
+pub fn set_openai_api_key(api_key: String) -> Result<ApiCredentialStatus, String> {
+    if api_key.trim().is_empty()
+        || api_key.len() > 4096
+        || api_key.contains('\0')
+        || api_key.contains('\n')
+        || api_key.contains('\r')
+    {
+        return Err("Der API-Schlüssel ist ungültig.".into());
+    }
+    credentials::set_openai_api_key(&api_key).map(|status| ApiCredentialStatus {
+        configured: status.configured,
+    })
+}
+
+#[tauri::command]
+pub fn delete_openai_api_key() -> Result<ApiCredentialStatus, String> {
+    credentials::delete_openai_api_key().map(|status| ApiCredentialStatus {
+        configured: status.configured,
+    })
+}
+
+#[tauri::command]
+pub async fn test_openai_api_connection() -> Result<ApiConnectionStatus, String> {
+    let api_key = match credentials::read_openai_api_key() {
+        Ok(key) => key,
+        Err(_) => {
+            return Ok(ApiConnectionStatus {
+                connected: false,
+                detail: "Kein API-Schlüssel im Betriebssystem-Schlüsselbund vorhanden.".into(),
+            })
+        }
+    };
+    let response = reqwest::Client::new()
+        .get("https://api.openai.com/v1/models")
+        .bearer_auth(api_key)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|_| {
+            "Die Verbindung zum OpenAI API-Provider konnte nicht hergestellt werden.".to_owned()
+        })?;
+    let status = response.status();
+    Ok(if status.is_success() {
+        ApiConnectionStatus {
+            connected: true,
+            detail: "Die OpenAI API-Verbindung wurde erfolgreich geprüft.".into(),
+        }
+    } else if status.as_u16() == 401 {
+        ApiConnectionStatus {
+            connected: false,
+            detail:
+                "Der API-Schlüssel wurde abgelehnt. Prüfe den Schlüssel und versuche es erneut."
+                    .into(),
+        }
+    } else {
+        ApiConnectionStatus {
+            connected: false,
+            detail: format!(
+                "OpenAI antwortete mit HTTP {}. Versuche es später erneut.",
+                status.as_u16()
+            ),
+        }
+    })
+}
+
+#[tauri::command]
+pub async fn run_openai_api_task(
+    state: State<'_, DbState>,
+    input: RunCodexTaskInput,
+) -> Result<codex::CodexTaskResult, String> {
+    let settings = {
+        let db = lock_db(&state)?;
+        load_ai_provider_settings(&db)?
+    };
+    let api_key = credentials::read_openai_api_key().map_err(|_| {
+        "OPENAI_API_KEY_NOT_CONFIGURED: Bitte richte zuerst einen OpenAI-API-Schlüssel ein."
+            .to_owned()
+    })?;
+    let model = settings
+        .api_model_override
+        .as_deref()
+        .unwrap_or("gpt-4.1-mini");
+    let system_prompt = "Du bist der strukturierte StoryMemory-Analyseprovider. Beantworte die angeforderte Aufgabe ausschließlich als valides JSON-Objekt. Erfinde keine IDs, die nicht im Request enthalten sind. Liefere keine Markdown-Codefences.";
+    let request_text = serde_json::to_string(&input.request_json)
+        .map_err(|_| "Die Analyseanfrage konnte nicht vorbereitet werden.".to_owned())?;
+    let response = reqwest::Client::new()
+        .post("https://api.openai.com/v1/chat/completions")
+        .bearer_auth(api_key)
+        .json(&serde_json::json!({
+            "model": model,
+            "temperature": 0,
+            "response_format": { "type": "json_object" },
+            "messages": [
+                { "role": "system", "content": system_prompt },
+                { "role": "user", "content": format!("Aufgabe: {:?}\nRequest: {}", input.task_kind, request_text) }
+            ]
+        }))
+        .timeout(std::time::Duration::from_secs(input.timeout_seconds.clamp(1, 900)))
+        .send()
+        .await
+        .map_err(|_| "OPENAI_REQUEST_FAILED: Die OpenAI-Anfrage konnte nicht abgeschlossen werden.".to_owned())?;
+    if response.status().as_u16() == 401 {
+        return Err("OPENAI_AUTH_FAILED: Der OpenAI-API-Schlüssel wurde abgelehnt.".into());
+    }
+    if !response.status().is_success() {
+        return Err(format!(
+            "OPENAI_REQUEST_FAILED: OpenAI antwortete mit HTTP {}.",
+            response.status().as_u16()
+        ));
+    }
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|_| "OPENAI_RESPONSE_INVALID: Die OpenAI-Antwort war nicht lesbar.".to_owned())?;
+    let content = body
+        .pointer("/choices/0/message/content")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| {
+            "OPENAI_RESPONSE_INVALID: Die OpenAI-Antwort enthielt kein strukturiertes Ergebnis."
+                .to_owned()
+        })?;
+    let result = serde_json::from_str(content.trim()).map_err(|_| {
+        "OPENAI_RESPONSE_INVALID: Die OpenAI-Antwort war kein valides JSON.".to_owned()
+    })?;
+    Ok(codex::CodexTaskResult {
+        task_id: input.task_id,
+        task_kind: input.task_kind,
+        status: "completed".into(),
+        result,
+        warnings: Vec::new(),
+        prompt_template_version: "storymemory-openai-v1".into(),
+        turn_completed: true,
+    })
 }
 
 #[tauri::command]
@@ -11046,7 +11307,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            36
+            37
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);

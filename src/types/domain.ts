@@ -2,6 +2,12 @@ export type EntityStatus = 'confirmed' | 'proposed' | 'uncertain' | 'contradicte
 export type EntityType = 'character' | 'relationship' | 'place' | 'organization' | 'world_rule' | 'object' | 'event' | 'fact' | 'clue' | 'secret' | 'plot_thread' | 'retcon' | 'author_note' | 'open_question';
 export type AppView = 'dashboard' | 'editor' | 'bible' | 'timeline' | 'mindmap' | 'characters' | 'threads' | 'research' | 'files' | 'settings';
 export type AiTaskType = 'chat' | 'bible_update' | 'consistency_check' | 'grammar_review' | 'manuscript_import' | 'deep_research' | 'timeline_validation' | 'character_analysis' | 'continuity_passage' | 'manuscript_structure';
+export type AiProviderMode = 'offline' | 'openai-api' | 'codex-cli' | 'local-prototype';
+export type AiSetupMode = 'api' | 'codex-cli' | 'offline';
+export type AiSetupStatus = 'pending' | 'completed';
+export interface AiSetupState { status: AiSetupStatus; selectedMode?: AiSetupMode; selectedProvider?: 'openai-api'; completedAt?: string; updatedAt: string; }
+export interface ApiCredentialStatus { configured: boolean; }
+export interface ApiConnectionStatus { connected: boolean; detail: string; }
 export type CorrectionKind = 'spelling' | 'grammar' | 'punctuation' | 'capitalization' | 'whitespace';
 
 export type SceneStatus = 'draft' | 'revised' | 'final';
@@ -217,7 +223,7 @@ export interface AiTask { id: string; type: AiTaskType; prompt: string; context:
 export interface ProviderStatus { available: boolean; label: string; detail: string; }
 export type CodexAuthenticationState = 'authenticated' | 'notAuthenticated' | 'unknown';
 export interface CodexCliCapabilities { installed: boolean; binaryPath?: string; version?: string; supportsExec: boolean; supportsJson: boolean; supportsEphemeral: boolean; supportsOutputSchema: boolean; supportsReadOnlySandbox: boolean; supportsSkipGitCheck: boolean; supportsModel: boolean; supportsDisableFeatures: boolean; authentication: CodexAuthenticationState; compatible: boolean; detail: string; }
-export interface AiProviderSettings { activeProvider: 'local-prototype' | 'codex-cli'; codexBinaryPath?: string; codexModelOverride?: string; bibleUpdateTimeoutSeconds: number; chatTimeoutSeconds: number; allowLocalFallback: boolean; codexPrivacyAcknowledgedAt?: string; }
+export interface AiProviderSettings { activeProvider: AiProviderMode; codexBinaryPath?: string; codexModelOverride?: string; apiModelOverride?: string; apiKeyConfigured?: boolean; bibleUpdateTimeoutSeconds: number; chatTimeoutSeconds: number; allowLocalFallback: boolean; codexPrivacyAcknowledgedAt?: string; }
 export type CodexTaskKind = 'extractBiblePatch' | 'extractCharacterMemoryPatch' | 'answerWithProjectContext' | 'analyzeProjectStyle' | 'summarizeScene' | 'summarizeChapter' | 'summarizeBook' | 'planChapterDraft' | 'draftChapterSection' | 'reviewChapterSection' | 'reviewCompleteChapter' | 'analyzeContinuityPassage' | 'analyzeLoreDraft' | 'buildLoreSheet' | 'detectBookGenre';
 export interface GroundedChatResult { answer: string; usedEntityIds: string[]; usedSourceIds: string[]; uncertainty: 'low' | 'medium' | 'high'; warnings: string[]; }
 export interface Correction { id: string; kind: CorrectionKind; from: string; to: string; reason: string; start: number; end: number; }
