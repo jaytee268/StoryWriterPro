@@ -4657,6 +4657,154 @@ pub fn review_manuscript_analysis_artifact(
     db.query_row("SELECT id,job_id,project_id,phase,unit_id,artifact_type,artifact_id,review_status,explicitly_skipped,created_at,updated_at FROM manuscript_analysis_artifacts WHERE id=?1", params![id], artifact_from_row).map_err(|e| sql_error("Artefakt konnte nicht geladen werden", e))
 }
 
+fn apply_bible_proposal_in_transaction(
+    tx: &rusqlite::Transaction<'_>,
+    artifact: &ManuscriptAnalysisArtifact,
+    status: &str,
+) -> Result<(), String> {
+    let proposal = load_proposal(tx, &artifact.artifact_id)?;
+    if status == "rejected" || status == "skipped" {
+        tx.execute("UPDATE bible_proposals SET review_status='rejected',reviewed_at=?1 WHERE id=?2 AND project_id=?3", params![now(), proposal.id, proposal.project_id]).map_err(|e| sql_error("Bible-Vorschlag konnte nicht verworfen werden", e))?;
+        return Ok(());
+    }
+    let effective_status = if status == "uncertain" {
+        "uncertain"
+    } else {
+        "confirmed"
+    };
+    let author_confirmed = status == "confirmed";
+    let entity_id = if let Some(target) = proposal.target_entity_id.clone() {
+        tx.execute("UPDATE story_entities SET name=?1,description=?2,status=?3,confidence=?4,author_confirmed=?5,updated_at=?6 WHERE id=?7 AND project_id=?8", params![proposal.candidate_name, proposal.candidate_description, effective_status, proposal.confidence, author_confirmed as i64, now(), target, proposal.project_id]).map_err(|e| sql_error("Bible-Eintrag konnte nicht aktualisiert werden", e))?;
+        target
+    } else {
+        let (chapter, scene): (String, String) = tx.query_row("SELECT chapters.title,scenes.title FROM scenes JOIN chapters ON chapters.id=scenes.chapter_id WHERE scenes.id=?1", params![proposal.scene_id], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|e| sql_error("Quellenszene konnte nicht geladen werden", e))?;
+        insert_entity_tx(
+            tx,
+            &proposal.project_id,
+            &proposal.candidate_name,
+            &proposal.entity_type,
+            &proposal.candidate_description,
+            effective_status,
+            proposal.confidence,
+            &chapter,
+            &scene,
+            &proposal.evidence_excerpt,
+            author_confirmed,
+            &[],
+            "bible_update",
+            &now(),
+        )?
+    };
+    let chapter_id: String = tx
+        .query_row(
+            "SELECT chapter_id FROM scenes WHERE id=?1",
+            params![proposal.scene_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| sql_error("Quellenszene konnte nicht geladen werden", e))?;
+    insert_source_reference_if_missing_tx(
+        tx,
+        &CreateSourceReferenceInput {
+            project_id: proposal.project_id.clone(),
+            entity_id: Some(entity_id.clone()),
+            proposal_id: Some(proposal.id.clone()),
+            chapter_id,
+            scene_id: proposal.scene_id.clone(),
+            excerpt: proposal.evidence_excerpt.clone(),
+            start_offset: proposal.start_offset,
+            end_offset: proposal.end_offset,
+        },
+    )?;
+    tx.execute("UPDATE bible_proposals SET target_entity_id=?1,review_status=?2,reviewed_at=?3 WHERE id=?4 AND project_id=?5", params![entity_id, if status == "uncertain" { "uncertain" } else { "accepted" }, now(), proposal.id, proposal.project_id]).map_err(|e| sql_error("Bible-Review konnte nicht gespeichert werden", e))?;
+    Ok(())
+}
+
+type CharacterMemoryArtifactRow = (
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+);
+
+fn apply_character_memory_proposal_in_transaction(
+    tx: &rusqlite::Transaction<'_>,
+    artifact: &ManuscriptAnalysisArtifact,
+    status: &str,
+) -> Result<(), String> {
+    let row: CharacterMemoryArtifactRow = tx.query_row("SELECT p.project_id,p.scene_id,p.proposal_kind,p.payload_json,p.subject_character_id,p.related_character_id,p.target_entity_id,p.evidence_excerpt FROM character_memory_proposals p WHERE p.id=?1 AND p.project_id=?2", params![artifact.artifact_id, artifact.project_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).map_err(|e| sql_error("Character-Memory-Vorschlag konnte nicht geladen werden", e))?;
+    if status == "rejected" || status == "skipped" {
+        tx.execute("UPDATE character_memory_proposals SET review_status='rejected',reviewed_at=?1 WHERE id=?2", params![now(), artifact.artifact_id]).map_err(|e| sql_error("Character-Memory-Vorschlag konnte nicht verworfen werden", e))?;
+        return Ok(());
+    }
+    let provisional: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM provisional_entities p JOIN character_memory_update_runs r ON r.manuscript_job_id=p.job_id JOIN character_memory_proposals x ON x.run_id=r.id WHERE p.id IN (?1,?2,?3) AND p.project_id=?4 AND x.id=?5)", params![row.4, row.5, row.6, row.0, artifact.artifact_id], |r| r.get(0)).map_err(|e| sql_error("Provisorische Memory-Referenz konnte nicht geprüft werden", e))?;
+    if provisional {
+        return Err("Materialisiere oder merge zuerst die zugehörige Figur oder Entität.".into());
+    }
+    let mut payload: serde_json::Value =
+        serde_json::from_str(&row.3).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("subjectCharacterId".into(), serde_json::json!(row.4));
+        object.insert("relatedCharacterId".into(), serde_json::json!(row.5));
+        object.insert("targetEntityId".into(), serde_json::json!(row.6));
+    }
+    let (memory_id, memory_kind) = apply_memory_payload(
+        tx,
+        &row.0,
+        &row.1,
+        &row.2,
+        payload,
+        "accepted",
+        if status == "uncertain" {
+            Some("uncertain")
+        } else {
+            Some("accept")
+        },
+    )?;
+    tx.execute("UPDATE character_memory_proposals SET review_status='accepted',reviewed_at=?1,accepted_memory_id=?2,accepted_memory_kind=?3 WHERE id=?4", params![now(), memory_id, memory_kind, artifact.artifact_id]).map_err(|e| sql_error("Character-Memory-Review konnte nicht gespeichert werden", e))?;
+    Ok(())
+}
+
+fn apply_project_rule_proposal_in_transaction(
+    tx: &rusqlite::Transaction<'_>,
+    artifact: &ManuscriptAnalysisArtifact,
+    status: &str,
+) -> Result<(), String> {
+    let proposal = tx.query_row("SELECT id, project_id, target_rule_id, title, statement, scope, prerequisites_json, effects_json, exceptions_json, connected_lore_ids_json, source_reference_ids_json, evidence_excerpt, chapter_id, scene_id, start_offset, end_offset, confidence, reason, review_status, reviewed_at, created_at FROM project_rule_proposals WHERE id=?1 AND project_id=?2", params![artifact.artifact_id, artifact.project_id], rule_proposal_from_row).map_err(|e| sql_error("Regelvorschlag konnte nicht geladen werden", e))?;
+    if status != "rejected" && status != "skipped" {
+        let input = SaveProjectRuleInput {
+            id: proposal.target_rule_id.clone(),
+            project_id: proposal.project_id.clone(),
+            title: proposal.title.clone(),
+            statement: proposal.statement.clone(),
+            scope: proposal.scope.clone(),
+            prerequisites: proposal.prerequisites.clone(),
+            effects: proposal.effects.clone(),
+            exceptions: proposal.exceptions.clone(),
+            connected_lore_ids: proposal.connected_lore_ids.clone(),
+            source_reference_ids: proposal.source_reference_ids.clone(),
+            status: if status == "confirmed" {
+                "confirmed".into()
+            } else {
+                "proposed".into()
+            },
+            confidence: proposal.confidence,
+            author_confirmed: status == "confirmed",
+            origin: if status == "confirmed" {
+                "bible_update".into()
+            } else {
+                "edited".into()
+            },
+        };
+        insert_project_rule_tx(tx, &input, &input.id.clone().unwrap_or_else(new_id), &now())?;
+    }
+    tx.execute("UPDATE project_rule_proposals SET review_status=?1,reviewed_at=?2 WHERE id=?3 AND project_id=?4", params![if status == "uncertain" { "uncertain" } else if status == "rejected" || status == "skipped" { "rejected" } else { "accepted" }, now(), artifact.artifact_id, artifact.project_id]).map_err(|e| sql_error("Regelreview konnte nicht gespeichert werden", e))?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn review_manuscript_analysis_artifact_decision(
     state: State<'_, DbState>,
@@ -4686,16 +4834,14 @@ pub fn review_manuscript_analysis_artifact_decision(
         "rejected"
     };
     match artifact.artifact_type.as_str() {
-        "bible_proposal"
-        | "character_memory_proposal"
-        | "project_rule_proposal"
-        | "plot_thread_proposal" => {
-            let table = match artifact.artifact_type.as_str() {
-                "bible_proposal" => "bible_proposals",
-                "character_memory_proposal" => "character_memory_proposals",
-                "project_rule_proposal" => "project_rule_proposals",
-                _ => "plot_thread_lifecycle_proposals",
-            };
+        "bible_proposal" => apply_bible_proposal_in_transaction(&transaction, &artifact, &status)?,
+        "character_memory_proposal" => {
+            apply_character_memory_proposal_in_transaction(&transaction, &artifact, &status)?
+        }
+        "project_rule_proposal" => {
+            apply_project_rule_proposal_in_transaction(&transaction, &artifact, &status)?
+        }
+        "plot_thread_proposal" => {
             let proposal_status = if status == "confirmed" {
                 "accepted"
             } else if status == "rejected" || status == "skipped" {
@@ -4703,14 +4849,19 @@ pub fn review_manuscript_analysis_artifact_decision(
             } else {
                 "pending"
             };
-            let changed = transaction
-                .execute(
-                    &format!("UPDATE {table} SET review_status=?1 WHERE id=?2 AND project_id=?3"),
-                    params![proposal_status, artifact.artifact_id, artifact.project_id],
-                )
-                .map_err(|e| sql_error("Vorschlag konnte nicht aktualisiert werden", e))?;
+            let proposed_status: String = transaction.query_row("SELECT proposed_status FROM plot_thread_lifecycle_proposals WHERE id=?1 AND project_id=?2", params![artifact.artifact_id, artifact.project_id], |row| row.get(0)).map_err(|e| sql_error("Handlungsstrang-Vorschlag konnte nicht geladen werden", e))?;
+            if status == "confirmed" && proposed_status == "resolved" {
+                return Err(
+                    "Ein AI-Vorschlag darf einen Handlungsstrang nicht automatisch abschließen."
+                        .into(),
+                );
+            }
+            if status == "confirmed" {
+                transaction.execute("INSERT INTO plot_thread_lifecycle (id,project_id,entity_id,lifecycle_status,last_source_reference_id,updated_at) SELECT COALESCE((SELECT id FROM plot_thread_lifecycle WHERE entity_id=p.entity_id),?1),p.project_id,p.entity_id,p.proposed_status,p.source_reference_id,?2 FROM plot_thread_lifecycle_proposals p WHERE p.id=?3", params![new_id(), now(), artifact.artifact_id]).map_err(|e| sql_error("Handlungsstrangstatus konnte nicht übernommen werden", e))?;
+            }
+            let changed = transaction.execute("UPDATE plot_thread_lifecycle_proposals SET review_status=?1,reviewed_at=?2 WHERE id=?3 AND project_id=?4", params![proposal_status, now(), artifact.artifact_id, artifact.project_id]).map_err(|e| sql_error("Handlungsstrang-Review konnte nicht gespeichert werden", e))?;
             if changed == 0 {
-                return Err("Zugehöriger Vorschlag wurde nicht gefunden.".into());
+                return Err("Zugehöriger Handlungsstrang-Vorschlag wurde nicht gefunden.".into());
             }
         }
         "continuity_finding" | "global_countercheck_finding" => {
@@ -4813,7 +4964,61 @@ pub fn review_manuscript_analysis_artifact_decision(
                 return Err("Buchgenre des Analyseartefakts wurde nicht gefunden oder ist bereits manuell bestätigt.".into());
             }
         }
-        "book_end_state_proposal" => {}
+        "book_end_state_proposal" => {
+            let mut parts = artifact.artifact_id.splitn(2, ':');
+            let phase_id = parts.next().unwrap_or_default();
+            let index: usize = parts
+                .next()
+                .unwrap_or_default()
+                .parse()
+                .map_err(|_| "Ungültiger Buch-Endzustandsindex.".to_string())?;
+            let payload: String = transaction.query_row("SELECT payload_json FROM manuscript_analysis_phase_results WHERE id=?1 AND job_id=?2 AND project_id=?3", params![phase_id, artifact.job_id, artifact.project_id], |row| row.get(0)).map_err(|e| sql_error("Buch-Endzustandsphase konnte nicht geladen werden", e))?;
+            let proposal = serde_json::from_str::<serde_json::Value>(&payload)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("endStateProposals")
+                        .and_then(|items| items.as_array())
+                        .and_then(|items| items.get(index))
+                        .cloned()
+                })
+                .ok_or_else(|| {
+                    "Buch-Endzustandsvorschlag konnte nicht geladen werden.".to_string()
+                })?;
+            if status == "confirmed" {
+                if let (Some(entity_id), Some(source_id), Some(statement)) = (
+                    proposal.get("entityId").and_then(|value| value.as_str()),
+                    proposal
+                        .get("sourceReferenceId")
+                        .and_then(|value| value.as_str()),
+                    proposal.get("statement").and_then(|value| value.as_str()),
+                ) {
+                    let valid_entity: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM story_entities WHERE id=?1 AND project_id=?2)", params![entity_id, artifact.project_id], |row| row.get(0)).map_err(|e| sql_error("Endzustandsentität konnte nicht geprüft werden", e))?;
+                    let valid_source: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM story_source_references WHERE id=?1 AND project_id=?2)", params![source_id, artifact.project_id], |row| row.get(0)).map_err(|e| sql_error("Endzustandsquelle konnte nicht geprüft werden", e))?;
+                    if !valid_entity || !valid_source {
+                        return Err(
+                            "Ein bestätigter Endzustand benötigt gültige Entität und Quelle."
+                                .into(),
+                        );
+                    }
+                    let state_kind = match proposal
+                        .get("category")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                    {
+                        "object_owner" => "ownership",
+                        "location" => "location",
+                        "injury" => "injury",
+                        "open_action" => "open_action",
+                        "knowledge" => "knowledge",
+                        "relationship" => "relationship",
+                        _ => "property",
+                    };
+                    transaction.execute("INSERT INTO continuity_state_ledger(id,project_id,entity_id,related_entity_id,state_kind,previous_state,new_state,reason,evidence_excerpt,chapter_id,scene_id,start_offset,end_offset,source_reference_id,status,confidence,author_confirmed,created_at,updated_at) VALUES(?1,?2,?3,NULL,?4,'',?5,?6,?7,NULL,NULL,NULL,NULL,?8,'confirmed',?9,1,?10,?10)", params![new_id(), artifact.project_id, entity_id, state_kind, statement, format!("book_end_state:{}", artifact.job_id), proposal.get("evidenceExcerpt").and_then(|value| value.as_str()).unwrap_or_default(), source_id, proposal.get("confidence").and_then(|value| value.as_f64()).unwrap_or(0.5), now()]).map_err(|e| sql_error("Buch-Endzustand konnte nicht übernommen werden", e))?;
+                }
+            }
+            transaction.execute("UPDATE manuscript_analysis_phase_results SET review_status=?1,updated_at=?2 WHERE id=?3 AND job_id=?4", params![if status == "confirmed" { "confirmed" } else if status == "uncertain" { "uncertain" } else { "rejected" }, now(), phase_id, artifact.job_id]).map_err(|e| sql_error("Buch-Endzustandsreview konnte nicht gespeichert werden", e))?;
+        }
         other => return Err(format!("Unbekannter fachlicher Artefakttyp: {other}")),
     }
     transaction.execute("UPDATE manuscript_analysis_artifacts SET review_status=?1,explicitly_skipped=?2,updated_at=?3 WHERE id=?4 AND job_id=?5 AND project_id=?6", params![status, (explicitly_skipped.unwrap_or(false) || status == "skipped") as i64, now(), artifact.id, artifact.job_id, artifact.project_id]).map_err(|e| sql_error("Artefaktreview konnte nicht gespeichert werden", e))?;
@@ -9637,7 +9842,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            32
+            33
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);

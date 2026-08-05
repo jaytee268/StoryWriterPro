@@ -832,7 +832,7 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            32
+            33
         );
         assert_eq!(
             connection
@@ -1159,7 +1159,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                32
+                33
             );
             // Running startup migrations again must not change the assignment
             // or fail on the ALTER TABLE statement.

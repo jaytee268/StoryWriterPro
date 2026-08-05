@@ -7,6 +7,7 @@ import { characterMemoryPayloadSchema, validateCharacterMemoryPayload } from './
 import { validateManuscriptStructure } from './manuscriptStructure';
 import { genreById } from '../data/genreCatalog';
 import type { ManuscriptAnalysisCompletionReport, SaveManuscriptAnalysisCompletionReportInput } from '../types/domain';
+import type { ContinuityStateKind } from '../types/domain';
 import type { BibleProposal, BibleProposalDraft, BibleUpdateRun, Book, Chapter, CharacterProfile, CharacterSceneState, CharacterDialogueMemory, CharacterExperience, CharacterKnowledgeState, CharacterMemoryEvidence, CharacterMemoryProposal, CharacterMemoryProposalDraft, CharacterMemoryUpdateRun, CharacterVoicePattern, CreateBibleUpdateRunInput, CreateChapterInput, CreateLoreEntryInput, CreateProjectInput, CreateSceneInput, CreateSceneVersionInput, CreateSourceReferenceInput, CreateStoryEntityInput, CreateStoryEntityRelationInput, CreateStyleReferenceInput, CreateCharacterMemoryUpdateRunInput, CreateProjectStyleAnalysisRunInput, CreateProjectSourceDocumentInput, CreateProjectSourceReferenceInput, DialogueMemoryParticipant, EditorPreferences, LoreEntry, LoreMetadata, ManuscriptImportInput, ManuscriptImportResult, NarrativeSummary, Project, ProjectOnboardingState, ProjectSourceDocument, ProjectStyle, ProjectStyleAnalysisRun, ProjectStyleObservation, RelationshipMemory, ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput, SaveBookGenresInput, SaveCharacterProfileInput, SaveCharacterSceneStateInput, SaveCharacterVoicePatternInput, SaveCharacterExperienceInput, SaveCharacterDialogueMemoryInput, SaveCharacterKnowledgeStateInput, SaveLoreMetadataInput, SaveNarrativeSummaryInput, SaveProjectOnboardingStateInput, SaveProjectStyleInput, SaveProjectStyleObservationInput, SaveRelationshipMemoryInput, AddCharacterMemoryEvidenceInput, SaveStoryEntityInput, Scene, SceneVersion, StoryEntity, StoryEntityRelation, StorySourceReference, StyleReference, UpdateChapterInput, UpdateSceneInput, UpdateStoryEntityInput, UpdateStyleReferenceInput, WorkspaceSnapshot, ProjectRule, SaveProjectRuleInput, ProjectRuleProposal, SaveProjectRuleProposalInput, ContinuityStateLedgerEntry, SaveContinuityStateInput, ManuscriptPosition, ContinuityReviewSettings, ContinuityReviewRun, ContinuityReviewFinding, SaveContinuityReviewInput, SaveContinuityReviewRunStatusInput, SaveContinuityFindingInput, ApplyContinuityFindingDecisionInput, ContinuityFindingDecision, ContinuityCanonChangeAudit, ReconcileContinuityTextCorrectionInput, PlotThreadLifecycle, PlotThreadLifecycleProposal, SavePlotThreadLifecycleInput, SavePlotThreadLifecycleProposalInput, ManuscriptAnalysisJob, ManuscriptAnalysisUnit, ManuscriptAnalysisDraftLedgerEntry, ManuscriptAnalysisDraftLedgerStatus, CreateManuscriptAnalysisJobInput, UpdateManuscriptAnalysisJobInput, UpdateManuscriptAnalysisUnitInput, SaveManuscriptAnalysisDraftLedgerInput, ManuscriptAnalysisPhaseResult, SaveManuscriptAnalysisPhaseResultInput, ManuscriptAnalysisArtifact, SaveManuscriptAnalysisArtifactInput, ManuscriptAnalysisReviewAudit, SaveManuscriptAnalysisReviewAuditInput, ManuscriptAnalysisArtifactReviewStatus, ManuscriptStructureRun, ManuscriptStructureProposal, SaveManuscriptStructureProposalInput, ProvisionalEntity, ProvisionalEntityMention, ProvisionalMergeProposal, ProvisionalRelation, ProvisionalEvent, SaveProvisionalEntityInput, SaveProvisionalMentionInput, SaveProvisionalMergeProposalInput, SaveProvisionalRelationInput, SaveProvisionalEventInput, MaterializeProvisionalEntityInput, LoreCrafterRun, LoreCrafterClarification, LoreCrafterSourceReference, LoreSheetDraft, LoreSheetItem, CreateLoreCrafterRunInput, UpdateLoreCrafterRunInput, SaveLoreCrafterClarificationInput, SaveLoreCrafterSourceInput, SaveLoreSheetDraftInput, SaveLoreSheetItemInput, LoreCrafterRunStatus, LoreCrafterItemStatus, PersistentTimelineEvent, SavePersistentTimelineEventInput, StoryGraphEdge, SaveStoryGraphEdgeInput, MindmapLayout, SaveMindmapLayoutInput } from '../types/domain';
 
 export type RuntimeMode = 'desktop' | 'browser-demo';
@@ -881,13 +882,15 @@ export class BrowserDemoRepository implements StoryRepository {
     const stamp = now();
     const saved: ContinuityFindingDecision = { ...input, id: state.continuityDecisions.find((item) => item.findingId === input.findingId)?.id ?? crypto.randomUUID(), payload: input.payload, createdAt: state.continuityDecisions.find((item) => item.findingId === input.findingId)?.createdAt ?? stamp, updatedAt: stamp };
     state.continuityDecisions = [saved, ...state.continuityDecisions.filter((item) => item.findingId !== input.findingId)];
-    if (input.status === 'dismissed') state.continuityFindings = state.continuityFindings.map((item) => item.id === input.findingId ? { ...item, reviewStatus: 'dismissed', userDecision: input.decisionKind, updatedAt: stamp } : item);
+    const findingStatus: ContinuityReviewFinding['reviewStatus'] = input.status === 'dismissed' ? 'dismissed' : input.status === 'open' ? 'open' : input.status.startsWith('deferred_') ? 'deferred' : input.status === 'accepted_exception' ? 'accepted' : 'resolved';
+    state.continuityFindings = state.continuityFindings.map((item) => item.id === input.findingId ? { ...item, reviewStatus: findingStatus, userDecision: input.decisionKind, updatedAt: stamp } : item);
     if (input.canonAction) {
       if (!input.canonReason?.trim()) throw new Error('Eine Kanonentscheidung benötigt eine Begründung.');
       const audit: ContinuityCanonChangeAudit = { id: crypto.randomUUID(), findingId: input.findingId, projectId: input.projectId, targetEntityId: input.canonTargetEntityId, targetStateId: input.canonTargetStateId, action: input.canonAction, reason: input.canonReason.trim(), previousSourceReferenceId: finding.sourceReferenceId, newSourceReferenceId: input.sourceReferenceId, sourceReferenceIds: input.canonSourceReferenceIds ?? [], payload: input.payload, createdAt: stamp };
       if (audit.sourceReferenceIds.some((id) => !state.sources.some((source) => source.id === id && source.projectId === input.projectId))) throw new Error('Eine Kanonquelle gehört nicht zum Projekt.');
       state.continuityCanonAudits = [audit, ...state.continuityCanonAudits];
     }
+    for (const artifactType of ['continuity_finding', 'global_countercheck_finding'] as const) syncManuscriptArtifact(state, artifactType, input.findingId, input.status === 'dismissed' ? 'rejected' : input.status === 'open' || input.status.startsWith('deferred_') ? 'uncertain' : 'confirmed');
     this.write(state);
     return clone(saved);
   }
@@ -923,7 +926,12 @@ export class BrowserDemoRepository implements StoryRepository {
     } else if (artifact.artifactType === 'continuity_finding' || artifact.artifactType === 'global_countercheck_finding') {
       const finding = state.continuityFindings.find((item) => item.id === artifact.artifactId && item.projectId === artifact.projectId);
       if (!finding) throw new Error('Kontinuitätsfinding des Artefakts nicht gefunden.');
-      state.continuityFindings = state.continuityFindings.map((item) => item.id === finding.id ? { ...item, reviewStatus: accepted ? 'accepted' : uncertain ? 'deferred' : 'dismissed', userDecision: uncertain ? 'unsicher gespeichert' : accepted ? 'Bestätigung gespeichert; konkrete Finding-Entscheidung bleibt erforderlich.' : 'abgelehnt', updatedAt: now() } : item);
+      if (accepted) throw new Error('Ein Finding benötigt eine konkrete Continuity-Entscheidung, nicht nur „Fachlich bestätigen“.');
+      const decisionStatus: ContinuityFindingDecision['status'] = rejected ? 'dismissed' : 'deferred_canon_review';
+      const decisionKind: ContinuityFindingDecision['decisionKind'] = rejected ? 'dismiss' : 'canon_review';
+      const stamp = now();
+      state.continuityDecisions = [{ id: state.continuityDecisions.find((item) => item.findingId === finding.id)?.id ?? crypto.randomUUID(), findingId: finding.id, projectId: artifact.projectId, status: decisionStatus, decisionKind, payload: { source: 'manuscript_review_center' }, createdAt: stamp, updatedAt: stamp }, ...state.continuityDecisions.filter((item) => item.findingId !== finding.id)];
+      state.continuityFindings = state.continuityFindings.map((item) => item.id === finding.id ? { ...item, reviewStatus: rejected ? 'dismissed' : 'deferred', userDecision: decisionKind, updatedAt: stamp } : item);
     } else if (artifact.artifactType === 'project_rule_proposal') {
       applyBrowserRuleProposalReview(state, artifact.artifactId, accepted, uncertain);
     } else if (artifact.artifactType === 'plot_thread_proposal') {
@@ -986,7 +994,21 @@ export class BrowserDemoRepository implements StoryRepository {
         return clone(savedArtifact);
       }
       (state.provisionalMergeProposals ??= []); state.provisionalMergeProposals = state.provisionalMergeProposals.map((item) => item.id === merge.id ? { ...item, reviewStatus: uncertain ? 'uncertain' : 'rejected' } : item);
-    } else if (!['book_end_state_proposal'].includes(artifact.artifactType)) throw new Error('Unbekannter fachlicher Artefakttyp.');
+    } else if (artifact.artifactType === 'book_end_state_proposal') {
+      const [phaseResultId, indexText] = artifact.artifactId.split(':');
+      const phaseResult = (state.manuscriptAnalysisPhaseResults ?? []).find((item) => item.id === phaseResultId && item.jobId === artifact.jobId);
+      const proposals = Array.isArray(phaseResult?.payload.endStateProposals) ? phaseResult.payload.endStateProposals as Array<{ category?: string; entityId?: string; statement?: string; confidence?: number; evidenceExcerpt?: string; sourceReferenceId?: string }> : [];
+      const proposal = proposals[Number(indexText)];
+      if (!phaseResult || !proposal) throw new Error('Buch-Endzustandsvorschlag des Artefakts konnte nicht geladen werden.');
+      if (accepted && proposal.entityId && state.entities.some((entity) => entity.id === proposal.entityId && entity.projectId === artifact.projectId)) {
+        const stateKind = ({ object_owner: 'ownership', location: 'location', injury: 'injury', open_action: 'open_action', knowledge: 'knowledge', relationship: 'relationship' } as Record<string, ContinuityStateKind>)[proposal.category ?? ''] ?? 'property';
+        const source = proposal.sourceReferenceId && state.sources.find((item) => item.id === proposal.sourceReferenceId && item.projectId === artifact.projectId);
+        if (!source) throw new Error('Ein bestätigter Endzustand benötigt eine gültige Source Reference.');
+        const stamp = now();
+        state.continuityLedger = [{ id: crypto.randomUUID(), projectId: artifact.projectId, entityId: proposal.entityId, stateKind, previousState: '', newState: proposal.statement ?? '', reason: `book_end_state:${artifact.jobId}`, evidenceExcerpt: proposal.evidenceExcerpt, sourceReferenceId: source.id, status: 'confirmed', confidence: proposal.confidence ?? 0.5, authorConfirmed: true, createdAt: stamp, updatedAt: stamp }, ...state.continuityLedger];
+      }
+      state.manuscriptAnalysisPhaseResults = (state.manuscriptAnalysisPhaseResults ?? []).map((item) => item.id === phaseResultId ? { ...item, reviewStatus: accepted ? 'confirmed' : uncertain ? 'uncertain' : 'rejected', updatedAt: now() } : item);
+    } else throw new Error('Unbekannter fachlicher Artefakttyp.');
     const saved: ManuscriptAnalysisArtifact = { ...artifact, reviewStatus: explicitlySkipped || status === 'skipped' ? 'skipped' : status, explicitlySkipped: explicitlySkipped || status === 'skipped', updatedAt: now() };
     state.manuscriptAnalysisArtifacts = (state.manuscriptAnalysisArtifacts ?? []).map((item) => item.id === id ? saved : item);
     this.write(state);

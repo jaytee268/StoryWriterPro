@@ -88,8 +88,18 @@ describe('jobgebundenes Manuskript-Importreview', () => {
     const run = await repository.createContinuityReviewRun({ projectId: workspace.project.id, chapterId: workspace.chapters[0]!.id, sceneId: workspace.chapters[0]!.scenes[0]!.id, sourceKind: 'manual', contentHash: 'finding-hash', providerId: 'local-prototype' });
     const finding = (await repository.saveContinuityReviewFindings(run.id, [{ runId: run.id, projectId: workspace.project.id, findingType: 'probable_contradiction', severity: 'warning', relatedEntityIds: [], relatedStateIds: [], relatedRuleIds: [], objectiveConflict: 'Zustand widerspricht sich.', loreExplanations: [], evidenceExcerpt: 'Beleg', counterEvidenceExcerpts: [], confidence: .7, reason: 'Prüfung', reviewStatus: 'open' }]))[0]!;
     const artifact = (await repository.saveManuscriptAnalysisArtifacts(job.id, [{ jobId: job.id, projectId: workspace.project.id, phase: 'global_countercheck', artifactType: 'global_countercheck_finding', artifactId: finding.id, reviewStatus: 'pending', explicitlySkipped: false }]))[0]!;
+    await repository.applyContinuityFindingDecision({ findingId: finding.id, projectId: workspace.project.id, status: 'deferred_canon_review', decisionKind: 'canon_review' });
+    expect((await repository.listContinuityReviewFindings(workspace.project.id)).find((item) => item.id === finding.id)).toMatchObject({ reviewStatus: 'deferred' });
+    expect((await repository.listManuscriptAnalysisArtifacts(job.id)).find((item) => item.id === artifact.id)?.reviewStatus).toBe('uncertain');
+  });
+
+  it('überführt einen bestätigten Book-End-State als echten Continuity-Domainzustand', async () => {
+    const repository = new BrowserDemoRepository(); const workspace = await repository.loadWorkspace(); const chapter = workspace.chapters[0]!; const scene = chapter.scenes[0]!; const entity = workspace.entities[0]!;
+    const job = await repository.createManuscriptAnalysisJob({ projectId: workspace.project.id, bookId: workspace.books[0]!.id, importReference: 'review-end-state', providerId: 'local-prototype', units: [] });
+    const source = await repository.createSourceReference({ projectId: workspace.project.id, entityId: entity.id, chapterId: chapter.id, sceneId: scene.id, excerpt: 'Endzustand', startOffset: 0, endOffset: 10 });
+    const phase = await repository.saveManuscriptAnalysisPhaseResult({ jobId: job.id, projectId: workspace.project.id, phase: 'book_end_state', resultKind: 'book_end_state', payload: { endStateProposals: [{ category: 'location', entityId: entity.id, statement: 'Am Hafen', confidence: .9, evidenceExcerpt: 'Endzustand', sourceReferenceId: source.id }] }, contentHash: 'end-state', providerId: 'local-prototype', promptVersion: 'test', reviewStatus: 'pending' });
+    const artifact = (await repository.saveManuscriptAnalysisArtifacts(job.id, [{ jobId: job.id, projectId: workspace.project.id, phase: 'book_end_state', artifactType: 'book_end_state_proposal', artifactId: `${phase.id}:0`, reviewStatus: 'pending', explicitlySkipped: false }]))[0]!;
     await repository.reviewManuscriptAnalysisArtifactDecision(artifact.id, 'confirmed');
-    expect((await repository.listContinuityReviewFindings(workspace.project.id)).find((item) => item.id === finding.id)).toMatchObject({ reviewStatus: 'accepted' });
-    expect((await repository.listManuscriptAnalysisArtifacts(job.id)).find((item) => item.id === artifact.id)?.reviewStatus).toBe('confirmed');
+    expect((await repository.listContinuityStateLedger(workspace.project.id)).some((entry) => entry.entityId === entity.id && entry.newState === 'Am Hafen' && entry.status === 'confirmed')).toBe(true);
   });
 });

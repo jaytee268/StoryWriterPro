@@ -110,6 +110,10 @@ async function runFullBrowserWorkflow(providerOverride?: StoryAiProvider) {
   expect(artifacts.some((artifact) => artifact.artifactType === 'genre_detection')).toBe(true);
   const reviewOrder = (type: string) => type === 'provisional_entity' ? 0 : type === 'provisional_merge' ? 1 : type === 'bible_proposal' || type === 'character_memory_proposal' ? 2 : type === 'import_draft_state' ? 9 : 5;
   for (const artifact of [...artifacts].sort((left, right) => reviewOrder(left.artifactType) - reviewOrder(right.artifactType))) {
+    if (artifact.artifactType === 'continuity_finding' || artifact.artifactType === 'global_countercheck_finding') {
+      await repository.applyContinuityFindingDecision({ findingId: artifact.artifactId, projectId: created.id, status: 'deferred_canon_review', decisionKind: 'canon_review' });
+      continue;
+    }
     const status = artifact.artifactType === 'project_rule_proposal' ? 'rejected' : 'confirmed';
     await repository.reviewManuscriptAnalysisArtifactDecision(artifact.id, status);
   }
