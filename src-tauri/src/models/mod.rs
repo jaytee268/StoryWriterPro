@@ -1638,6 +1638,7 @@ pub struct CreateLoreCrafterRunInput {
     pub content_hash: String,
     pub provider_id: String,
     pub prompt_version: String,
+    pub correction_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1651,6 +1652,7 @@ pub struct UpdateLoreCrafterRunInput {
     pub error_code: Option<String>,
     pub error_message: Option<String>,
     pub completed_at: Option<String>,
+    pub correction_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1666,6 +1668,7 @@ pub struct LoreCrafterRun {
     pub understanding_summary: Option<String>,
     pub analysis: Option<serde_json::Value>,
     pub confirmation_text: Option<String>,
+    pub correction_text: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub completed_at: Option<String>,
@@ -1795,6 +1798,89 @@ pub struct SaveLoreSheetItemInput {
     pub status: Option<String>,
 }
 
+pub const LORE_SHEET_ITEM_TYPES: &[&str] = &[
+    "premise",
+    "world_rule",
+    "prerequisite",
+    "effect",
+    "limitation",
+    "cost",
+    "exception",
+    "term",
+    "organization",
+    "location",
+    "historical_event",
+    "known_aspect",
+    "unknown_aspect",
+    "rule_connection",
+    "open_question",
+    "warning",
+];
+
+pub fn validate_lore_sheet_item_type(value: &str) -> bool {
+    LORE_SHEET_ITEM_TYPES.contains(&value)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveExcludedContentDecisionInput {
+    pub id: Option<String>,
+    pub run_id: String,
+    pub project_id: String,
+    pub content: String,
+    pub reason: String,
+    pub suggested_target: String,
+    pub selected_target: Option<String>,
+    pub decision: Option<String>,
+    pub created_artifact_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExcludedContentDecision {
+    pub id: String,
+    pub run_id: String,
+    pub project_id: String,
+    pub content: String,
+    pub reason: String,
+    pub suggested_target: String,
+    pub selected_target: Option<String>,
+    pub decision: String,
+    pub created_artifact_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProjectContentProposalInput {
+    pub id: Option<String>,
+    pub project_id: String,
+    pub target_kind: String,
+    pub title: String,
+    pub content: String,
+    pub reason: String,
+    pub source_reference_id: Option<String>,
+    pub origin: String,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectContentProposal {
+    pub id: String,
+    pub project_id: String,
+    pub target_kind: String,
+    pub title: String,
+    pub content: String,
+    pub reason: String,
+    pub source_reference_id: Option<String>,
+    pub origin: String,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoreSheetItem {
@@ -1813,6 +1899,13 @@ pub struct LoreSheetItem {
     pub status: String,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoreSheetWithItems {
+    pub draft: LoreSheetDraft,
+    pub items: Vec<LoreSheetItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

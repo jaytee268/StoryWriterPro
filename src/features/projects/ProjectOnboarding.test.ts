@@ -74,7 +74,7 @@ describe('Projekt-Onboarding', () => {
     act(() => secondRoot.unmount());
   });
 
-  it('übernimmt Lore-Notizen erst nach dem finalen Anlegen in den Lore-Crafter-Kontext', async () => {
+  it('übergibt Lore- und Manuskript-Notizen an das geführte Analyse-Onboarding', async () => {
     const created = { ...project, id: 'created-lore-1', title: 'Lore-Buch' };
     const onCreated = vi.fn();
     const repository = { createProject: vi.fn(async () => created), loadWorkspace: vi.fn(async () => workspace()), saveBookGenres: vi.fn(), saveProjectOnboardingState: vi.fn(async (input) => ({ ...input, updatedAt: '' })) } as unknown as StoryRepository;
@@ -88,7 +88,7 @@ describe('Projekt-Onboarding', () => {
     expect(repository.createProject).not.toHaveBeenCalled();
     await act(async () => (container.querySelector('button.primary-button') as HTMLButtonElement).click());
     await act(async () => [...container.querySelectorAll('button')].find((button) => button.textContent?.includes('Projekt anlegen'))?.click());
-    expect(onCreated).toHaveBeenCalledWith(created, expect.objectContaining({ currentStep: 'completed' }), 'Die Stadt schützt ihre Archive durch ein jährliches Ritual.', 'Kapitel 1\n\nMarek öffnete die Tür.');
+    expect(onCreated).toHaveBeenCalledWith(created, expect.objectContaining({ currentStep: 'lore' }), 'Die Stadt schützt ihre Archive durch ein jährliches Ritual.', 'Kapitel 1\n\nMarek öffnete die Tür.');
     act(() => root.unmount());
   });
 });

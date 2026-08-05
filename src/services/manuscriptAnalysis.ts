@@ -299,6 +299,9 @@ export class ManuscriptAnalysisController {
       const run = await this.repository.createManuscriptStructureRun(workspace.project.id, chapter.id, hash, provider.id, `${PROMPT_VERSION}-structure`);
       await this.repository.updateManuscriptStructureRun(run.id, 'running');
       try {
+        progress.status = 'running'; progress.totalUnits = chapters.length; progress.currentUnitId = chapter.id; progress.currentLabel = `Kapitel ${chapter.orderIndex}: ${chapter.title}`; progress.updatedAt = new Date().toISOString();
+        const runningJob = await this.repository.getManuscriptAnalysisJob(job.id);
+        await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'running', currentPhase: 'structure', currentUnitId: chapter.id, phaseProgress: { ...runningJob.phaseProgress, structure: progress } });
         const [lore, rules] = await Promise.all([this.repository.getLoreMetadata(workspace.project.id), this.repository.listProjectRules(workspace.project.id, true)]);
         const structureChapter = { ...chapter, scenes: chapter.scenes.map((scene) => ({ ...scene, content: editorContentToPlainText(scene.content) })) };
         const result = await provider.analyzeManuscriptStructure({ projectId: workspace.project.id, chapter: structureChapter, pageMarkers: job.pageMarkers.filter((marker) => marker.chapterId === chapter.id), localHints: localStructureHints(text), confirmedLore: lore.filter((item) => workspace.entities.some((entity) => entity.id === item.entityId && entity.authorConfirmed)), confirmedRules: rules.filter((rule) => rule.status === 'confirmed' && rule.authorConfirmed) }, timeout);
@@ -306,7 +309,7 @@ export class ManuscriptAnalysisController {
         validateManuscriptStructure(text, proposals);
         await this.repository.saveManuscriptStructureProposals(run.id, proposals);
         await this.repository.updateManuscriptStructureRun(run.id, 'completed');
-        progress.completedUnits = index + 1; progress.lastSuccessfulUnitId = run.id; progress.actualProvider = provider.id; progress.updatedAt = new Date().toISOString();
+        progress.completedUnits = index + 1; progress.lastSuccessfulUnitId = run.id; progress.actualProvider = provider.id; progress.currentUnitId = undefined; progress.currentLabel = undefined; progress.updatedAt = new Date().toISOString();
         await this.repository.updateManuscriptAnalysisJob({ id: job.id, status: 'running', currentPhase: 'structure', phaseProgress: { ...(await this.repository.getManuscriptAnalysisJob(job.id)).phaseProgress, structure: progress } });
       } catch (error) {
         await this.repository.updateManuscriptStructureRun(run.id, 'failed', errorText(error));
@@ -333,6 +336,9 @@ export class ManuscriptAnalysisController {
       if ((currentUnit.status === 'completed' || currentUnit.status === 'skipped') && currentUnit.contentHash === currentHash) { progress.completedUnits += 1; progress.lastSuccessfulUnitId = unit.id; continue; }
       if (currentUnit.status === 'failed') throw new Error(currentUnit.errorMessage ?? 'Eine Prüfeinheit ist fehlgeschlagen.');
       await this.repository.updateManuscriptAnalysisJob({ id: this.jobId, status: 'running', currentPhase: 'passage_continuity', currentUnitId: unit.id, errorMessage: undefined });
+      const runningJob = await this.repository.getManuscriptAnalysisJob(this.jobId);
+      progress.status = 'running'; progress.totalUnits = units.length; progress.currentUnitId = unit.id; progress.currentLabel = `Kapitel ${chapter.orderIndex}${unit.pageNumber === undefined ? '' : ` · Seite ${unit.pageNumber}`}`; progress.updatedAt = new Date().toISOString();
+      await this.repository.updateManuscriptAnalysisJob({ id: this.jobId, status: 'running', currentPhase: 'passage_continuity', phaseProgress: { ...runningJob.phaseProgress, passage_continuity: progress } });
       await this.repository.updateManuscriptAnalysisUnit({ id: unit.id, status: 'running', requestedProvider: provider.id, actualProvider: undefined, promptVersion: PROMPT_VERSION, inputHash: currentHash, errorMessage: undefined, errorCode: undefined, content: currentContent, contentHash: currentHash });
       try {
         const previous = units[index - 1];
@@ -366,7 +372,7 @@ export class ManuscriptAnalysisController {
         const newRuleProposals = (await this.repository.listProjectRuleProposals(workspace.project.id)).filter((proposal) => !rulesBefore.has(proposal.id));
         await this.repository.saveManuscriptAnalysisArtifacts(this.jobId, newRuleProposals.map((proposal) => ({ jobId: this.jobId, projectId: workspace.project.id, phase: 'passage_continuity' as const, unitId: unit.id, artifactType: 'project_rule_proposal' as const, artifactId: proposal.id, reviewStatus: 'pending' as const, explicitlySkipped: false })));
         await this.repository.updateManuscriptAnalysisUnit({ id: unit.id, status: 'completed', continuityRunId: result.runId, actualProvider: provider.id, outputHash: contentHash(JSON.stringify(result)), inputHash: currentHash, content: currentContent, contentHash: currentHash, errorMessage: undefined, errorCode: undefined });
-        progress.completedUnits += 1; progress.lastSuccessfulUnitId = unit.id; progress.updatedAt = new Date().toISOString();
+        progress.completedUnits += 1; progress.lastSuccessfulUnitId = unit.id; progress.currentUnitId = undefined; progress.currentLabel = undefined; progress.updatedAt = new Date().toISOString();
         await this.repository.updateManuscriptAnalysisJob({ id: this.jobId, status: 'running', currentPhase: 'passage_continuity', currentUnitId: undefined, lastSuccessfulUnitId: unit.id, phaseProgress: { ...(await this.repository.getManuscriptAnalysisJob(this.jobId)).phaseProgress, passage_continuity: progress } });
       } catch (error) {
         if (this.cancelled || this.paused) throw error;

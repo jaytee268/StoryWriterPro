@@ -719,6 +719,17 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
         connection.execute_batch(include_str!("../../../migrations/037_ai_setup.sql"))?;
         connection.execute("INSERT INTO schema_migrations (version) VALUES (37)", [])?;
     }
+    let has_lore_crafter_review_workflow: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 38",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_lore_crafter_review_workflow == 0 {
+        connection.execute_batch(include_str!(
+            "../../../migrations/038_lore_crafter_review_workflow.sql"
+        ))?;
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (38)", [])?;
+    }
     Ok(())
 }
 
@@ -874,7 +885,7 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            37
+            38
         );
         assert_eq!(
             connection
@@ -902,6 +913,8 @@ mod tests {
             "manuscript_analysis_artifacts",
             "manuscript_analysis_review_audits",
             "project_source_documents",
+            "excluded_content_decisions",
+            "project_content_proposals",
             "project_source_references",
             "manuscript_timeline_events",
             "story_graph_edges",
@@ -1202,7 +1215,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                37
+                38
             );
             // Running startup migrations again must not change the assignment
             // or fail on the ALTER TABLE statement.

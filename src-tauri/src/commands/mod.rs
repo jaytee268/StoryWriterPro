@@ -11,57 +11,60 @@ use crate::{
         validate_continuity_state_status, validate_dialogue_kind, validate_entity_status,
         validate_evidence_role, validate_knowledge_state, validate_lore_category,
         validate_lore_entity_type, validate_lore_importance, validate_lore_reveal_state,
-        validate_lore_scope, validate_memory_kind, validate_memory_reliability,
-        validate_participant_role, validate_project_rule_scope, validate_project_rule_status,
-        validate_proposal_action, validate_proposal_classification, validate_relation_type,
-        validate_relationship_memory_type, validate_review_status, validate_rule_proposal_status,
-        validate_scene_status, validate_scene_version_reason, validate_style_reference_category,
-        validate_truthfulness, AcceptChapterGenerationJobInput, AddCharacterMemoryEvidenceInput,
-        ApplyContinuityFindingDecisionInput, BibleProposal, BibleProposalInput, BibleUpdateRun,
-        Book, Chapter, ChapterGenerationDraftLedgerEntry, ChapterGenerationJob,
-        ChapterGenerationPlan, ChapterGenerationReview, ChapterGenerationSection, ChapterPlanBeat,
-        CharacterDialogueMemory, CharacterExperience, CharacterKnowledgeState,
-        CharacterMemoryEvidence, CharacterMemoryProposal, CharacterMemoryProposalDraft,
-        CharacterMemoryUpdateRun, CharacterProfile, CharacterSceneState, CharacterVoicePattern,
-        ContinuityCanonChangeAudit, ContinuityFindingDecision, ContinuityReviewFinding,
-        ContinuityReviewRun, ContinuityReviewSettings, ContinuityStateLedgerEntry,
-        CreateBibleUpdateRunInput, CreateChapterGenerationJobInput, CreateChapterInput,
-        CreateCharacterMemoryUpdateRunInput, CreateLoreCrafterRunInput, CreateLoreEntryInput,
-        CreateManuscriptAnalysisJobInput, CreateManuscriptImportInput,
-        CreateManuscriptStructureRunInput, CreateProjectInput, CreateProjectSourceDocumentInput,
-        CreateProjectSourceReferenceInput, CreateProjectStyleAnalysisRunInput, CreateSceneInput,
-        CreateSceneVersionInput, CreateSourceReferenceInput, CreateStoryEntityInput,
-        CreateStoryEntityRelationInput, CreateStyleReferenceInput, DatabaseInfo,
-        DialogueMemoryParticipant, EditorPreferences, LoreCrafterClarification, LoreCrafterRun,
+        validate_lore_scope, validate_lore_sheet_item_type, validate_memory_kind,
+        validate_memory_reliability, validate_participant_role, validate_project_rule_scope,
+        validate_project_rule_status, validate_proposal_action, validate_proposal_classification,
+        validate_relation_type, validate_relationship_memory_type, validate_review_status,
+        validate_rule_proposal_status, validate_scene_status, validate_scene_version_reason,
+        validate_style_reference_category, validate_truthfulness, AcceptChapterGenerationJobInput,
+        AddCharacterMemoryEvidenceInput, ApplyContinuityFindingDecisionInput, BibleProposal,
+        BibleProposalInput, BibleUpdateRun, Book, Chapter, ChapterGenerationDraftLedgerEntry,
+        ChapterGenerationJob, ChapterGenerationPlan, ChapterGenerationReview,
+        ChapterGenerationSection, ChapterPlanBeat, CharacterDialogueMemory, CharacterExperience,
+        CharacterKnowledgeState, CharacterMemoryEvidence, CharacterMemoryProposal,
+        CharacterMemoryProposalDraft, CharacterMemoryUpdateRun, CharacterProfile,
+        CharacterSceneState, CharacterVoicePattern, ContinuityCanonChangeAudit,
+        ContinuityFindingDecision, ContinuityReviewFinding, ContinuityReviewRun,
+        ContinuityReviewSettings, ContinuityStateLedgerEntry, CreateBibleUpdateRunInput,
+        CreateChapterGenerationJobInput, CreateChapterInput, CreateCharacterMemoryUpdateRunInput,
+        CreateLoreCrafterRunInput, CreateLoreEntryInput, CreateManuscriptAnalysisJobInput,
+        CreateManuscriptImportInput, CreateManuscriptStructureRunInput, CreateProjectInput,
+        CreateProjectSourceDocumentInput, CreateProjectSourceReferenceInput,
+        CreateProjectStyleAnalysisRunInput, CreateSceneInput, CreateSceneVersionInput,
+        CreateSourceReferenceInput, CreateStoryEntityInput, CreateStoryEntityRelationInput,
+        CreateStyleReferenceInput, DatabaseInfo, DialogueMemoryParticipant, EditorPreferences,
+        ExcludedContentDecision, LoreCrafterClarification, LoreCrafterRun,
         LoreCrafterSourceReference, LoreEntry, LoreMetadata, LoreSheetDraft, LoreSheetItem,
-        ManuscriptAnalysisArtifact, ManuscriptAnalysisCompletionReport,
+        LoreSheetWithItems, ManuscriptAnalysisArtifact, ManuscriptAnalysisCompletionReport,
         ManuscriptAnalysisDraftLedgerEntry, ManuscriptAnalysisJob, ManuscriptAnalysisPageMarker,
         ManuscriptAnalysisPhaseResult, ManuscriptAnalysisReviewAudit, ManuscriptAnalysisUnit,
         ManuscriptImportInput, ManuscriptImportResult, ManuscriptImportVersion,
         ManuscriptImportWorkflowResult, ManuscriptPosition, ManuscriptStructureProposal,
         ManuscriptStructureRun, MaterializeProvisionalEntityInput, MindmapLayout, NarrativeSummary,
         PersistentTimelineEvent, PlotThreadLifecycle, PlotThreadLifecycleProposal, Project,
-        ProjectOnboardingState, ProjectRule, ProjectRuleProposal, ProjectSourceDocument,
-        ProjectStyle, ProjectStyleAnalysisRun, ProjectStyleObservation, ProviderStatus,
-        ProvisionalEntity, ProvisionalEntityMention, ProvisionalEvent, ProvisionalMergeProposal,
-        ProvisionalRelation, ReconcileContinuityTextCorrectionInput, RelationshipMemory,
-        RestoreSceneVersionInput, ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput,
-        SaveBookGenresInput, SaveChapterGenerationDraftLedgerInput, SaveChapterGenerationPlanInput,
+        ProjectContentProposal, ProjectOnboardingState, ProjectRule, ProjectRuleProposal,
+        ProjectSourceDocument, ProjectStyle, ProjectStyleAnalysisRun, ProjectStyleObservation,
+        ProviderStatus, ProvisionalEntity, ProvisionalEntityMention, ProvisionalEvent,
+        ProvisionalMergeProposal, ProvisionalRelation, ReconcileContinuityTextCorrectionInput,
+        RelationshipMemory, RestoreSceneVersionInput, ReviewBibleProposalInput,
+        ReviewCharacterMemoryProposalInput, SaveBookGenresInput,
+        SaveChapterGenerationDraftLedgerInput, SaveChapterGenerationPlanInput,
         SaveChapterGenerationReviewInput, SaveChapterGenerationSectionInput,
         SaveCharacterDialogueMemoryInput, SaveCharacterExperienceInput,
         SaveCharacterKnowledgeStateInput, SaveCharacterProfileInput, SaveCharacterSceneStateInput,
         SaveCharacterVoicePatternInput, SaveContinuityFindingInput, SaveContinuityReviewInput,
         SaveContinuityReviewRunStatusInput, SaveContinuityStateInput,
-        SaveLoreCrafterClarificationInput, SaveLoreCrafterSourceInput, SaveLoreMetadataInput,
-        SaveLoreSheetDraftInput, SaveLoreSheetItemInput, SaveManuscriptAnalysisArtifactInput,
+        SaveExcludedContentDecisionInput, SaveLoreCrafterClarificationInput,
+        SaveLoreCrafterSourceInput, SaveLoreMetadataInput, SaveLoreSheetDraftInput,
+        SaveLoreSheetItemInput, SaveManuscriptAnalysisArtifactInput,
         SaveManuscriptAnalysisCompletionReportInput, SaveManuscriptAnalysisDraftLedgerInput,
         SaveManuscriptAnalysisPhaseResultInput, SaveManuscriptAnalysisReviewAuditInput,
         SaveManuscriptStructureProposalInput, SaveMindmapLayoutInput, SaveNarrativeSummaryInput,
         SavePersistentTimelineEventInput, SavePlotThreadLifecycleInput,
-        SavePlotThreadLifecycleProposalInput, SaveProjectOnboardingStateInput,
-        SaveProjectRuleInput, SaveProjectRuleProposalInput, SaveProjectStyleInput,
-        SaveProjectStyleObservationInput, SaveProvisionalEntityInput, SaveProvisionalEventInput,
-        SaveProvisionalMentionInput, SaveProvisionalMergeProposalInput,
+        SavePlotThreadLifecycleProposalInput, SaveProjectContentProposalInput,
+        SaveProjectOnboardingStateInput, SaveProjectRuleInput, SaveProjectRuleProposalInput,
+        SaveProjectStyleInput, SaveProjectStyleObservationInput, SaveProvisionalEntityInput,
+        SaveProvisionalEventInput, SaveProvisionalMentionInput, SaveProvisionalMergeProposalInput,
         SaveProvisionalRelationInput, SaveRelationshipMemoryInput, SaveStoryDirectionInput,
         SaveStoryGraphEdgeInput, SaveWritingPreferencesInput, Scene, SceneInput, SceneVersion,
         StoryDirection, StoryEntity, StoryEntityInput, StoryEntityRelation, StoryGraphEdge,
@@ -562,8 +565,8 @@ pub fn create_lore_crafter_run(
     }
     if let Some(existing) = db
         .query_row(
-            "SELECT id, project_id, original_text, content_hash, provider_id, prompt_version, status, understanding_summary, analysis_json, confirmation_text, created_at, updated_at, completed_at, error_code, error_message FROM lore_crafter_runs WHERE project_id=?1 AND content_hash=?2 AND provider_id=?3 AND status NOT IN ('failed','cancelled') ORDER BY updated_at DESC LIMIT 1",
-            params![input.project_id, input.content_hash, input.provider_id],
+            "SELECT id, project_id, original_text, content_hash, provider_id, prompt_version, status, understanding_summary, analysis_json, confirmation_text, correction_text, created_at, updated_at, completed_at, error_code, error_message FROM lore_crafter_runs WHERE project_id=?1 AND content_hash=?2 AND provider_id=?3 AND correction_text IS ?4 AND status NOT IN ('failed','cancelled') ORDER BY updated_at DESC LIMIT 1",
+            params![input.project_id, input.content_hash, input.provider_id, input.correction_text],
             lore_crafter_run_from_row,
         )
         .optional()
@@ -574,8 +577,8 @@ pub fn create_lore_crafter_run(
     let id = new_id();
     let timestamp = now();
     db.execute(
-        "INSERT INTO lore_crafter_runs (id, project_id, original_text, content_hash, provider_id, prompt_version, status, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,'pending',?7,?7)",
-        params![id, input.project_id, input.original_text, input.content_hash, input.provider_id, input.prompt_version, timestamp],
+        "INSERT INTO lore_crafter_runs (id, project_id, original_text, content_hash, provider_id, prompt_version, status, correction_text, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,'pending',?7,?8,?8)",
+        params![id, input.project_id, input.original_text, input.content_hash, input.provider_id, input.prompt_version, input.correction_text, timestamp],
     ).map_err(|error| sql_error("Lore-Crafter-Lauf konnte nicht angelegt werden", error))?;
     load_lore_crafter_run(&db, &id)
 }
@@ -593,16 +596,17 @@ fn lore_crafter_run_from_row(row: &rusqlite::Row<'_>) -> SqlResult<LoreCrafterRu
         understanding_summary: row.get(7)?,
         analysis: analysis.and_then(|value| serde_json::from_str(&value).ok()),
         confirmation_text: row.get(9)?,
-        created_at: row.get(10)?,
-        updated_at: row.get(11)?,
-        completed_at: row.get(12)?,
-        error_code: row.get(13)?,
-        error_message: row.get(14)?,
+        correction_text: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+        completed_at: row.get(13)?,
+        error_code: row.get(14)?,
+        error_message: row.get(15)?,
     })
 }
 
 fn load_lore_crafter_run(db: &Connection, id: &str) -> Result<LoreCrafterRun, String> {
-    db.query_row("SELECT id, project_id, original_text, content_hash, provider_id, prompt_version, status, understanding_summary, analysis_json, confirmation_text, created_at, updated_at, completed_at, error_code, error_message FROM lore_crafter_runs WHERE id=?1", params![id], lore_crafter_run_from_row).map_err(|error| sql_error("Lore-Crafter-Lauf konnte nicht geladen werden", error))
+    db.query_row("SELECT id, project_id, original_text, content_hash, provider_id, prompt_version, status, understanding_summary, analysis_json, confirmation_text, correction_text, created_at, updated_at, completed_at, error_code, error_message FROM lore_crafter_runs WHERE id=?1", params![id], lore_crafter_run_from_row).map_err(|error| sql_error("Lore-Crafter-Lauf konnte nicht geladen werden", error))
 }
 
 #[tauri::command]
@@ -612,7 +616,7 @@ pub fn list_lore_crafter_runs(
 ) -> Result<Vec<LoreCrafterRun>, String> {
     let db = lock_db(&state)?;
     project_from_db(&db, &project_id)?;
-    let mut statement = db.prepare("SELECT id, project_id, original_text, content_hash, provider_id, prompt_version, status, understanding_summary, analysis_json, confirmation_text, created_at, updated_at, completed_at, error_code, error_message FROM lore_crafter_runs WHERE project_id=?1 ORDER BY updated_at DESC").map_err(|error| sql_error("Lore-Crafter-Läufe konnten nicht geladen werden", error))?;
+    let mut statement = db.prepare("SELECT id, project_id, original_text, content_hash, provider_id, prompt_version, status, understanding_summary, analysis_json, confirmation_text, correction_text, created_at, updated_at, completed_at, error_code, error_message FROM lore_crafter_runs WHERE project_id=?1 ORDER BY updated_at DESC").map_err(|error| sql_error("Lore-Crafter-Läufe konnten nicht geladen werden", error))?;
     let result = statement
         .query_map(params![project_id], lore_crafter_run_from_row)
         .map_err(|error| sql_error("Lore-Crafter-Läufe konnten nicht geladen werden", error))?
@@ -653,7 +657,7 @@ pub fn update_lore_crafter_run(
                 error,
             )
         })?;
-    db.execute("UPDATE lore_crafter_runs SET status=?2, understanding_summary=COALESCE(?3, understanding_summary), analysis_json=COALESCE(?4, analysis_json), confirmation_text=COALESCE(?5, confirmation_text), updated_at=?6, completed_at=?7, error_code=?8, error_message=?9 WHERE id=?1", params![input.id, input.status, input.understanding_summary, analysis, input.confirmation_text, now(), input.completed_at, input.error_code, input.error_message]).map_err(|error| sql_error("Lore-Crafter-Lauf konnte nicht aktualisiert werden", error))?;
+    db.execute("UPDATE lore_crafter_runs SET status=?2, understanding_summary=COALESCE(?3, understanding_summary), analysis_json=COALESCE(?4, analysis_json), confirmation_text=COALESCE(?5, confirmation_text), correction_text=COALESCE(?6, correction_text), updated_at=?7, completed_at=?8, error_code=?9, error_message=?10 WHERE id=?1", params![input.id, input.status, input.understanding_summary, analysis, input.confirmation_text, input.correction_text, now(), input.completed_at, input.error_code, input.error_message]).map_err(|error| sql_error("Lore-Crafter-Lauf konnte nicht aktualisiert werden", error))?;
     let _ = current;
     load_lore_crafter_run(&db, &input.id)
 }
@@ -981,6 +985,7 @@ pub fn save_lore_sheet_items(
         input.draft_id != draft_id
             || input.run_id != draft.0
             || input.project_id != draft.1
+            || !validate_lore_sheet_item_type(&input.item_type)
             || !matches!(
                 input.status.as_deref().unwrap_or("proposed"),
                 "proposed" | "accepted" | "rejected" | "uncertain" | "merged"
@@ -1038,6 +1043,257 @@ pub fn save_lore_sheet_items(
         )
     })?;
     list_lore_sheet_items_for_db(&db, &draft_id, &draft.1)
+}
+
+#[tauri::command]
+pub fn save_lore_sheet_with_items(
+    state: State<'_, DbState>,
+    draft_input: SaveLoreSheetDraftInput,
+    item_inputs: Vec<SaveLoreSheetItemInput>,
+) -> Result<LoreSheetWithItems, String> {
+    required(&draft_input.title, "Der Lore-Sheet-Titel")?;
+    let db = lock_db(&state)?;
+    let run = load_lore_crafter_run(&db, &draft_input.run_id)?;
+    if run.project_id != draft_input.project_id || run.content_hash != draft_input.content_hash {
+        return Err(
+            "Der Lore-Sheet-Entwurf gehört nicht zum Projekt oder basiert auf veralteten Notizen."
+                .into(),
+        );
+    }
+    if !matches!(
+        draft_input.status.as_str(),
+        "proposed" | "reviewed" | "rejected"
+    ) {
+        return Err("Ungültiger Lore-Sheet-Status.".into());
+    }
+    if item_inputs.iter().any(|input| {
+        input.run_id != draft_input.run_id
+            || input.project_id != draft_input.project_id
+            || !validate_lore_sheet_item_type(&input.item_type)
+            || !matches!(
+                input.status.as_deref().unwrap_or("proposed"),
+                "proposed" | "accepted" | "rejected" | "uncertain" | "merged"
+            )
+            || !(0.0..=1.0).contains(&input.confidence)
+    }) {
+        return Err(
+            "Der Lore-Sheet-Entwurf enthält einen ungültigen oder projektfremden Eintrag.".into(),
+        );
+    }
+    for input in &item_inputs {
+        if let Some(source_id) = &input.source_reference_id {
+            let valid: bool = db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM project_source_references WHERE id=?1 AND project_id=?2) OR EXISTS(SELECT 1 FROM lore_crafter_sources WHERE id=?1 AND run_id=?3 AND project_id=?2)",
+                params![source_id, draft_input.project_id, draft_input.run_id],
+                |row| row.get(0),
+            ).map_err(|error| sql_error("Lore-Sheet-Quelle konnte nicht geprüft werden", error))?;
+            if !valid {
+                return Err("Eine Lore-Sheet-Quelle gehört nicht zum Projekt.".into());
+            }
+        }
+    }
+    let id = draft_input.id.clone().unwrap_or_else(new_id);
+    let stamp = now();
+    let arrays = [
+        &draft_input.categories,
+        &draft_input.world_rules,
+        &draft_input.prerequisites,
+        &draft_input.effects,
+        &draft_input.limitations,
+        &draft_input.costs,
+        &draft_input.exceptions,
+        &draft_input.terminology,
+        &draft_input.organizations,
+        &draft_input.locations,
+        &draft_input.historical_events,
+        &draft_input.known_aspects,
+        &draft_input.unknown_aspects,
+        &draft_input.rule_connections,
+        &draft_input.open_questions,
+    ]
+    .map(|items| json_vec(items));
+    let transaction = db
+        .unchecked_transaction()
+        .map_err(|error| sql_error("Lore-Sheet konnte nicht gespeichert werden", error))?;
+    transaction.execute(
+        "INSERT INTO lore_sheet_drafts (id,run_id,project_id,content_hash,sheet_json,status,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?7) ON CONFLICT(id) DO UPDATE SET content_hash=excluded.content_hash,sheet_json=excluded.sheet_json,status=excluded.status,updated_at=excluded.updated_at",
+        params![id, draft_input.run_id, draft_input.project_id, draft_input.content_hash, serde_json::json!({"title":draft_input.title,"premise":draft_input.premise,"categories":arrays[0],"worldRules":arrays[1],"prerequisites":arrays[2],"effects":arrays[3],"limitations":arrays[4],"costs":arrays[5],"exceptions":arrays[6],"terminology":arrays[7],"organizations":arrays[8],"locations":arrays[9],"historicalEvents":arrays[10],"knownAspects":arrays[11],"unknownAspects":arrays[12],"ruleConnections":arrays[13],"openQuestions":arrays[14]}).to_string(), draft_input.status, stamp],
+    ).map_err(|error| sql_error("Lore-Sheet-Entwurf konnte nicht gespeichert werden", error))?;
+    transaction
+        .execute(
+            "DELETE FROM lore_sheet_items WHERE draft_id=?1 AND project_id=?2",
+            params![id, draft_input.project_id],
+        )
+        .map_err(|error| {
+            sql_error(
+                "Alte Lore-Sheet-Einträge konnten nicht ersetzt werden",
+                error,
+            )
+        })?;
+    for input in item_inputs {
+        let item_id = input.id.unwrap_or_else(new_id);
+        transaction.execute(
+            "INSERT INTO lore_sheet_items (id,draft_id,run_id,project_id,item_type,title,content,confidence,source_reference_id,target_entity_id,target_rule_id,structured_json,status,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?14)",
+            params![item_id, id, input.run_id, input.project_id, input.item_type, input.title, input.content, input.confidence, input.source_reference_id, input.target_entity_id, input.target_rule_id, input.structured.map(|value| value.to_string()), input.status.unwrap_or_else(|| "proposed".into()), stamp],
+        ).map_err(|error| sql_error("Lore-Sheet-Eintrag konnte nicht gespeichert werden", error))?;
+    }
+    transaction
+        .commit()
+        .map_err(|error| sql_error("Lore-Sheet konnte nicht abgeschlossen werden", error))?;
+    let draft = db.query_row("SELECT id,run_id,project_id,content_hash,json_extract(sheet_json,'$.title'),json_extract(sheet_json,'$.premise'),json_extract(sheet_json,'$.categories'),json_extract(sheet_json,'$.worldRules'),json_extract(sheet_json,'$.prerequisites'),json_extract(sheet_json,'$.effects'),json_extract(sheet_json,'$.limitations'),json_extract(sheet_json,'$.costs'),json_extract(sheet_json,'$.exceptions'),json_extract(sheet_json,'$.terminology'),json_extract(sheet_json,'$.organizations'),json_extract(sheet_json,'$.locations'),json_extract(sheet_json,'$.historicalEvents'),json_extract(sheet_json,'$.knownAspects'),json_extract(sheet_json,'$.unknownAspects'),json_extract(sheet_json,'$.ruleConnections'),json_extract(sheet_json,'$.openQuestions'),status,created_at,updated_at FROM lore_sheet_drafts WHERE id=?1", params![id], lore_sheet_from_row).map_err(|error| sql_error("Gespeicherter Lore-Sheet-Entwurf konnte nicht geladen werden", error))?;
+    let items = list_lore_sheet_items_for_db(&db, &id, &draft_input.project_id)?;
+    Ok(LoreSheetWithItems { draft, items })
+}
+
+fn valid_excluded_target(value: &str) -> bool {
+    matches!(
+        value,
+        "character_memory" | "plot_thread" | "continuity_state" | "manuscript" | "style"
+    )
+}
+
+fn excluded_decision_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ExcludedContentDecision> {
+    Ok(ExcludedContentDecision {
+        id: row.get(0)?,
+        run_id: row.get(1)?,
+        project_id: row.get(2)?,
+        content: row.get(3)?,
+        reason: row.get(4)?,
+        suggested_target: row.get(5)?,
+        selected_target: row.get(6)?,
+        decision: row.get(7)?,
+        created_artifact_id: row.get(8)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
+    })
+}
+
+#[tauri::command]
+pub fn save_excluded_content_decision(
+    state: State<'_, DbState>,
+    input: SaveExcludedContentDecisionInput,
+) -> Result<ExcludedContentDecision, String> {
+    if !valid_excluded_target(&input.suggested_target)
+        || input
+            .selected_target
+            .as_deref()
+            .is_some_and(|value| !valid_excluded_target(value))
+    {
+        return Err("Ungültiger Zielbereich für ausgeschlossenen Inhalt.".into());
+    }
+    let decision = input.decision.as_deref().unwrap_or("pending");
+    if !matches!(decision, "pending" | "routed" | "ignored") {
+        return Err("Ungültige Entscheidung für ausgeschlossenen Inhalt.".into());
+    }
+    let db = lock_db(&state)?;
+    let run = load_lore_crafter_run(&db, &input.run_id)?;
+    if run.project_id != input.project_id {
+        return Err("Die Entscheidung gehört nicht zum Projektlauf.".into());
+    }
+    let existing: Option<String> = db
+        .query_row(
+            "SELECT id FROM excluded_content_decisions WHERE run_id=?1 AND content=?2",
+            params![input.run_id, input.content],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| {
+            sql_error(
+                "Excluded-Content-Entscheidung konnte nicht geprüft werden",
+                error,
+            )
+        })?;
+    let id = input.id.or(existing).unwrap_or_else(new_id);
+    let stamp = now();
+    db.execute("INSERT INTO excluded_content_decisions (id,run_id,project_id,content,reason,suggested_target,selected_target,decision,created_artifact_id,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10) ON CONFLICT(id) DO UPDATE SET reason=excluded.reason,suggested_target=excluded.suggested_target,selected_target=excluded.selected_target,decision=excluded.decision,created_artifact_id=excluded.created_artifact_id,updated_at=excluded.updated_at", params![id, input.run_id, input.project_id, input.content, input.reason, input.suggested_target, input.selected_target, decision, input.created_artifact_id, stamp]).map_err(|error| sql_error("Excluded-Content-Entscheidung konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT id,run_id,project_id,content,reason,suggested_target,selected_target,decision,created_artifact_id,created_at,updated_at FROM excluded_content_decisions WHERE id=?1 AND project_id=?2", params![id, input.project_id], excluded_decision_from_row).map_err(|error| sql_error("Gespeicherte Excluded-Content-Entscheidung konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn list_excluded_content_decisions(
+    state: State<'_, DbState>,
+    run_id: String,
+) -> Result<Vec<ExcludedContentDecision>, String> {
+    let db = lock_db(&state)?;
+    let run = load_lore_crafter_run(&db, &run_id)?;
+    let mut statement = db.prepare("SELECT id,run_id,project_id,content,reason,suggested_target,selected_target,decision,created_artifact_id,created_at,updated_at FROM excluded_content_decisions WHERE run_id=?1 AND project_id=?2 ORDER BY created_at").map_err(|error| sql_error("Excluded-Content-Entscheidungen konnten nicht geladen werden", error))?;
+    let result = statement
+        .query_map(params![run_id, run.project_id], excluded_decision_from_row)
+        .map_err(|error| {
+            sql_error(
+                "Excluded-Content-Entscheidungen konnten nicht geladen werden",
+                error,
+            )
+        })?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|error| {
+            sql_error(
+                "Excluded-Content-Entscheidungen konnten nicht geladen werden",
+                error,
+            )
+        });
+    result
+}
+
+fn project_content_proposal_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ProjectContentProposal> {
+    Ok(ProjectContentProposal {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        target_kind: row.get(2)?,
+        title: row.get(3)?,
+        content: row.get(4)?,
+        reason: row.get(5)?,
+        source_reference_id: row.get(6)?,
+        origin: row.get(7)?,
+        status: row.get(8)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
+    })
+}
+
+#[tauri::command]
+pub fn save_project_content_proposal(
+    state: State<'_, DbState>,
+    input: SaveProjectContentProposalInput,
+) -> Result<ProjectContentProposal, String> {
+    if !valid_excluded_target(&input.target_kind)
+        || input.origin != "lore_crafter"
+        || !matches!(
+            input.status.as_deref().unwrap_or("proposed"),
+            "proposed" | "accepted" | "rejected" | "uncertain"
+        )
+    {
+        return Err("Ungültiger projektgebundener Vorschlag.".into());
+    }
+    let db = lock_db(&state)?;
+    project_from_db(&db, &input.project_id)?;
+    if let Some(source_id) = &input.source_reference_id {
+        let valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM project_source_references WHERE id=?1 AND project_id=?2)", params![source_id, input.project_id], |row| row.get(0)).map_err(|error| sql_error("Vorschlagsquelle konnte nicht geprüft werden", error))?;
+        if !valid {
+            return Err("Die Vorschlagsquelle gehört nicht zum Projekt.".into());
+        }
+    }
+    let existing: Option<String> = db.query_row("SELECT id FROM project_content_proposals WHERE project_id=?1 AND target_kind=?2 AND content=?3 AND source_reference_id IS ?4", params![input.project_id, input.target_kind, input.content, input.source_reference_id], |row| row.get(0)).optional().map_err(|error| sql_error("Projektvorschlag konnte nicht geprüft werden", error))?;
+    let id = input.id.or(existing).unwrap_or_else(new_id);
+    let stamp = now();
+    db.execute("INSERT INTO project_content_proposals (id,project_id,target_kind,title,content,reason,source_reference_id,origin,status,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10) ON CONFLICT(id) DO UPDATE SET title=excluded.title,reason=excluded.reason,source_reference_id=excluded.source_reference_id,status=excluded.status,updated_at=excluded.updated_at", params![id, input.project_id, input.target_kind, input.title, input.content, input.reason, input.source_reference_id, input.origin, input.status.unwrap_or_else(|| "proposed".into()), stamp]).map_err(|error| sql_error("Projektvorschlag konnte nicht gespeichert werden", error))?;
+    db.query_row("SELECT id,project_id,target_kind,title,content,reason,source_reference_id,origin,status,created_at,updated_at FROM project_content_proposals WHERE id=?1 AND project_id=?2", params![id, input.project_id], project_content_proposal_from_row).map_err(|error| sql_error("Gespeicherter Projektvorschlag konnte nicht geladen werden", error))
+}
+
+#[tauri::command]
+pub fn list_project_content_proposals(
+    state: State<'_, DbState>,
+    project_id: String,
+) -> Result<Vec<ProjectContentProposal>, String> {
+    let db = lock_db(&state)?;
+    project_from_db(&db, &project_id)?;
+    let mut statement = db.prepare("SELECT id,project_id,target_kind,title,content,reason,source_reference_id,origin,status,created_at,updated_at FROM project_content_proposals WHERE project_id=?1 ORDER BY created_at DESC").map_err(|error| sql_error("Projektvorschläge konnten nicht geladen werden", error))?;
+    let result = statement
+        .query_map(params![project_id], project_content_proposal_from_row)
+        .map_err(|error| sql_error("Projektvorschläge konnten nicht geladen werden", error))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|error| sql_error("Projektvorschläge konnten nicht geladen werden", error));
+    result
 }
 
 fn list_lore_sheet_items_for_db(
@@ -11307,7 +11563,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            37
+            38
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);

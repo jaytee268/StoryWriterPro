@@ -78,7 +78,7 @@ export function ProjectOnboarding({ repository, project, state, onCreated, onCon
       if (createdBook && (primaryGenreId || secondaryGenreIds.length > 0 || customGenre.trim())) {
         await repository.saveBookGenres({ bookId: createdBook.id, projectId: created.id, primaryGenreId: primaryGenreId || undefined, secondaryGenreIds, customGenreNames: customGenre.trim() ? [customGenre.trim()] : [], genreSource: 'manual', genreAuthorConfirmed: true });
       }
-      const saved = await repository.saveProjectOnboardingState({ projectId: created.id, currentStep: 'completed', completedSteps: ['project', 'lore', 'manuscript', 'summary'], skippedSteps: draftSkippedSteps, language, genre, loreCrafterRunId: undefined, importId: undefined });
+      const saved = await repository.saveProjectOnboardingState({ projectId: created.id, currentStep: 'lore', completedSteps: ['project'], skippedSteps: draftSkippedSteps, language, genre, loreCrafterRunId: undefined, importId: undefined });
       window.localStorage.removeItem(onboardingDraftStorageKey);
       onCreated(created, saved, loreNotes.trim() || undefined, manuscriptText.trim() || undefined);
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Das Projekt konnte nicht angelegt werden.'); }

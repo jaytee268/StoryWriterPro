@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserDemoRepository } from './storyRepository';
 import type { BuildLoreSheetResult, LoreCrafterAnalysis } from '../types/domain';
 import type { StoryAiProvider } from './aiProviderService';
-import { analyzeLoreDraft, buildLoreSheet, confirmLoreCrafterRule, reviewLoreSheetItem, routeExcludedContent } from './loreCrafter';
+import { analyzeLoreDraft, buildLoreSheet, confirmLoreCrafterRule, ignoreExcludedContent, reviewLoreSheetItem, routeExcludedContent } from './loreCrafter';
 import { contentHash } from '../utils/aiText';
 
 const store = new Map<string, string>();
@@ -45,6 +45,24 @@ describe('Lore Crafter Workflow', () => {
   });
 
   it('führt Merge und Excluded-Content-Routing als echte vorgeschlagene Workflows aus', async () => {
-    const repository = new BrowserDemoRepository(); const workspace = await repository.loadWorkspace(); const provider = fakeProvider(); const existing = await repository.createStoryEntity({ projectId: workspace.project.id, name: 'System', type: 'fact', description: 'Alt', status: 'proposed', confidence: 0.5, excerpt: 'Alt', authorConfirmed: false, tags: [] }); const run = await analyzeLoreDraft(repository, provider, { projectId: workspace.project.id, originalText: 'Eine Regelnotiz.' }); const built = await buildLoreSheet(repository, provider, run.id, true); const item = built.items.find((candidate) => candidate.itemType === 'terminology')!; const merged = await reviewLoreSheetItem(repository, item, 'merged', 'Zusammengeführt', existing.id); expect(merged.targetEntityId).toBe(existing.id); expect((await repository.getStoryEntity(existing.id)).description).toBe('Zusammengeführt'); const routed = await routeExcludedContent(repository, run, 'Eine einzelne Szene.', 'Konkrete Handlung.', 'manuscript'); expect(routed.status).toBe('proposed'); expect((await repository.listLoreSheetItems(built.draft.id)).some((candidate) => candidate.id === routed.id && candidate.itemType === 'routed_manuscript')).toBe(true);
+    const repository = new BrowserDemoRepository(); const workspace = await repository.loadWorkspace(); const provider = fakeProvider(); const existing = await repository.createStoryEntity({ projectId: workspace.project.id, name: 'System', type: 'fact', description: 'Alt', status: 'proposed', confidence: 0.5, excerpt: 'Alt', authorConfirmed: false, tags: [] }); const run = await analyzeLoreDraft(repository, provider, { projectId: workspace.project.id, originalText: 'Eine Regelnotiz.' }); const built = await buildLoreSheet(repository, provider, run.id, true); const item = built.items.find((candidate) => candidate.itemType === 'term')!; const merged = await reviewLoreSheetItem(repository, item, 'merged', 'Zusammengeführt', existing.id); expect(merged.targetEntityId).toBe(existing.id); expect((await repository.getStoryEntity(existing.id)).description).toBe('Zusammengeführt'); const routed = await routeExcludedContent(repository, run, 'Eine einzelne Szene.', 'Konkrete Handlung.', 'manuscript'); expect(routed.proposal.status).toBe('proposed'); expect(routed.decision.decision).toBe('routed'); expect((await repository.listProjectContentProposals(workspace.project.id)).some((candidate) => candidate.id === routed.proposal.id && candidate.targetKind === 'manuscript')).toBe(true); expect((await repository.listLoreSheetItems(built.draft.id)).every((candidate) => !candidate.itemType.startsWith('routed_'))).toBe(true);
+  });
+
+  it('speichert terminology als kanonischen term und persistiert Ignorieren ohne Routing', async () => {
+    const repository = new BrowserDemoRepository(); const workspace = await repository.loadWorkspace(); const provider = fakeProvider(); const run = await analyzeLoreDraft(repository, provider, { projectId: workspace.project.id, originalText: 'Eine Regelnotiz.' }); const built = await buildLoreSheet(repository, provider, run.id, true);
+    expect(built.items.some((item) => item.itemType === 'term')).toBe(true);
+    const excluded = analysis().excludedContent[0]!; await expect(ignoreExcludedContent(repository, run, excluded.content, excluded.reason, excluded.suggestedTarget)).resolves.toMatchObject({ decision: 'ignored' });
+    const reloaded = new BrowserDemoRepository(); expect(await reloaded.listExcludedContentDecisions(run.id)).toMatchObject([{ content: excluded.content, decision: 'ignored' }]); expect((await reloaded.listProjectContentProposals(workspace.project.id)).length).toBe(0);
+  });
+
+  it('lehnt einen unbekannten Lore-Sheet-Typ vor dem Speichern ab', async () => {
+    const repository = new BrowserDemoRepository(); const workspace = await repository.loadWorkspace(); const provider = fakeProvider(); const run = await analyzeLoreDraft(repository, provider, { projectId: workspace.project.id, originalText: 'Eine Regelnotiz.' });
+    await expect(repository.saveLoreSheetWithItems({ runId: run.id, projectId: workspace.project.id, contentHash: run.contentHash, title: 'Ungültig', premise: '', categories: [], worldRules: [], prerequisites: [], effects: [], limitations: [], costs: [], exceptions: [], terminology: [], organizations: [], locations: [], historicalEvents: [], knownAspects: [], unknownAspects: [], ruleConnections: [], openQuestions: [], status: 'proposed' }, [{ draftId: '', runId: run.id, projectId: workspace.project.id, itemType: 'routed_manuscript' as never, title: 'Ungültig', content: 'x', confidence: 0 }])).rejects.toThrow('ungültigen Eintrag');
+    expect(await repository.getLoreSheetDraft(run.id)).toBeUndefined();
+  });
+
+  it('erstellt bei erneutem Laden eines vollständigen Lore Sheets keine Duplikate', async () => {
+    const repository = new BrowserDemoRepository(); const workspace = await repository.loadWorkspace(); const provider = fakeProvider(); const run = await analyzeLoreDraft(repository, provider, { projectId: workspace.project.id, originalText: 'Eine Regelnotiz.' }); const first = await buildLoreSheet(repository, provider, run.id, true); const second = await buildLoreSheet(repository, provider, run.id, true);
+    expect(second.draft.id).toBe(first.draft.id); expect(second.items.map((item) => item.id)).toEqual(first.items.map((item) => item.id));
   });
 });
