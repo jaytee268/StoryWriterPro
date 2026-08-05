@@ -139,6 +139,8 @@ pub fn run() {
             commands::save_reveal_compliance_findings,
             commands::list_reveal_compliance_findings,
             commands::review_reveal_compliance_finding,
+            commands::save_reveal_candidate_decision,
+            commands::list_reveal_candidate_decisions,
             commands::list_continuity_state_ledger,
             commands::save_continuity_state_entry,
             commands::get_state_at_position,

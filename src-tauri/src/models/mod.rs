@@ -3459,8 +3459,16 @@ pub struct RevealSubjectInput {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub enum RevealBundleMode {
+    Draft,
+    Activate,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ActivateRevealContractBundleInput {
     pub project_id: String,
+    pub mode: RevealBundleMode,
     pub source_reference_id: Option<String>,
     pub subject_entity: Option<RevealSubjectInput>,
     pub contract: SaveRevealContractInput,
@@ -3468,6 +3476,30 @@ pub struct ActivateRevealContractBundleInput {
     pub audience_states: Vec<SaveRevealAudienceStateInput>,
     #[serde(default)]
     pub clue_rules: Vec<SaveRevealClueRuleInput>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevealCandidateDecision {
+    pub id: String,
+    pub run_id: String,
+    pub project_id: String,
+    pub candidate_temporary_id: String,
+    pub decision: String,
+    pub created_artifact_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveRevealCandidateDecisionInput {
+    pub id: Option<String>,
+    pub run_id: String,
+    pub project_id: String,
+    pub candidate_temporary_id: String,
+    pub decision: String,
+    pub created_artifact_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

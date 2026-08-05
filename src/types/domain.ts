@@ -104,12 +104,16 @@ export interface RevealClueRule { id: string; contractId: string; projectId: str
 export interface SaveRevealClueRuleInput extends Omit<RevealClueRule, 'id' | 'createdAt' | 'updatedAt'> { id?: string; }
 export interface ActivateRevealContractBundleInput {
   projectId: string;
+  mode: 'draft' | 'activate';
   sourceReferenceId?: string;
   subjectEntity?: { id?: string; name: string; type: RevealCandidateSubjectType; description: string; tags?: string[] };
   contract: SaveRevealContractInput;
   audienceStates: SaveRevealAudienceStateInput[];
   clueRules: SaveRevealClueRuleInput[];
 }
+export type RevealCandidateDecisionValue = 'pending' | 'reveal_draft' | 'reveal_activated' | 'normal_lore' | 'uncertain' | 'not_a_secret';
+export interface RevealCandidateDecision { id: string; runId: string; projectId: string; candidateTemporaryId: string; decision: RevealCandidateDecisionValue; createdArtifactId?: string; createdAt: string; updatedAt: string; }
+export interface SaveRevealCandidateDecisionInput { id?: string; runId: string; projectId: string; candidateTemporaryId: string; decision: RevealCandidateDecisionValue; createdArtifactId?: string; }
 export interface RevealContext { confirmedAuthorTruths: RevealContract[]; readerKnowledgeAtPosition: RevealAudienceState[]; povCharacterKnowledgeAtPosition: RevealAudienceState[]; participantKnowledgeAtPosition: RevealAudienceState[]; allowedClues: RevealClueRule[]; forbiddenClues: RevealClueRule[]; requiredClues: RevealClueRule[]; plannedReveals: RevealContract[]; warnings: string[]; }
 export type RevealComplianceFindingType = 'premature_revelation' | 'impossible_character_knowledge' | 'narrator_information_leak' | 'forbidden_clue' | 'reveal_plan_conflict' | 'missing_required_foreshadowing' | 'ambiguous_possible_leak';
 export type RevealComplianceSeverity = 'info' | 'warning' | 'critical';
@@ -358,7 +362,7 @@ export interface SaveLoreSheetItemInput extends Omit<LoreSheetItem, 'id' | 'crea
 export interface SaveExcludedContentDecisionInput { id?: string; runId: string; projectId: string; content: string; reason: string; suggestedTarget: LoreCrafterExcludedTarget; selectedTarget?: LoreCrafterExcludedTarget; decision?: ExcludedContentDecisionStatus; createdArtifactId?: string; }
 export interface SaveProjectContentProposalInput extends Omit<ProjectContentProposal, 'id' | 'createdAt' | 'updatedAt'> { id?: string; }
 export type ManuscriptAnalysisArtifactReviewStatus = 'pending' | 'confirmed' | 'rejected' | 'uncertain' | 'skipped';
-export type ManuscriptAnalysisArtifactType = 'bible_proposal' | 'character_memory_proposal' | 'continuity_finding' | 'import_draft_state' | 'project_rule_proposal' | 'plot_thread_proposal' | 'narrative_summary' | 'book_end_state_proposal' | 'global_countercheck_finding' | 'timeline_event' | 'story_graph_edge' | 'provisional_entity' | 'provisional_merge' | 'genre_detection';
+export type ManuscriptAnalysisArtifactType = 'bible_proposal' | 'character_memory_proposal' | 'continuity_finding' | 'reveal_compliance_finding' | 'import_draft_state' | 'project_rule_proposal' | 'plot_thread_proposal' | 'narrative_summary' | 'book_end_state_proposal' | 'global_countercheck_finding' | 'timeline_event' | 'story_graph_edge' | 'provisional_entity' | 'provisional_merge' | 'genre_detection';
 export interface ManuscriptAnalysisPhaseResult { id: string; jobId: string; projectId: string; phase: ManuscriptAnalysisPhase; resultKind: string; payload: Record<string, unknown>; contentHash: string; providerId: string; promptVersion: string; reviewStatus: ManuscriptAnalysisArtifactReviewStatus; createdAt: string; updatedAt: string; }
 export interface SaveManuscriptAnalysisPhaseResultInput extends Omit<ManuscriptAnalysisPhaseResult, 'id' | 'createdAt' | 'updatedAt'> { id?: string; }
 export interface ManuscriptAnalysisArtifact { id: string; jobId: string; projectId: string; phase: ManuscriptAnalysisPhase; unitId?: string; artifactType: ManuscriptAnalysisArtifactType; artifactId: string; reviewStatus: ManuscriptAnalysisArtifactReviewStatus; explicitlySkipped: boolean; createdAt: string; updatedAt: string; }

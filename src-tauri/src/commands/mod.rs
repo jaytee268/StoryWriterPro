@@ -48,9 +48,10 @@ use crate::{
         ProviderStatus, ProvisionalEntity, ProvisionalEntityMention, ProvisionalEvent,
         ProvisionalMergeProposal, ProvisionalRelation, ReconcileContinuityTextCorrectionInput,
         RelationshipMemory, RestoreSceneVersionInput, RevealAudienceKind, RevealAudienceState,
-        RevealClueRule, RevealClueRuleKind, RevealComplianceFindingRecord, RevealComplianceRun,
-        RevealContext, RevealContract, RevealContractStatus, RevealKnowledgeLevel, RevealPosition,
-        RevealReviewStatus, ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput,
+        RevealCandidateDecision, RevealClueRule, RevealClueRuleKind, RevealComplianceFindingRecord,
+        RevealComplianceReviewStatus, RevealComplianceRun, RevealContext, RevealContract,
+        RevealContractStatus, RevealKnowledgeLevel, RevealPosition, RevealReviewStatus,
+        ReviewBibleProposalInput, ReviewCharacterMemoryProposalInput,
         ReviewRevealComplianceFindingInput, SaveBookGenresInput,
         SaveChapterGenerationDraftLedgerInput, SaveChapterGenerationPlanInput,
         SaveChapterGenerationReviewInput, SaveChapterGenerationSectionInput,
@@ -70,13 +71,14 @@ use crate::{
         SaveProjectStyleInput, SaveProjectStyleObservationInput, SaveProvisionalEntityInput,
         SaveProvisionalEventInput, SaveProvisionalMentionInput, SaveProvisionalMergeProposalInput,
         SaveProvisionalRelationInput, SaveRelationshipMemoryInput, SaveRevealAudienceStateInput,
-        SaveRevealClueRuleInput, SaveRevealComplianceFindingInput, SaveRevealComplianceRunInput,
-        SaveRevealContractInput, SaveStoryDirectionInput, SaveStoryGraphEdgeInput,
-        SaveWritingPreferencesInput, Scene, SceneInput, SceneVersion, StoryDirection, StoryEntity,
-        StoryEntityInput, StoryEntityRelation, StoryGraphEdge, StorySourceReference,
-        StyleReference, UpdateChapterInput, UpdateLoreCrafterRunInput,
-        UpdateManuscriptAnalysisJobInput, UpdateManuscriptAnalysisUnitInput,
-        UpdateStoryEntityInput, UpdateStyleReferenceInput, WorkspaceSnapshot, WritingPreferences,
+        SaveRevealCandidateDecisionInput, SaveRevealClueRuleInput,
+        SaveRevealComplianceFindingInput, SaveRevealComplianceRunInput, SaveRevealContractInput,
+        SaveStoryDirectionInput, SaveStoryGraphEdgeInput, SaveWritingPreferencesInput, Scene,
+        SceneInput, SceneVersion, StoryDirection, StoryEntity, StoryEntityInput,
+        StoryEntityRelation, StoryGraphEdge, StorySourceReference, StyleReference,
+        UpdateChapterInput, UpdateLoreCrafterRunInput, UpdateManuscriptAnalysisJobInput,
+        UpdateManuscriptAnalysisUnitInput, UpdateStoryEntityInput, UpdateStyleReferenceInput,
+        WorkspaceSnapshot, WritingPreferences,
     },
 };
 use chrono::Utc;
@@ -357,11 +359,113 @@ pub fn save_reveal_contract(
 }
 
 #[tauri::command]
+pub fn save_reveal_candidate_decision(
+    state: State<'_, DbState>,
+    input: SaveRevealCandidateDecisionInput,
+) -> Result<RevealCandidateDecision, String> {
+    if !matches!(
+        input.decision.as_str(),
+        "pending"
+            | "reveal_draft"
+            | "reveal_activated"
+            | "normal_lore"
+            | "uncertain"
+            | "not_a_secret"
+    ) {
+        return Err("Unbekannte Reveal-Kandidatenentscheidung.".into());
+    }
+    let db = lock_db(&state)?;
+    let (run_project, analysis_json): (String, Option<String>) = db
+        .query_row(
+            "SELECT project_id,analysis_json FROM lore_crafter_runs WHERE id=?1",
+            [&input.run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| sql_error("Lore-Crafter-Lauf konnte nicht geprüft werden", e))?
+        .ok_or_else(|| "Lore-Crafter-Lauf nicht gefunden.".to_string())?;
+    if run_project != input.project_id {
+        return Err("Reveal-Entscheidung gehört nicht zum Projekt.".into());
+    }
+    let candidate_exists = analysis_json
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+        .and_then(|value| {
+            value
+                .get("revealCandidates")
+                .and_then(|items| items.as_array())
+                .cloned()
+        })
+        .is_some_and(|items| {
+            items.iter().any(|item| {
+                item.get("temporaryId").and_then(|value| value.as_str())
+                    == Some(input.candidate_temporary_id.as_str())
+            })
+        });
+    if !candidate_exists {
+        return Err("Reveal-Kandidat gehört nicht zu diesem Lore-Crafter-Lauf.".into());
+    }
+    let exists: Option<(String, String, String, Option<String>, String, String)> = db.query_row("SELECT id,project_id,candidate_temporary_id,created_artifact_id,created_at,updated_at FROM reveal_candidate_decisions WHERE run_id=?1 AND candidate_temporary_id=?2", params![input.run_id, input.candidate_temporary_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))).optional().map_err(|e| sql_error("Reveal-Entscheidung konnte nicht geladen werden", e))?;
+    if let Some((_, project, _, _, _, _)) = &exists {
+        if project != &input.project_id {
+            return Err("Reveal-Entscheidung gehört nicht zum Projekt.".into());
+        }
+    }
+    let id = exists
+        .as_ref()
+        .map(|item| item.0.clone())
+        .or_else(|| input.id.clone())
+        .unwrap_or_else(new_id);
+    let stamp = now();
+    db.execute("INSERT INTO reveal_candidate_decisions(id,run_id,project_id,candidate_temporary_id,decision,created_artifact_id,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,COALESCE((SELECT created_at FROM reveal_candidate_decisions WHERE id=?1),?7),?7) ON CONFLICT(run_id,candidate_temporary_id) DO UPDATE SET project_id=excluded.project_id,decision=excluded.decision,created_artifact_id=excluded.created_artifact_id,updated_at=excluded.updated_at", params![id, input.run_id, input.project_id, input.candidate_temporary_id, input.decision, input.created_artifact_id, stamp]).map_err(|e| sql_error("Reveal-Entscheidung konnte nicht gespeichert werden", e))?;
+    db.query_row("SELECT id,run_id,project_id,candidate_temporary_id,decision,created_artifact_id,created_at,updated_at FROM reveal_candidate_decisions WHERE id=?1", [&id], |row| Ok(RevealCandidateDecision { id: row.get(0)?, run_id: row.get(1)?, project_id: row.get(2)?, candidate_temporary_id: row.get(3)?, decision: row.get(4)?, created_artifact_id: row.get(5)?, created_at: row.get(6)?, updated_at: row.get(7)? })).map_err(|e| sql_error("Reveal-Entscheidung konnte nicht geladen werden", e))
+}
+
+#[tauri::command]
+pub fn list_reveal_candidate_decisions(
+    state: State<'_, DbState>,
+    project_id: String,
+    run_id: String,
+) -> Result<Vec<RevealCandidateDecision>, String> {
+    let db = lock_db(&state)?;
+    let run_project: String = db
+        .query_row(
+            "SELECT project_id FROM lore_crafter_runs WHERE id=?1",
+            [&run_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| sql_error("Lore-Crafter-Lauf konnte nicht geprüft werden", e))?
+        .ok_or_else(|| "Lore-Crafter-Lauf nicht gefunden.".to_string())?;
+    if run_project != project_id {
+        return Err("Reveal-Entscheidungen gehören nicht zum Projekt.".into());
+    }
+    let mut statement = db.prepare("SELECT id,run_id,project_id,candidate_temporary_id,decision,created_artifact_id,created_at,updated_at FROM reveal_candidate_decisions WHERE project_id=?1 AND run_id=?2 ORDER BY created_at").map_err(|e| sql_error("Reveal-Entscheidungen konnten nicht geladen werden", e))?;
+    let rows = statement
+        .query_map(params![project_id, run_id], |row| {
+            Ok(RevealCandidateDecision {
+                id: row.get(0)?,
+                run_id: row.get(1)?,
+                project_id: row.get(2)?,
+                candidate_temporary_id: row.get(3)?,
+                decision: row.get(4)?,
+                created_artifact_id: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        })
+        .map_err(|e| sql_error("Reveal-Entscheidungen konnten nicht geladen werden", e))?;
+    rows.collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Reveal-Entscheidungen konnten nicht geladen werden", e))
+}
+
+#[tauri::command]
 pub fn activate_reveal_contract_bundle(
     state: State<'_, DbState>,
     input: ActivateRevealContractBundleInput,
 ) -> Result<serde_json::Value, String> {
     let db = lock_db(&state)?;
+    let activate = matches!(input.mode, crate::models::RevealBundleMode::Activate);
     db.execute_batch("BEGIN IMMEDIATE")
         .map_err(|error| sql_error("Reveal-Bundle konnte nicht begonnen werden", error))?;
     let result = (|| {
@@ -412,8 +516,8 @@ pub fn activate_reveal_contract_bundle(
                     format!("Reveal-Tags konnten nicht gespeichert werden: {error}")
                 })?;
                 db.execute(
-                    "INSERT INTO story_entities(id,project_id,name,entity_type,description,status,confidence,source,chapter,scene,author_confirmed,created_at,updated_at,origin,tags_json) VALUES(?1,?2,?3,?4,?5,'confirmed',1.0,'','','',1,?6,?6,'edited',?7)",
-                    params![subject_id, input.project_id, subject.name.trim(), subject.entity_type, subject.description, stamp, tags],
+                    "INSERT INTO story_entities(id,project_id,name,entity_type,description,status,confidence,source,chapter,scene,author_confirmed,created_at,updated_at,origin,tags_json) VALUES(?1,?2,?3,?4,?5,?6,1.0,'','','',?7,?8,?8,'lore_crafter',?9)",
+                    params![subject_id, input.project_id, subject.name.trim(), subject.entity_type, subject.description, if activate { "confirmed" } else { "proposed" }, activate as i64, stamp, tags],
                 )
                 .map_err(|error| sql_error("Reveal-Entität konnte nicht gespeichert werden", error))?;
             }
@@ -421,9 +525,16 @@ pub fn activate_reveal_contract_bundle(
         let mut contract_input = input.contract.clone();
         contract_input.project_id = input.project_id.clone();
         contract_input.subject_entity_id = subject_id.clone();
-        contract_input.status = RevealContractStatus::Confirmed;
-        contract_input.author_confirmed = true;
+        contract_input.status = if activate {
+            RevealContractStatus::Confirmed
+        } else {
+            RevealContractStatus::Proposed
+        };
+        contract_input.author_confirmed = activate;
         validate_reveal_subject(&db, &input.project_id, &subject_id)?;
+        if activate {
+            db.execute("UPDATE story_entities SET status='confirmed',author_confirmed=1,updated_at=?1 WHERE id=?2 AND project_id=?3 AND status<>'archived'", params![now(), subject_id, input.project_id]).map_err(|error| sql_error("Reveal-Entität konnte nicht aktiviert werden", error))?;
+        }
         if let Some(source) = input
             .source_reference_id
             .as_ref()
@@ -447,19 +558,25 @@ pub fn activate_reveal_contract_bundle(
         )?;
         let contract_id = contract_input.id.clone().unwrap_or_else(new_id);
         let stamp = now();
+        let bundle_status = if activate { "confirmed" } else { "proposed" };
+        let bundle_author = activate as i64;
         let contract_source_reference_id = input
             .source_reference_id
             .clone()
             .or(contract_input.source_reference_id.clone());
         db.execute(
-            "INSERT INTO reveal_contracts(id,project_id,subject_entity_id,title,truth_statement,scope,status,author_confirmed,reveal_state,planned_reveal_book_id,planned_reveal_chapter_id,planned_reveal_scene_id,planned_reveal_offset,reveal_condition_text,notes,source_reference_id,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,'confirmed',1,?7,?8,?9,?10,?11,?12,?13,?14,COALESCE((SELECT created_at FROM reveal_contracts WHERE id=?1),?15),?15) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,subject_entity_id=excluded.subject_entity_id,title=excluded.title,truth_statement=excluded.truth_statement,scope=excluded.scope,status='confirmed',author_confirmed=1,reveal_state=excluded.reveal_state,planned_reveal_book_id=excluded.planned_reveal_book_id,planned_reveal_chapter_id=excluded.planned_reveal_chapter_id,planned_reveal_scene_id=excluded.planned_reveal_scene_id,planned_reveal_offset=excluded.planned_reveal_offset,reveal_condition_text=excluded.reveal_condition_text,notes=excluded.notes,source_reference_id=excluded.source_reference_id,updated_at=excluded.updated_at",
-            params![contract_id, input.project_id, subject_id, contract_input.title, contract_input.truth_statement, reveal_enum(&contract_input.scope), reveal_enum(&contract_input.reveal_state), contract_input.planned_reveal_book_id, contract_input.planned_reveal_chapter_id, contract_input.planned_reveal_scene_id, contract_input.planned_reveal_offset, contract_input.reveal_condition_text, contract_input.notes, contract_source_reference_id, stamp],
+            &format!("INSERT INTO reveal_contracts(id,project_id,subject_entity_id,title,truth_statement,scope,status,author_confirmed,reveal_state,planned_reveal_book_id,planned_reveal_chapter_id,planned_reveal_scene_id,planned_reveal_offset,reveal_condition_text,notes,source_reference_id,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,'{bundle_status}',?7,?8,?9,?10,?11,?12,?13,?14,?15,COALESCE((SELECT created_at FROM reveal_contracts WHERE id=?1),?16),?16) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,subject_entity_id=excluded.subject_entity_id,title=excluded.title,truth_statement=excluded.truth_statement,scope=excluded.scope,status='{bundle_status}',author_confirmed=excluded.author_confirmed,reveal_state=excluded.reveal_state,planned_reveal_book_id=excluded.planned_reveal_book_id,planned_reveal_chapter_id=excluded.planned_reveal_chapter_id,planned_reveal_scene_id=excluded.planned_reveal_scene_id,planned_reveal_offset=excluded.planned_reveal_offset,reveal_condition_text=excluded.reveal_condition_text,notes=excluded.notes,source_reference_id=excluded.source_reference_id,updated_at=excluded.updated_at"),
+            params![contract_id, input.project_id, subject_id, contract_input.title, contract_input.truth_statement, reveal_enum(&contract_input.scope), bundle_author, reveal_enum(&contract_input.reveal_state), contract_input.planned_reveal_book_id, contract_input.planned_reveal_chapter_id, contract_input.planned_reveal_scene_id, contract_input.planned_reveal_offset, contract_input.reveal_condition_text, contract_input.notes, contract_source_reference_id, stamp],
         ).map_err(|error| sql_error("Reveal-Contract konnte nicht aktiviert werden", error))?;
         for item in &input.audience_states {
             let mut state_input = item.clone();
             state_input.contract_id = contract_id.clone();
-            state_input.status = RevealReviewStatus::Confirmed;
-            state_input.author_confirmed = true;
+            state_input.status = if activate {
+                RevealReviewStatus::Confirmed
+            } else {
+                RevealReviewStatus::Proposed
+            };
+            state_input.author_confirmed = activate;
             validate_reveal_position_db(&db, &input.project_id, &state_input.valid_from_position)?;
             if let Some(until) = state_input.valid_until_position.as_ref() {
                 validate_reveal_position_db(&db, &input.project_id, until)?;
@@ -509,13 +626,17 @@ pub fn activate_reveal_contract_bundle(
                 .as_ref()
                 .map(reveal_position_json)
                 .transpose()?;
-            db.execute("INSERT INTO reveal_audience_states(id,contract_id,project_id,audience_kind,character_entity_id,knowledge_level,belief_text,valid_from_position_json,valid_until_position_json,source_reference_id,status,author_confirmed,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'confirmed',1,?11,?11) ON CONFLICT(id) DO UPDATE SET contract_id=excluded.contract_id,project_id=excluded.project_id,audience_kind=excluded.audience_kind,character_entity_id=excluded.character_entity_id,knowledge_level=excluded.knowledge_level,belief_text=excluded.belief_text,valid_from_position_json=excluded.valid_from_position_json,valid_until_position_json=excluded.valid_until_position_json,status='confirmed',author_confirmed=1,updated_at=excluded.updated_at", params![id, contract_id, input.project_id, reveal_enum(&state_input.audience_kind), state_input.character_entity_id, reveal_enum(&state_input.knowledge_level), state_input.belief_text, from, until, state_input.source_reference_id, stamp]).map_err(|error| sql_error("Figuren- oder Leserwissen konnte nicht aktiviert werden", error))?;
+            db.execute(&format!("INSERT INTO reveal_audience_states(id,contract_id,project_id,audience_kind,character_entity_id,knowledge_level,belief_text,valid_from_position_json,valid_until_position_json,source_reference_id,status,author_confirmed,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'{bundle_status}',?11,?12,?12) ON CONFLICT(id) DO UPDATE SET contract_id=excluded.contract_id,project_id=excluded.project_id,audience_kind=excluded.audience_kind,character_entity_id=excluded.character_entity_id,knowledge_level=excluded.knowledge_level,belief_text=excluded.belief_text,valid_from_position_json=excluded.valid_from_position_json,valid_until_position_json=excluded.valid_until_position_json,status='{bundle_status}',author_confirmed=excluded.author_confirmed,updated_at=excluded.updated_at"), params![id, contract_id, input.project_id, reveal_enum(&state_input.audience_kind), state_input.character_entity_id, reveal_enum(&state_input.knowledge_level), state_input.belief_text, from, until, state_input.source_reference_id, bundle_author, stamp]).map_err(|error| sql_error("Figuren- oder Leserwissen konnte nicht aktiviert werden", error))?;
         }
         for item in &input.clue_rules {
             let mut rule = item.clone();
             rule.contract_id = contract_id.clone();
-            rule.status = RevealReviewStatus::Confirmed;
-            rule.author_confirmed = true;
+            rule.status = if activate {
+                RevealReviewStatus::Confirmed
+            } else {
+                RevealReviewStatus::Proposed
+            };
+            rule.author_confirmed = activate;
             if let Some(from) = rule.valid_from_position.as_ref() {
                 validate_reveal_position_db(&db, &input.project_id, from)?;
             }
@@ -545,7 +666,7 @@ pub fn activate_reveal_contract_bundle(
                 .as_ref()
                 .map(reveal_position_json)
                 .transpose()?;
-            db.execute("INSERT INTO reveal_clue_rules(id,contract_id,project_id,rule_kind,clue_type,description,maximum_explicitness,valid_from_position_json,valid_until_position_json,source_reference_id,status,author_confirmed,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'confirmed',1,?11,?11) ON CONFLICT(id) DO UPDATE SET contract_id=excluded.contract_id,project_id=excluded.project_id,rule_kind=excluded.rule_kind,clue_type=excluded.clue_type,description=excluded.description,maximum_explicitness=excluded.maximum_explicitness,valid_from_position_json=excluded.valid_from_position_json,valid_until_position_json=excluded.valid_until_position_json,status='confirmed',author_confirmed=1,updated_at=excluded.updated_at", params![id, contract_id, input.project_id, reveal_enum(&rule.rule_kind), rule.clue_type, rule.description, reveal_enum(&rule.maximum_explicitness), from, until, rule.source_reference_id, stamp]).map_err(|error| sql_error("Reveal-Hinweis konnte nicht aktiviert werden", error))?;
+            db.execute(&format!("INSERT INTO reveal_clue_rules(id,contract_id,project_id,rule_kind,clue_type,description,maximum_explicitness,valid_from_position_json,valid_until_position_json,source_reference_id,status,author_confirmed,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'{bundle_status}',?11,?12,?12) ON CONFLICT(id) DO UPDATE SET contract_id=excluded.contract_id,project_id=excluded.project_id,rule_kind=excluded.rule_kind,clue_type=excluded.clue_type,description=excluded.description,maximum_explicitness=excluded.maximum_explicitness,valid_from_position_json=excluded.valid_from_position_json,valid_until_position_json=excluded.valid_until_position_json,status='{bundle_status}',author_confirmed=excluded.author_confirmed,updated_at=excluded.updated_at"), params![id, contract_id, input.project_id, reveal_enum(&rule.rule_kind), rule.clue_type, rule.description, reveal_enum(&rule.maximum_explicitness), from, until, rule.source_reference_id, bundle_author, stamp]).map_err(|error| sql_error("Reveal-Hinweis konnte nicht aktiviert werden", error))?;
         }
         let contract = db.query_row("SELECT id,project_id,subject_entity_id,title,truth_statement,scope,status,author_confirmed,reveal_state,planned_reveal_book_id,planned_reveal_chapter_id,planned_reveal_scene_id,planned_reveal_offset,reveal_condition_text,notes,source_reference_id,created_at,updated_at FROM reveal_contracts WHERE id=?1 AND project_id=?2", params![contract_id, input.project_id], reveal_contract_from_row).map_err(|error| sql_error("Aktivierter Reveal-Contract konnte nicht gelesen werden", error))?;
         let audience_states = list_reveal_audience_locked(&db, &input.project_id)?
@@ -1436,10 +1557,30 @@ pub fn review_reveal_compliance_finding(
     input: ReviewRevealComplianceFindingInput,
 ) -> Result<RevealComplianceFindingRecord, String> {
     let db = lock_db(&state)?;
-    let changed = db.execute("UPDATE reveal_compliance_findings SET review_status=?1,user_decision=?2,updated_at=?3 WHERE id=?4 AND project_id=?5", params![reveal_enum(&input.review_status), input.user_decision, now(), input.id, input.project_id]).map_err(|error| sql_error("Reveal-Finding konnte nicht entschieden werden", error))?;
+    if matches!(
+        input.review_status,
+        RevealComplianceReviewStatus::IntentionalException
+    ) && input
+        .user_decision
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        return Err("Eine bewusste Ausnahme benötigt eine Begründung.".into());
+    }
+    let stamp = now();
+    let changed = db.execute("UPDATE reveal_compliance_findings SET review_status=?1,user_decision=?2,updated_at=?3 WHERE id=?4 AND project_id=?5", params![reveal_enum(&input.review_status), input.user_decision, stamp, input.id, input.project_id]).map_err(|error| sql_error("Reveal-Finding konnte nicht entschieden werden", error))?;
     if changed == 0 {
         return Err("Reveal-Finding nicht gefunden.".into());
     }
+    let artifact_status = if matches!(input.review_status, RevealComplianceReviewStatus::Dismissed)
+    {
+        "rejected"
+    } else {
+        "confirmed"
+    };
+    db.execute("UPDATE manuscript_analysis_artifacts SET review_status=?1,explicitly_skipped=0,updated_at=?2 WHERE artifact_type='reveal_compliance_finding' AND artifact_id=?3 AND project_id=?4", params![artifact_status, stamp, input.id, input.project_id]).map_err(|error| sql_error("Reveal-Artefakt konnte nicht synchronisiert werden", error))?;
     db.query_row(
         &format!("{REVEAL_COMPLIANCE_FINDING_SELECT} WHERE id=?1 AND project_id=?2"),
         params![input.id, input.project_id],
@@ -13005,7 +13146,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            40
+            41
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);

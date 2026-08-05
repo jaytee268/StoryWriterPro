@@ -14,6 +14,14 @@ import { contentHash } from '../../utils/aiText';
 interface Props { project: Project; chapters: Chapter[]; entities: StoryEntity[]; repository: LongformRepository; instruction: string; activeProvider: string; onClose: () => void; onAccepted: (plan: ChapterGenerationPlan, sections: ChapterGenerationSection[]) => Promise<void>; }
 
 const emptyDirection = (projectId: string): StoryDirection => ({ projectId, premise: '', currentStoryPhase: '', bookGoal: '', plannedEnding: '', endingStatus: 'open', centralTwist: '', thematicGoal: '', mustHappen: [], mustNotHappen: [], nextTurningPoint: '', revealConstraints: [], authorNotes: '', createdAt: '', updatedAt: '' });
+function plannedRevealPosition(chapters: Chapter[], currentJob?: ChapterGenerationJob, beatOrder?: number) {
+  const bookId = currentJob?.targetBookId ?? chapters.map((chapter) => chapter.bookId).find(Boolean);
+  const bookChapters = chapters.filter((chapter) => chapter.bookId === bookId).sort((left, right) => left.orderIndex - right.orderIndex);
+  const after = currentJob?.targetAfterChapterId ? bookChapters.find((chapter) => chapter.id === currentJob.targetAfterChapterId) : undefined;
+  const lastOrder = bookChapters.reduce((highest, chapter) => Math.max(highest, chapter.orderIndex), -1);
+  const chapterOrderIndex = after ? after.orderIndex + 1 : lastOrder + 1;
+  return { bookId, bookOrderIndex: undefined, chapterOrderIndex, sceneOrderIndex: beatOrder, offset: 0 };
+}
 
 export function LongformDraftView({ project, chapters, entities, repository, instruction, activeProvider, onClose, onAccepted }: Props) {
   const intent = useMemo(() => parseLongformIntent(instruction), [instruction]);
@@ -70,9 +78,8 @@ export function LongformDraftView({ project, chapters, entities, repository, ins
       .then(setContext).catch(() => setContext(undefined));
   }, [chapters, contextBuilder, direction, entities, instruction, preferences, project, totalWords]);
   useEffect(() => {
-    const lastChapter = chapters.at(-1); const lastScene = lastChapter?.scenes.at(-1);
-    void sourceRepository.buildRevealContext({ projectId: project.id, position: { bookId: lastChapter?.bookId, chapterId: lastChapter?.id, sceneId: lastScene?.id, chapterOrderIndex: lastChapter?.orderIndex, sceneOrderIndex: lastScene?.orderIndex } }).then((value) => setRevealContext(value)).catch(() => setRevealContext(undefined));
-  }, [chapters, project.id, sourceRepository]);
+    void sourceRepository.buildRevealContext({ projectId: project.id, position: plannedRevealPosition(chapters, job) }).then((value) => setRevealContext(value)).catch(() => setRevealContext(undefined));
+  }, [chapters, job, project.id, sourceRepository]);
 
   const preflight = preferences ? buildPreflight(project, chapters, entities, direction, preferences, intent) : undefined;
 
@@ -129,8 +136,7 @@ export function LongformDraftView({ project, chapters, entities, repository, ins
     let revealBlocked = false;
     if (revealContext?.confirmedAuthorTruths.length && activeProvider === 'codex-cli') {
       const active = await providerRouter.getActiveProvider();
-      const targetChapter = chapters.at(-1); const targetScene = targetChapter?.scenes.at(-1);
-      const compliance = await active.provider.validateRevealCompliance({ projectId: project.id, manuscriptPosition: { bookId: targetChapter?.bookId, chapterId: targetChapter?.id, sceneId: targetScene?.id, chapterOrderIndex: targetChapter?.orderIndex, sceneOrderIndex: targetScene?.orderIndex }, text: generated.content, textKind: 'generated_draft', povCharacterId: beat.povCharacterId, participatingCharacterIds: beat.participatingCharacterIds, revealContext }, active.settings.bibleUpdateTimeoutSeconds);
+      const compliance = await active.provider.validateRevealCompliance({ projectId: project.id, manuscriptPosition: plannedRevealPosition(chapters, currentJob, beat.orderIndex), text: generated.content, textKind: 'generated_draft', povCharacterId: beat.povCharacterId, participatingCharacterIds: beat.participatingCharacterIds, revealContext }, active.settings.bibleUpdateTimeoutSeconds);
       const revealReviews = compliance.findings.map((finding) => ({ jobId: currentJob.id, sectionId: saved.id, reviewScope: 'section' as const, issueType: finding.findingType, severity: finding.severity === 'critical' ? 'blocking' as const : finding.severity === 'warning' ? 'warning' as const : 'info' as const, title: finding.findingType === 'premature_revelation' ? 'Geheimnis wird möglicherweise zu früh verraten' : finding.findingType === 'narrator_information_leak' ? 'Der Erzähler verrät verborgenes Autorenwissen' : 'Enthüllungsregel prüfen', description: finding.explanation, relatedEntityIds: [finding.subjectEntityId], relatedSourceIds: [], suggestedAction: 'Text prüfen oder bewusst begründen', status: 'open' }));
       if (revealReviews.length) await repository.saveReviews(currentJob.id, revealReviews);
       revealBlocked = compliance.findings.some((finding) => finding.severity === 'critical');

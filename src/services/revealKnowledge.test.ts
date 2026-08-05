@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserDemoRepository } from './storyRepository';
 import { buildRevealContext, compareRevealPositions, formatRevealContextForAi, validateRevealComplianceInput, validateRevealComplianceResultReferences } from './revealKnowledge';
 import type { RevealComplianceInput, RevealComplianceResult } from '../types/domain';
+import { contentHash } from '../utils/aiText';
 
 const values = new Map<string, string>();
 vi.stubGlobal('localStorage', { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) });
@@ -102,13 +103,16 @@ describe('structured reveal knowledge engine', () => {
     const scene = await repository.createScene({ chapterId: chapter.id, title: 'Enthüllung' });
     const character = await repository.createStoryEntity({ projectId: workspace.project.id, name: 'M', type: 'character', description: '', status: 'confirmed', confidence: 1, chapterId: chapter.id, sceneId: scene.id, excerpt: '', authorConfirmed: true, tags: [] });
     const input = {
-      projectId: workspace.project.id,
+      projectId: workspace.project.id, mode: 'activate' as const,
       subjectEntity: { id: 'candidate-branch-truth', name: 'Branch-Identität', type: 'secret' as const, description: 'Mehrere Figuren sind Varianten derselben Person.', tags: ['reveal'] },
       contract: { id: 'bundle-contract', projectId: workspace.project.id, subjectEntityId: 'candidate-branch-truth', title: 'Branch-Identität', truthStatement: 'Mehrere Figuren sind Varianten derselben Person.', scope: 'book' as const, status: 'proposed' as const, authorConfirmed: false, revealState: 'author_only' as const, revealConditionText: 'Im Finale.', notes: '' },
       audienceStates: [{ projectId: workspace.project.id, contractId: 'candidate-branch-truth', audienceKind: 'character' as const, characterEntityId: character.id, knowledgeLevel: 'knows' as const, beliefText: 'M kennt die Wahrheit.', validFromPosition: { chapterId: chapter.id, sceneId: scene.id }, status: 'proposed' as const, authorConfirmed: false }],
       clueRules: [{ projectId: workspace.project.id, contractId: 'candidate-branch-truth', ruleKind: 'forbidden' as const, clueType: 'direct_identity', description: 'Direkte Identitätsaussage vor dem Finale.', maximumExplicitness: 'direct' as const, status: 'proposed' as const, authorConfirmed: false }],
     };
     const before = await repository.listStoryEntities(workspace.project.id);
+    const draft = await repository.activateRevealContractBundle({ ...input, mode: 'draft' });
+    expect(draft.contract.status).toBe('proposed');
+    expect(draft.contract.authorConfirmed).toBe(false);
     const first = await repository.activateRevealContractBundle(input);
     const second = await repository.activateRevealContractBundle(input);
     expect(first.contract.status).toBe('confirmed');
@@ -122,5 +126,17 @@ describe('structured reveal knowledge engine', () => {
     const context = await repository.buildRevealContext({ projectId: workspace.project.id, position: { chapterId: chapter.id, sceneId: scene.id }, participatingCharacterIds: [character.id] });
     expect(context.confirmedAuthorTruths).toHaveLength(1);
     expect(context.participantKnowledgeAtPosition[0]?.knowledgeLevel).toBe('knows');
+  });
+
+  it('persistiert Reveal-Kandidatenentscheidungen über Reload und trennt normale Lore von Geheimnissen', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const run = await repository.createLoreCrafterRun({ projectId: workspace.project.id, originalText: 'Eine verborgene Wahrheit.', contentHash: contentHash('Eine verborgene Wahrheit.'), providerId: 'fake', promptVersion: 'test' });
+    await repository.updateLoreCrafterRun({ id: run.id, status: 'awaiting_review', analysis: { understandingSummary: '', confirmedStatements: [], proposedWorldRules: [], prerequisites: [], effects: [], limitations: [], costs: [], exceptions: [], terminology: [], relevantOrganizations: [], relevantLocations: [], historicalBackground: [], unresolvedQuestions: [], contradictions: [], excludedContent: [], clarificationQuestions: [], revealCandidates: [{ temporaryId: 'candidate-1', title: 'Verborgene Wahrheit', truthStatement: 'Sie ist wahr.', reason: '', suggestedSubjectType: 'secret', suggestedRevealState: 'author_only', suggestedRevealCondition: '', suggestedReaderStartLevel: 'unknown', suggestedCharacterStates: [], suggestedAllowedClues: [], suggestedForbiddenClues: [], suggestedRequiredClues: [], sourceExcerpt: 'Sie ist wahr.', confidence: 0.9 }], confidence: 0.9, warnings: [] } });
+    const saved = await repository.saveRevealCandidateDecision({ runId: run.id, projectId: workspace.project.id, candidateTemporaryId: 'candidate-1', decision: 'uncertain' });
+    expect((await repository.listRevealCandidateDecisions(workspace.project.id, run.id))[0]?.id).toBe(saved.id);
+    const entity = await repository.createStoryEntity({ projectId: workspace.project.id, name: 'Normaler Fakt', type: 'fact', description: 'Kein Geheimnis.', status: 'proposed', confidence: 0.8, excerpt: 'Kein Geheimnis.', authorConfirmed: false, tags: ['lore_crafter'], origin: 'lore_crafter' });
+    await repository.saveRevealCandidateDecision({ runId: run.id, projectId: workspace.project.id, candidateTemporaryId: 'candidate-2', decision: 'normal_lore', createdArtifactId: entity.id }).catch((error: unknown) => expect(String(error)).toContain('Reveal-Kandidat'));
+    expect((await repository.listRevealContracts(workspace.project.id)).filter((contract) => contract.title === 'Normaler Fakt')).toHaveLength(0);
   });
 });

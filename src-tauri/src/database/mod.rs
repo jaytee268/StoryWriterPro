@@ -752,6 +752,17 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
         ))?;
         connection.execute("INSERT INTO schema_migrations (version) VALUES (40)", [])?;
     }
+    let has_reveal_candidate_decisions: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 41",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_reveal_candidate_decisions == 0 {
+        connection.execute_batch(include_str!(
+            "../../../migrations/041_reveal_candidate_decisions.sql"
+        ))?;
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (41)", [])?;
+    }
     Ok(())
 }
 
@@ -907,8 +918,10 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            40
+            41
         );
+        assert_eq!(connection.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('reveal_candidate_decisions','manuscript_analysis_artifacts')", [], |row| row.get::<_, i64>(0)).unwrap(), 2);
+        assert!(connection.execute("INSERT INTO reveal_candidate_decisions(id,run_id,project_id,candidate_temporary_id,decision) VALUES('decision-test','missing-run','missing-project','candidate','uncertain')", []).is_err());
         assert_eq!(
             connection
                 .query_row("SELECT COUNT(*) FROM pragma_table_info('scene_versions') WHERE name IN ('version_number', 'snapshot_json', 'reason')", [], |row| row.get::<_, i64>(0))
@@ -1240,7 +1253,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                40
+                41
             );
             // Running startup migrations again must not change the assignment
             // or fail on the ALTER TABLE statement.
