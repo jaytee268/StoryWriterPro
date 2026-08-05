@@ -4209,6 +4209,19 @@ pub fn create_manuscript_analysis_job(
         return Ok(existing);
     }
     }
+    let mut import_reference = input.import_reference.clone();
+    if input.new_version {
+        let mut version = 2;
+        loop {
+            let candidate = format!("{}:version-{}", input.import_reference, version);
+            let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM manuscript_analysis_jobs WHERE project_id=?1 AND import_reference=?2)", params![input.project_id, candidate], |row| row.get(0)).map_err(|error| sql_error("Importversion konnte nicht geprüft werden", error))?;
+            if !exists {
+                import_reference = candidate;
+                break;
+            }
+            version += 1;
+        }
+    }
     let tx = db
         .unchecked_transaction()
         .map_err(|error| sql_error("Manuskriptanalysejob konnte nicht angelegt werden", error))?;
@@ -4216,7 +4229,7 @@ pub fn create_manuscript_analysis_job(
     let stamp = now();
     let page_markers_json = serde_json::to_string(&input.page_markers)
         .map_err(|error| format!("Seitenmarker konnten nicht serialisiert werden: {error}"))?;
-    tx.execute("INSERT INTO manuscript_analysis_jobs (id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, provider_id, page_markers_json, created_at, updated_at) VALUES (?1,?2,?3,?4,'pending','structure','{}','{}',?5,?6,?7,?8,?8)", params![job_id, input.project_id, input.book_id, input.import_reference, input.units.len() as i64, input.provider_id, page_markers_json, stamp]).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht gespeichert werden", error))?;
+    tx.execute("INSERT INTO manuscript_analysis_jobs (id, project_id, book_id, import_reference, status, current_phase, phase_progress_json, phase_errors_json, total_units, provider_id, page_markers_json, created_at, updated_at) VALUES (?1,?2,?3,?4,'pending','structure','{}','{}',?5,?6,?7,?8,?8)", params![job_id, input.project_id, input.book_id, import_reference, input.units.len() as i64, input.provider_id, page_markers_json, stamp]).map_err(|error| sql_error("Manuskriptanalysejob konnte nicht gespeichert werden", error))?;
     for unit in &input.units {
         if unit.start_offset < 0
             || unit.end_offset < unit.start_offset

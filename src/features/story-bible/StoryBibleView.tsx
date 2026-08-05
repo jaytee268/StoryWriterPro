@@ -11,9 +11,9 @@ const typeLabels: Record<EntityType, string> = { character: 'Charakter', relatio
 const statusLabels: Record<EntityStatus, string> = { confirmed: 'Bestätigt', proposed: 'Vorgeschlagen', uncertain: 'Vermutung', contradicted: 'Widersprochen', retconned: 'Retcon', archived: 'Archiviert' };
 const emptyForm = (projectId: string): CreateStoryEntityInput => ({ projectId, name: '', type: 'fact', description: '', status: 'proposed', confidence: 0.7, excerpt: '', authorConfirmed: false, tags: [] });
 
-interface Props { entities: StoryEntity[]; projectId: string; chapters: Chapter[]; initialFilter?: EntityType; repository: StoryRepository; activeRun?: BibleUpdateRun; proposals: BibleProposal[]; activeMemoryRun?: CharacterMemoryUpdateRun; memoryProposals?: CharacterMemoryProposal[]; onEntityChanged: (entity: StoryEntity) => void; onOpenSourceReference: (reference: StorySourceReference) => void; onOpenStyleReference: (reference: StyleReference) => void; onReview: (input: ReviewBibleProposalInput) => Promise<void>; onCompleteReview: () => Promise<void>; onMemoryReview?: (input: ReviewCharacterMemoryProposalInput) => Promise<void>; onCompleteMemoryReview?: () => Promise<void>; onCloseReview: () => void; onLoreRunCreated?: (run: import('../../types/domain').LoreCrafterRun) => void; }
+interface Props { entities: StoryEntity[]; projectId: string; chapters: Chapter[]; initialFilter?: EntityType; initialTab?: FoundationTab | 'continuity' | 'lore_crafter'; repository: StoryRepository; activeRun?: BibleUpdateRun; proposals: BibleProposal[]; activeMemoryRun?: CharacterMemoryUpdateRun; memoryProposals?: CharacterMemoryProposal[]; onEntityChanged: (entity: StoryEntity) => void; onOpenSourceReference: (reference: StorySourceReference) => void; onOpenStyleReference: (reference: StyleReference) => void; onReview: (input: ReviewBibleProposalInput) => Promise<void>; onCompleteReview: () => Promise<void>; onMemoryReview?: (input: ReviewCharacterMemoryProposalInput) => Promise<void>; onCompleteMemoryReview?: () => Promise<void>; onCloseReview: () => void; onLoreRunCreated?: (run: import('../../types/domain').LoreCrafterRun) => void; }
 
-export function StoryBibleView({ entities, projectId, chapters, initialFilter, repository, activeRun, proposals, activeMemoryRun, memoryProposals = [], onEntityChanged, onOpenSourceReference, onOpenStyleReference, onReview, onCompleteReview, onMemoryReview, onCompleteMemoryReview, onCloseReview, onLoreRunCreated }: Props) {
+export function StoryBibleView({ entities, projectId, chapters, initialFilter, initialTab, repository, activeRun, proposals, activeMemoryRun, memoryProposals = [], onEntityChanged, onOpenSourceReference, onOpenStyleReference, onReview, onCompleteReview, onMemoryReview, onCompleteMemoryReview, onCloseReview, onLoreRunCreated }: Props) {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<EntityType | 'all'>(initialFilter ?? 'all');
   const [showArchived, setShowArchived] = useState(false);
@@ -25,7 +25,8 @@ export function StoryBibleView({ entities, projectId, chapters, initialFilter, r
   const [error, setError] = useState('');
   const [sourceReferences, setSourceReferences] = useState<StorySourceReference[]>([]);
   const [sourcesLoading, setSourcesLoading] = useState(false);
-  const [foundationTab, setFoundationTab] = useState<FoundationTab | 'continuity' | 'lore_crafter'>(initialFilter === 'character' ? 'characters' : 'bible');
+  const [foundationTab, setFoundationTab] = useState<FoundationTab | 'continuity' | 'lore_crafter'>(initialTab ?? (initialFilter === 'character' ? 'characters' : 'bible'));
+  useEffect(() => { if (initialTab) setFoundationTab(initialTab); }, [initialTab]);
 
   const filtered = useMemo(() => entities.filter((entity) => (showArchived || entity.status !== 'archived') && (filter === 'all' || entity.type === filter) && `${entity.name} ${entity.description} ${entity.tags.join(' ')}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())), [entities, filter, query, showArchived]);
   const active = entities.find((entity) => entity.id === selected) ?? filtered[0];

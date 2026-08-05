@@ -29,7 +29,7 @@ export function LoreCrafterView({ projectId, repository, onRunCreated }: Props) 
     setClarifications(nextClarifications); setDraft(nextDraft); setSources(await repository.listLoreCrafterSources(next.id)); if (nextDraft) setItems(await repository.listLoreSheetItems(nextDraft.id));
   }, [repository]);
 
-  const refresh = useCallback(async () => { const nextRuns = await repository.listLoreCrafterRuns(projectId); setRuns(nextRuns); if (!run) await loadRun(nextRuns[0]); }, [loadRun, projectId, repository, run]);
+  const refresh = useCallback(async () => { const nextRuns = await repository.listLoreCrafterRuns(projectId); setRuns(nextRuns); if (!run) { const onboarding = await repository.getProjectOnboardingState(projectId).catch(() => undefined); const resumed = onboarding?.loreCrafterRunId ? nextRuns.find((item) => item.id === onboarding.loreCrafterRunId) : undefined; await loadRun(resumed ?? nextRuns[0]); } }, [loadRun, projectId, repository, run]);
   useEffect(() => { void refresh().catch((cause) => setError(cause instanceof Error ? cause.message : 'Lore-Crafter-Läufe konnten nicht geladen werden.')); }, [refresh]);
 
   const analyse = async () => {
