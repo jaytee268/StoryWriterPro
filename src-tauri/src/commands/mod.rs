@@ -5217,7 +5217,7 @@ pub fn apply_manuscript_structure(
         .map_err(|e| sql_error("Alte implizite Szenen konnten nicht bereinigt werden", e))?;
     let structure_jobs: Vec<(String, String)> = {
         let mut statement = transaction
-            .prepare("SELECT id,provider_id FROM manuscript_analysis_jobs WHERE project_id=?1 AND current_phase='structure' AND status='awaiting_structure_review'")
+            .prepare("SELECT id,provider_id FROM manuscript_analysis_jobs WHERE project_id=?1 AND ((current_phase='structure' AND status='awaiting_structure_review') OR (current_phase='passage_continuity' AND status='pending'))")
             .map_err(|e| sql_error("Strukturreview-Jobs konnten nicht geladen werden", e))?;
         let rows = statement
             .query_map(params![project_id], |row| Ok((row.get(0)?, row.get(1)?)))
@@ -5229,10 +5229,10 @@ pub fn apply_manuscript_structure(
     for (job_id, provider_id) in structure_jobs {
         let old_units: Vec<(String, i64, Option<i64>, i64, i64)> = {
             let mut statement = transaction
-                .prepare("SELECT id,order_index,page_number,start_offset,end_offset FROM manuscript_analysis_units WHERE job_id=?1 ORDER BY order_index")
+                .prepare("SELECT id,order_index,page_number,start_offset,end_offset FROM manuscript_analysis_units WHERE job_id=?1 AND chapter_id=?2 ORDER BY order_index")
                 .map_err(|e| sql_error("Alte Analyse-Units konnten nicht geladen werden", e))?;
             let rows = statement
-                .query_map(params![job_id], |row| {
+                .query_map(params![job_id, run.chapter_id], |row| {
                     Ok((
                         row.get(0)?,
                         row.get(1)?,
@@ -5266,8 +5266,8 @@ pub fn apply_manuscript_structure(
             .map_err(|e| sql_error("Alte Phasenergebnisse konnten nicht entfernt werden", e))?;
         transaction
             .execute(
-                "DELETE FROM manuscript_analysis_units WHERE job_id=?1",
-                params![job_id],
+                "DELETE FROM manuscript_analysis_units WHERE job_id=?1 AND chapter_id=?2",
+                params![job_id, run.chapter_id],
             )
             .map_err(|e| sql_error("Alte Analyse-Units konnten nicht entfernt werden", e))?;
         let mut order_index = 0_i64;
@@ -5299,23 +5299,43 @@ pub fn apply_reviewed_manuscript_structure(
     state: State<'_, DbState>,
     job_id: String,
 ) -> Result<Vec<Scene>, String> {
-    let db = lock_db(&state)?;
-    let (project_id, chapter_id): (String, String) = db
-        .query_row(
-            "SELECT project_id,chapter_id FROM manuscript_analysis_units WHERE job_id=?1 ORDER BY order_index LIMIT 1",
-            params![job_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .map_err(|e| sql_error("Analysejob konnte nicht geladen werden", e))?;
-    let run_id: String = db
-        .query_row(
-            "SELECT id FROM manuscript_structure_runs WHERE project_id=?1 AND chapter_id=?2 AND status IN ('completed','reviewed') ORDER BY updated_at DESC LIMIT 1",
-            params![project_id, chapter_id],
-            |row| row.get(0),
-        )
-        .map_err(|e| sql_error("Strukturlauf konnte nicht geladen werden", e))?;
-    drop(db);
-    apply_manuscript_structure(state, project_id, run_id)
+    let (project_id, chapter_ids) = {
+        let db = lock_db(&state)?;
+        let project_id: String = db
+            .query_row(
+                "SELECT project_id FROM manuscript_analysis_units WHERE job_id=?1 ORDER BY order_index LIMIT 1",
+                params![job_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| sql_error("Analysejob konnte nicht geladen werden", e))?;
+        let mut statement = db
+            .prepare("SELECT DISTINCT chapter_id FROM manuscript_analysis_units WHERE job_id=?1 ORDER BY chapter_id")
+            .map_err(|e| sql_error("Analysekapitel konnten nicht geladen werden", e))?;
+        let chapter_ids = statement
+            .query_map(params![job_id], |row| row.get::<_, String>(0))
+            .map_err(|e| sql_error("Analysekapitel konnten nicht gelesen werden", e))?
+            .collect::<SqlResult<Vec<_>>>()
+            .map_err(|e| sql_error("Analysekapitel konnten nicht gelesen werden", e))?;
+        (project_id, chapter_ids)
+    };
+    let mut result = Vec::new();
+    for chapter_id in chapter_ids {
+        let db = lock_db(&state)?;
+        let run_id: String = db
+            .query_row(
+                "SELECT id FROM manuscript_structure_runs WHERE project_id=?1 AND chapter_id=?2 AND status IN ('completed','reviewed') ORDER BY updated_at DESC LIMIT 1",
+                params![project_id, chapter_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| sql_error("Strukturlauf konnte nicht geladen werden", e))?;
+        drop(db);
+        result.extend(apply_manuscript_structure(
+            state.clone(),
+            project_id.clone(),
+            run_id,
+        )?);
+    }
+    Ok(result)
 }
 
 fn provisional_entity_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ProvisionalEntity> {

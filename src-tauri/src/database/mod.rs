@@ -1048,6 +1048,68 @@ mod tests {
     }
 
     #[test]
+    fn complete_import_genre_and_job_survive_sqlite_reopen() {
+        let path = temp_path("complete-import");
+        {
+            let connection = database_path_for_test(&path).unwrap();
+            seed_if_empty(&connection).unwrap();
+            connection
+                .execute(
+                    "UPDATE books SET primary_genre_id=?1, secondary_genre_ids_json=?2, genre_source=?3, genre_confidence=?4, genre_reason=?5, genre_author_confirmed=1 WHERE id='book-1'",
+                    params!["mystery", "[\"crime\"]", "codex-cli", 0.91_f64, "Synthetische Ermittlung"],
+                )
+                .unwrap();
+            let text = "😀 Relikt e\u{301} bleibt als Prüfeinheit erhalten.";
+            connection
+                .execute(
+                    "UPDATE scenes SET content=?1 WHERE id='scene-1'",
+                    params![text],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO manuscript_analysis_jobs (id, project_id, book_id, import_reference, status, total_units, provider_id) VALUES (?1, 'project-zugestellt', 'book-1', ?2, 'paused', 1, 'codex-cli')",
+                    params!["job-complete-import", "complete-import"],
+                )
+                .unwrap();
+        }
+        let reopened = database_path_for_test(&path).unwrap();
+        let genres: (String, String, String, f64, i64) = reopened
+            .query_row(
+                "SELECT primary_genre_id, secondary_genre_ids_json, genre_source, genre_confidence, genre_author_confirmed FROM books WHERE id='book-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            genres,
+            (
+                "mystery".into(),
+                "[\"crime\"]".into(),
+                "codex-cli".into(),
+                0.91,
+                1
+            )
+        );
+        let scene: String = reopened
+            .query_row("SELECT content FROM scenes WHERE id='scene-1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(scene, "😀 Relikt e\u{301} bleibt als Prüfeinheit erhalten.");
+        let job: (String, i64, String) = reopened
+            .query_row(
+                "SELECT status, total_units, provider_id FROM manuscript_analysis_jobs WHERE id='job-complete-import'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(job, ("paused".into(), 1, "codex-cli".into()));
+        drop(reopened);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn legacy_story_entities_are_backfilled_only_when_unambiguous() {
         let path = temp_path("legacy-entities");
         {
