@@ -4647,7 +4647,7 @@ pub fn review_manuscript_analysis_artifact_decision(
             }
         }
         "continuity_finding" | "global_countercheck_finding" => {
-            let changed = transaction.execute("UPDATE continuity_review_findings SET review_status=?1,user_decision=?2,updated_at=?3 WHERE id=?4 AND project_id=?5", params![if status == "confirmed" { "resolved" } else if status == "uncertain" { "deferred" } else { "dismissed" }, status, now(), artifact.artifact_id, artifact.project_id]).map_err(|e| sql_error("Finding konnte nicht aktualisiert werden", e))?;
+            let changed = transaction.execute("UPDATE continuity_review_findings SET review_status=?1,user_decision=?2,updated_at=?3 WHERE id=?4 AND project_id=?5", params![if status == "confirmed" { "accepted" } else if status == "uncertain" { "deferred" } else { "dismissed" }, if status == "confirmed" { "Bestätigung gespeichert; konkrete Finding-Entscheidung bleibt erforderlich." } else { status.as_str() }, now(), artifact.artifact_id, artifact.project_id]).map_err(|e| sql_error("Finding konnte nicht aktualisiert werden", e))?;
             if changed == 0 {
                 return Err("Zugehöriges Finding wurde nicht gefunden.".into());
             }
@@ -4665,27 +4665,73 @@ pub fn review_manuscript_analysis_artifact_decision(
             }
         }
         "timeline_event" => {
+            if status == "confirmed" {
+                let ids: String = transaction.query_row("SELECT participating_entity_ids_json FROM manuscript_timeline_events WHERE id=?1 AND project_id=?2", params![artifact.artifact_id, artifact.project_id], |row| row.get(0)).map_err(|e| sql_error("Timeline-Entität konnte nicht geprüft werden", e))?;
+                let has_provisional: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM provisional_entities WHERE job_id=?1 AND project_id=?2 AND instr(?3, id) > 0)", params![artifact.job_id, artifact.project_id, ids], |row| row.get(0)).map_err(|e| sql_error("Timeline-Entität konnte nicht geprüft werden", e))?;
+                if has_provisional {
+                    return Err("Timeline-Ereignis muss vor der Bestätigung materialisierte Entitäten verwenden.".into());
+                }
+            }
             let changed = transaction.execute("UPDATE manuscript_timeline_events SET status=?,author_confirmed=?,updated_at=? WHERE id=? AND project_id=?", params![domain_status, (status == "confirmed") as i64, now(), artifact.artifact_id, artifact.project_id]).map_err(|e| sql_error("Timeline-Ereignis konnte nicht aktualisiert werden", e))?;
             if changed == 0 {
                 return Err("Zugehöriges Timeline-Ereignis wurde nicht gefunden.".into());
             }
         }
         "story_graph_edge" => {
+            if status == "confirmed" {
+                let ids: (String, String) = transaction.query_row("SELECT source_entity_id,target_entity_id FROM story_graph_edges WHERE id=?1 AND project_id=?2", params![artifact.artifact_id, artifact.project_id], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|e| sql_error("Graph-Entität konnte nicht geprüft werden", e))?;
+                let has_provisional: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM provisional_entities WHERE job_id=?1 AND project_id=?2 AND (id=?3 OR id=?4))", params![artifact.job_id, artifact.project_id, ids.0, ids.1], |row| row.get(0)).map_err(|e| sql_error("Graph-Entität konnte nicht geprüft werden", e))?;
+                if has_provisional {
+                    return Err("Story-Graph-Kante muss vor der Bestätigung materialisierte Entitäten verwenden.".into());
+                }
+            }
             let changed = transaction.execute("UPDATE story_graph_edges SET status=?,author_confirmed=?,updated_at=? WHERE id=? AND project_id=?", params![domain_status, (status == "confirmed") as i64, now(), artifact.artifact_id, artifact.project_id]).map_err(|e| sql_error("Story-Graph-Kante konnte nicht aktualisiert werden", e))?;
             if changed == 0 {
                 return Err("Zugehörige Story-Graph-Kante wurde nicht gefunden.".into());
             }
         }
         "provisional_entity" => {
-            let changed = transaction.execute("UPDATE provisional_entities SET review_status=?,updated_at=? WHERE id=? AND project_id=?", params![if status == "uncertain" { "uncertain" } else { "rejected" }, now(), artifact.artifact_id, artifact.project_id]).map_err(|e| sql_error("Vorläufige Entität konnte nicht aktualisiert werden", e))?;
-            if changed == 0 {
-                return Err("Zugehörige vorläufige Entität wurde nicht gefunden.".into());
+            if status == "confirmed" {
+                let existing_entity_id: Option<String> = transaction.query_row("SELECT existing_entity_id FROM provisional_entities WHERE id=?1 AND job_id=?2 AND project_id=?3", params![artifact.artifact_id, artifact.job_id, artifact.project_id], |row| row.get(0)).map_err(|e| sql_error("Vorläufige Entität konnte nicht geprüft werden", e))?;
+                let input = MaterializeProvisionalEntityInput {
+                    project_id: artifact.project_id.clone(),
+                    job_id: artifact.job_id.clone(),
+                    provisional_entity_id: artifact.artifact_id.clone(),
+                    existing_entity_id: existing_entity_id.clone(),
+                    decision: if existing_entity_id.is_some() {
+                        "merge".into()
+                    } else {
+                        "accept".into()
+                    },
+                };
+                materialize_provisional_entity_in_transaction(&transaction, &input)?;
+            } else {
+                let changed = transaction.execute("UPDATE provisional_entities SET review_status=?,updated_at=? WHERE id=? AND job_id=? AND project_id=?", params![if status == "uncertain" { "uncertain" } else { "rejected" }, now(), artifact.artifact_id, artifact.job_id, artifact.project_id]).map_err(|e| sql_error("Vorläufige Entität konnte nicht aktualisiert werden", e))?;
+                if changed == 0 {
+                    return Err("Zugehörige vorläufige Entität wurde nicht gefunden.".into());
+                }
             }
         }
         "provisional_merge" => {
-            let changed = transaction.execute("UPDATE provisional_merge_proposals SET review_status=? WHERE id=? AND project_id=?", params![if status == "uncertain" { "uncertain" } else { "rejected" }, artifact.artifact_id, artifact.project_id]).map_err(|e| sql_error("Merge-Vorschlag konnte nicht aktualisiert werden", e))?;
-            if changed == 0 {
-                return Err("Zugehöriger Merge-Vorschlag wurde nicht gefunden.".into());
+            if status == "confirmed" {
+                let (left_id, existing_entity_id): (String, Option<String>) = transaction.query_row("SELECT left_provisional_entity_id,existing_entity_id FROM provisional_merge_proposals WHERE id=?1 AND job_id=?2 AND project_id=?3", params![artifact.artifact_id, artifact.job_id, artifact.project_id], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|e| sql_error("Merge-Vorschlag konnte nicht geprüft werden", e))?;
+                let existing_entity_id = existing_entity_id.ok_or_else(|| {
+                    "Ein Merge muss vor der Bestätigung ein bestehendes Ziel auswählen.".to_string()
+                })?;
+                let input = MaterializeProvisionalEntityInput {
+                    project_id: artifact.project_id.clone(),
+                    job_id: artifact.job_id.clone(),
+                    provisional_entity_id: left_id,
+                    existing_entity_id: Some(existing_entity_id),
+                    decision: "merge".into(),
+                };
+                materialize_provisional_entity_in_transaction(&transaction, &input)?;
+                transaction.execute("UPDATE provisional_merge_proposals SET review_status='merged' WHERE id=?1 AND job_id=?2 AND project_id=?3", params![artifact.artifact_id, artifact.job_id, artifact.project_id]).map_err(|e| sql_error("Merge-Status konnte nicht aktualisiert werden", e))?;
+            } else {
+                let changed = transaction.execute("UPDATE provisional_merge_proposals SET review_status=? WHERE id=? AND job_id=? AND project_id=?", params![if status == "uncertain" { "uncertain" } else { "rejected" }, artifact.artifact_id, artifact.job_id, artifact.project_id]).map_err(|e| sql_error("Merge-Vorschlag konnte nicht aktualisiert werden", e))?;
+                if changed == 0 {
+                    return Err("Zugehöriger Merge-Vorschlag wurde nicht gefunden.".into());
+                }
             }
         }
         "book_end_state_proposal" => {}
@@ -5282,18 +5328,13 @@ pub fn save_provisional_entity(
     db.query_row("SELECT id,job_id,project_id,entity_type,canonical_name,aliases_json,description,first_source_reference_id,last_source_reference_id,confidence,review_status,existing_entity_id,created_at,updated_at FROM provisional_entities WHERE id=?1", params![id], provisional_entity_from_row).map_err(|e| sql_error("Provisorische Entität konnte nicht geladen werden", e))
 }
 
-#[tauri::command]
-pub fn materialize_provisional_entity(
-    state: State<'_, DbState>,
-    input: MaterializeProvisionalEntityInput,
-) -> Result<StoryEntity, String> {
+fn materialize_provisional_entity_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    input: &MaterializeProvisionalEntityInput,
+) -> Result<String, String> {
     if input.decision != "accept" && input.decision != "merge" {
         return Err("Ungültige Materialisierungsentscheidung.".into());
     }
-    let db = lock_db(&state)?;
-    let transaction = db
-        .unchecked_transaction()
-        .map_err(|e| sql_error("Materialisierung konnte nicht gestartet werden", e))?;
     let job_project: String = transaction
         .query_row(
             "SELECT project_id FROM manuscript_analysis_jobs WHERE id=?1",
@@ -5360,6 +5401,19 @@ pub fn materialize_provisional_entity(
     transaction.execute("UPDATE character_memory_proposals SET subject_character_id=CASE WHEN subject_character_id=?1 THEN ?2 ELSE subject_character_id END, related_character_id=CASE WHEN related_character_id=?1 THEN ?2 ELSE related_character_id END, target_entity_id=CASE WHEN target_entity_id=?1 THEN ?2 ELSE target_entity_id END, payload_json=REPLACE(payload_json,?1,?2) WHERE project_id=?3", params![old_id, canonical_id, input.project_id]).map_err(|e| sql_error("Character-Memory-Verweise konnten nicht umgehängt werden", e))?;
     transaction.execute("UPDATE manuscript_analysis_draft_ledger SET entity_id=CASE WHEN entity_id=?1 THEN ?2 ELSE entity_id END, related_entity_id=CASE WHEN related_entity_id=?1 THEN ?2 ELSE related_entity_id END WHERE job_id=?3 AND project_id=?4", params![old_id, canonical_id, input.job_id, input.project_id]).map_err(|e| sql_error("Draft-Zustände konnten nicht umgehängt werden", e))?;
     transaction.execute("UPDATE provisional_entities SET existing_entity_id=?2, review_status=?3, updated_at=?4 WHERE id=?1 AND job_id=?5 AND project_id=?6", params![old_id, canonical_id, if target_id.is_some() { "merged" } else { "accepted" }, now(), input.job_id, input.project_id]).map_err(|e| sql_error("Materialisierungsstatus konnte nicht gespeichert werden", e))?;
+    Ok(canonical_id)
+}
+
+#[tauri::command]
+pub fn materialize_provisional_entity(
+    state: State<'_, DbState>,
+    input: MaterializeProvisionalEntityInput,
+) -> Result<StoryEntity, String> {
+    let db = lock_db(&state)?;
+    let transaction = db
+        .unchecked_transaction()
+        .map_err(|e| sql_error("Materialisierung konnte nicht gestartet werden", e))?;
+    let canonical_id = materialize_provisional_entity_in_transaction(&transaction, &input)?;
     transaction
         .commit()
         .map_err(|e| sql_error("Materialisierung konnte nicht abgeschlossen werden", e))?;

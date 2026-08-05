@@ -855,13 +855,14 @@ export class BrowserDemoRepository implements StoryRepository {
     } else if (artifact.artifactType === 'continuity_finding' || artifact.artifactType === 'global_countercheck_finding') {
       const finding = state.continuityFindings.find((item) => item.id === artifact.artifactId && item.projectId === artifact.projectId);
       if (!finding) throw new Error('Kontinuitätsfinding des Artefakts nicht gefunden.');
-      state.continuityFindings = state.continuityFindings.map((item) => item.id === finding.id ? { ...item, reviewStatus: accepted ? 'resolved' : uncertain ? 'deferred' : 'dismissed', userDecision: uncertain ? 'unsicher gespeichert' : accepted ? 'bestätigt' : 'abgelehnt', updatedAt: now() } : item);
+      state.continuityFindings = state.continuityFindings.map((item) => item.id === finding.id ? { ...item, reviewStatus: accepted ? 'accepted' : uncertain ? 'deferred' : 'dismissed', userDecision: uncertain ? 'unsicher gespeichert' : accepted ? 'Bestätigung gespeichert; konkrete Finding-Entscheidung bleibt erforderlich.' : 'abgelehnt', updatedAt: now() } : item);
     } else if (artifact.artifactType === 'project_rule_proposal') {
       applyBrowserRuleProposalReview(state, artifact.artifactId, accepted, uncertain);
     } else if (artifact.artifactType === 'plot_thread_proposal') {
       const proposal = state.plotThreadProposals.find((item) => item.id === artifact.artifactId && item.projectId === artifact.projectId);
       if (!proposal) throw new Error('Handlungsstrang-Vorschlag des Artefakts nicht gefunden.');
       if (accepted) {
+        if ((proposal.proposedStatus as string) === 'resolved') throw new Error('Ein AI-Vorschlag darf einen Handlungsstrang nicht automatisch abschließen.');
         const current = state.plotThreadLifecycles.find((item) => item.entityId === proposal.entityId);
         state.plotThreadLifecycles = [{ id: current?.id ?? crypto.randomUUID(), projectId: proposal.projectId, entityId: proposal.entityId, lifecycleStatus: proposal.proposedStatus, lastSourceReferenceId: proposal.sourceReferenceId, updatedAt: now() }, ...state.plotThreadLifecycles.filter((item) => item.entityId !== proposal.entityId)];
         state.plotThreadProposals = state.plotThreadProposals.map((item) => item.id === proposal.id ? { ...item, reviewStatus: 'accepted', reviewedAt: now() } : item);
@@ -873,19 +874,45 @@ export class BrowserDemoRepository implements StoryRepository {
     } else if (artifact.artifactType === 'timeline_event') {
       const event = (state.timelineEvents ?? []).find((item) => item.id === artifact.artifactId && item.projectId === artifact.projectId);
       if (!event) throw new Error('Timeline-Ereignis des Artefakts nicht gefunden.');
+      const provisionalIds = new Set((state.provisionalEntities ?? []).filter((item) => item.jobId === artifact.jobId && item.projectId === artifact.projectId).map((item) => item.id));
+      if (accepted && event.participatingEntityIds.some((entityId) => provisionalIds.has(entityId))) throw new Error('Timeline-Ereignis muss vor der Bestätigung materialisierte Entitäten verwenden.');
       state.timelineEvents = (state.timelineEvents ?? []).map((item) => item.id === event.id ? { ...item, status: accepted ? 'confirmed' : uncertain ? 'uncertain' : 'rejected', authorConfirmed: accepted, updatedAt: now() } : item);
     } else if (artifact.artifactType === 'story_graph_edge') {
       const edge = (state.graphEdges ?? []).find((item) => item.id === artifact.artifactId && item.projectId === artifact.projectId);
       if (!edge) throw new Error('Story-Graph-Kante des Artefakts nicht gefunden.');
+      const provisionalIds = new Set((state.provisionalEntities ?? []).filter((item) => item.jobId === artifact.jobId && item.projectId === artifact.projectId).map((item) => item.id));
+      if (accepted && (provisionalIds.has(edge.sourceEntityId) || provisionalIds.has(edge.targetEntityId))) throw new Error('Story-Graph-Kante muss vor der Bestätigung materialisierte Entitäten verwenden.');
       state.graphEdges = (state.graphEdges ?? []).map((item) => item.id === edge.id ? { ...item, status: accepted ? 'confirmed' : uncertain ? 'uncertain' : 'rejected', authorConfirmed: accepted, updatedAt: now() } : item);
     } else if (artifact.artifactType === 'provisional_entity') {
       const entity = (state.provisionalEntities ?? []).find((item) => item.id === artifact.artifactId && item.projectId === artifact.projectId);
       if (!entity) throw new Error('Vorläufige Entität des Artefakts nicht gefunden.');
-      if (accepted) throw new Error('Vorläufige Entitäten müssen vor der Bestätigung materialisiert werden.');
+      if (accepted) {
+        this.write(state);
+        await this.materializeProvisionalEntity({ jobId: artifact.jobId, projectId: artifact.projectId, provisionalEntityId: entity.id, decision: entity.existingEntityId ? 'merge' : 'accept', existingEntityId: entity.existingEntityId });
+        const materializedState = this.read();
+        const materializedArtifact = (materializedState.manuscriptAnalysisArtifacts ?? []).find((item) => item.id === id);
+        if (!materializedArtifact) throw new Error('Artefakt der materialisierten Entität nicht gefunden.');
+        const savedMaterialized: ManuscriptAnalysisArtifact = { ...materializedArtifact, reviewStatus: 'confirmed', explicitlySkipped: false, updatedAt: now() };
+        materializedState.manuscriptAnalysisArtifacts = (materializedState.manuscriptAnalysisArtifacts ?? []).map((item) => item.id === id ? savedMaterialized : item);
+        this.write(materializedState);
+        return clone(savedMaterialized);
+      }
       state.provisionalEntities = (state.provisionalEntities ?? []).map((item) => item.id === entity.id ? { ...item, reviewStatus: uncertain ? 'uncertain' : 'rejected', updatedAt: now() } : item);
     } else if (artifact.artifactType === 'provisional_merge') {
       const merge = (state.provisionalMergeProposals ?? []).find((item) => item.id === artifact.artifactId && item.projectId === artifact.projectId);
       if (!merge) throw new Error('Vorläufiger Merge-Vorschlag des Artefakts nicht gefunden.');
+      if (accepted) {
+        if (!merge.existingEntityId) throw new Error('Ein Merge muss vor der Bestätigung ein bestehendes Ziel auswählen.');
+        this.write(state);
+        await this.materializeProvisionalEntity({ jobId: artifact.jobId, projectId: artifact.projectId, provisionalEntityId: merge.leftProvisionalEntityId, decision: 'merge', existingEntityId: merge.existingEntityId });
+        const materializedState = this.read();
+        const savedMerge = (materializedState.provisionalMergeProposals ?? []).map((item) => item.id === merge.id ? { ...item, reviewStatus: 'merged' as const } : item);
+        materializedState.provisionalMergeProposals = savedMerge as typeof materializedState.provisionalMergeProposals;
+        const savedArtifact: ManuscriptAnalysisArtifact = { ...artifact, reviewStatus: 'confirmed', explicitlySkipped: false, updatedAt: now() };
+        materializedState.manuscriptAnalysisArtifacts = (materializedState.manuscriptAnalysisArtifacts ?? []).map((item) => item.id === id ? savedArtifact : item);
+        this.write(materializedState);
+        return clone(savedArtifact);
+      }
       (state.provisionalMergeProposals ??= []); state.provisionalMergeProposals = state.provisionalMergeProposals.map((item) => item.id === merge.id ? { ...item, reviewStatus: uncertain ? 'uncertain' : 'rejected' } : item);
     } else if (!['book_end_state_proposal'].includes(artifact.artifactType)) throw new Error('Unbekannter fachlicher Artefakttyp.');
     const saved: ManuscriptAnalysisArtifact = { ...artifact, reviewStatus: explicitlySkipped || status === 'skipped' ? 'skipped' : status, explicitlySkipped: explicitlySkipped || status === 'skipped', updatedAt: now() };

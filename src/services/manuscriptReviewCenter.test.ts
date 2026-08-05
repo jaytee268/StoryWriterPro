@@ -66,4 +66,30 @@ describe('jobgebundenes Manuskript-Importreview', () => {
     ]);
     expect((await repository.listManuscriptAnalysisArtifacts(job.id)).map((item) => item.artifactType)).toEqual(['timeline_event', 'story_graph_edge', 'provisional_entity', 'provisional_merge']);
   });
+
+  it('materialisiert eine bestätigte provisorische Entität und hält einen Merge ohne Ziel pending', async () => {
+    const repository = new BrowserDemoRepository(); const workspace = await repository.loadWorkspace(); const job = await repository.createManuscriptAnalysisJob({ projectId: workspace.project.id, bookId: workspace.books[0]!.id, importReference: 'review-materialize', providerId: 'local-prototype', units: [] });
+    const provisional = await repository.saveProvisionalEntity({ jobId: job.id, projectId: workspace.project.id, entityType: 'object', canonicalName: 'Der Schlüssel', aliases: ['Schlüssel'], description: 'Ein vorgeschlagener Gegenstand.', confidence: .8, reviewStatus: 'proposed' });
+    const entityArtifact = (await repository.saveManuscriptAnalysisArtifacts(job.id, [{ jobId: job.id, projectId: workspace.project.id, phase: 'passage_continuity', artifactType: 'provisional_entity', artifactId: provisional.id, reviewStatus: 'pending', explicitlySkipped: false }]))[0]!;
+    await repository.reviewManuscriptAnalysisArtifactDecision(entityArtifact.id, 'confirmed');
+    const after = await repository.loadWorkspace();
+    expect(after.entities.some((entity) => entity.name === 'Der Schlüssel' && entity.authorConfirmed)).toBe(true);
+    expect((await repository.listProvisionalEntities(job.id)).find((item) => item.id === provisional.id)?.reviewStatus).toBe('accepted');
+
+    const pendingMerge = await repository.saveProvisionalEntity({ jobId: job.id, projectId: workspace.project.id, entityType: 'object', canonicalName: 'Ohne Ziel', aliases: [], description: '', confidence: .4, reviewStatus: 'proposed' });
+    const merge = await repository.saveProvisionalMergeProposal({ jobId: job.id, projectId: workspace.project.id, leftProvisionalEntityId: pendingMerge.id, reason: 'Ziel fehlt', confidence: .5, reviewStatus: 'proposed' });
+    const mergeArtifact = (await repository.saveManuscriptAnalysisArtifacts(job.id, [{ jobId: job.id, projectId: workspace.project.id, phase: 'passage_continuity', artifactType: 'provisional_merge', artifactId: merge.id, reviewStatus: 'pending', explicitlySkipped: false }]))[0]!;
+    await expect(repository.reviewManuscriptAnalysisArtifactDecision(mergeArtifact.id, 'confirmed')).rejects.toThrow('bestehendes Ziel');
+    expect((await repository.listManuscriptAnalysisArtifacts(job.id)).find((item) => item.id === mergeArtifact.id)?.reviewStatus).toBe('pending');
+  });
+
+  it('bestätigt ein Finding fachlich ohne den objektiven Konflikt als gelöst auszugeben', async () => {
+    const repository = new BrowserDemoRepository(); const workspace = await repository.loadWorkspace(); const job = await repository.createManuscriptAnalysisJob({ projectId: workspace.project.id, bookId: workspace.books[0]!.id, importReference: 'review-finding', providerId: 'local-prototype', units: [] });
+    const run = await repository.createContinuityReviewRun({ projectId: workspace.project.id, chapterId: workspace.chapters[0]!.id, sceneId: workspace.chapters[0]!.scenes[0]!.id, sourceKind: 'manual', contentHash: 'finding-hash', providerId: 'local-prototype' });
+    const finding = (await repository.saveContinuityReviewFindings(run.id, [{ runId: run.id, projectId: workspace.project.id, findingType: 'probable_contradiction', severity: 'warning', relatedEntityIds: [], relatedStateIds: [], relatedRuleIds: [], objectiveConflict: 'Zustand widerspricht sich.', loreExplanations: [], evidenceExcerpt: 'Beleg', counterEvidenceExcerpts: [], confidence: .7, reason: 'Prüfung', reviewStatus: 'open' }]))[0]!;
+    const artifact = (await repository.saveManuscriptAnalysisArtifacts(job.id, [{ jobId: job.id, projectId: workspace.project.id, phase: 'global_countercheck', artifactType: 'global_countercheck_finding', artifactId: finding.id, reviewStatus: 'pending', explicitlySkipped: false }]))[0]!;
+    await repository.reviewManuscriptAnalysisArtifactDecision(artifact.id, 'confirmed');
+    expect((await repository.listContinuityReviewFindings(workspace.project.id)).find((item) => item.id === finding.id)).toMatchObject({ reviewStatus: 'accepted' });
+    expect((await repository.listManuscriptAnalysisArtifacts(job.id)).find((item) => item.id === artifact.id)?.reviewStatus).toBe('confirmed');
+  });
 });
