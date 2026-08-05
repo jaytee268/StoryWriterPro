@@ -6076,11 +6076,12 @@ fn provisional_mention_from_row(row: &rusqlite::Row<'_>) -> SqlResult<Provisiona
         excerpt: row.get(8)?,
         mention_text: row.get(9)?,
         resolved_provisional_entity_id: row.get(10)?,
-        alternative_entity_ids: serde_json::from_str(&row.get::<_, String>(11)?)
+        canonical_entity_id: row.get(11)?,
+        alternative_entity_ids: serde_json::from_str(&row.get::<_, String>(12)?)
             .unwrap_or_default(),
-        confidence: row.get(12)?,
-        resolution_reason: row.get(13)?,
-        created_at: row.get(14)?,
+        confidence: row.get(13)?,
+        resolution_reason: row.get(14)?,
+        created_at: row.get(15)?,
     })
 }
 fn provisional_merge_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ProvisionalMergeProposal> {
@@ -6134,6 +6135,19 @@ pub fn save_provisional_entity(
     db.query_row("SELECT id,job_id,project_id,entity_type,canonical_name,aliases_json,description,first_source_reference_id,last_source_reference_id,confidence,review_status,existing_entity_id,created_at,updated_at FROM provisional_entities WHERE id=?1", params![id], provisional_entity_from_row).map_err(|e| sql_error("Provisorische Entität konnte nicht geladen werden", e))
 }
 
+fn replace_json_array_entity_id(json: &str, old_id: &str, canonical_id: &str) -> String {
+    let mut value = serde_json::from_str::<serde_json::Value>(json)
+        .unwrap_or_else(|_| serde_json::Value::Array(Vec::new()));
+    if let serde_json::Value::Array(items) = &mut value {
+        for item in items {
+            if item.as_str() == Some(old_id) {
+                *item = serde_json::Value::String(canonical_id.to_owned());
+            }
+        }
+    }
+    serde_json::to_string(&value).unwrap_or_else(|_| "[]".into())
+}
+
 fn materialize_provisional_entity_in_transaction(
     transaction: &rusqlite::Transaction<'_>,
     input: &MaterializeProvisionalEntityInput,
@@ -6151,9 +6165,36 @@ fn materialize_provisional_entity_in_transaction(
     if job_project != input.project_id {
         return Err("Analysejob gehört nicht zum Projekt.".into());
     }
-    let provisional: (String, String, String, String, f64, Option<String>) = transaction.query_row("SELECT entity_type,canonical_name,aliases_json,description,confidence,existing_entity_id FROM provisional_entities WHERE id=?1 AND job_id=?2 AND project_id=?3", params![input.provisional_entity_id, input.job_id, input.project_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))).map_err(|e| sql_error("Provisorische Entität konnte nicht geladen werden", e))?;
+    let provisional: (String, String, String, String, f64, Option<String>, String) = transaction.query_row("SELECT entity_type,canonical_name,aliases_json,description,confidence,existing_entity_id,review_status FROM provisional_entities WHERE id=?1 AND job_id=?2 AND project_id=?3", params![input.provisional_entity_id, input.job_id, input.project_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?))).map_err(|e| sql_error("Provisorische Entität konnte nicht geladen werden", e))?;
     let target_id = input.existing_entity_id.clone().or(provisional.5.clone());
-    let canonical_id = if let Some(existing_id) = target_id.clone() {
+    let mut already_materialized_id = None;
+    if matches!(provisional.6.as_str(), "accepted" | "merged") {
+        if let Some(stored_id) = provisional.5.clone() {
+            if input
+                .existing_entity_id
+                .as_ref()
+                .is_some_and(|requested_id| requested_id != &stored_id)
+            {
+                return Err(
+                    "Die provisorische Entität wurde bereits mit einer anderen Entität verknüpft."
+                        .into(),
+                );
+            }
+            let valid: bool = transaction
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM story_entities WHERE id=?1 AND project_id=?2)",
+                    params![stored_id, input.project_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| sql_error("Zielentität konnte nicht geprüft werden", e))?;
+            if valid {
+                already_materialized_id = Some(stored_id);
+            }
+        }
+    }
+    let canonical_id = if let Some(existing_id) = already_materialized_id {
+        existing_id
+    } else if let Some(existing_id) = target_id.clone() {
         let valid: bool = transaction
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM story_entities WHERE id=?1 AND project_id=?2)",
@@ -6187,22 +6228,29 @@ fn materialize_provisional_entity_in_transaction(
             params![old_id, canonical_id, input.project_id],
         )
         .map_err(|e| sql_error("Quellen konnten nicht umgehängt werden", e))?;
-    transaction.execute("UPDATE provisional_entity_mentions SET resolved_provisional_entity_id=?2, alternative_entity_ids_json=REPLACE(alternative_entity_ids_json,?1,?2) WHERE job_id=?3 AND project_id=?4", params![old_id, canonical_id, input.job_id, input.project_id]).map_err(|e| sql_error("Entitätserwähnungen konnten nicht umgehängt werden", e))?;
-    transaction.execute("UPDATE provisional_relations SET source_provisional_entity_id=CASE WHEN source_provisional_entity_id=?1 THEN ?2 ELSE source_provisional_entity_id END, target_provisional_entity_id=CASE WHEN target_provisional_entity_id=?1 THEN ?2 ELSE target_provisional_entity_id END WHERE job_id=?3 AND project_id=?4", params![old_id, canonical_id, input.job_id, input.project_id]).map_err(|e| sql_error("Beziehungen konnten nicht umgehängt werden", e))?;
-    for (table, column) in [
-        ("provisional_events", "participant_entity_ids_json"),
-        (
-            "manuscript_timeline_events",
-            "participating_entity_ids_json",
-        ),
-    ] {
+    transaction
+        .execute(
+            "UPDATE bible_proposals SET target_entity_id=?2 WHERE target_entity_id=?1 AND project_id=?3",
+            params![old_id, canonical_id, input.project_id],
+        )
+        .map_err(|e| sql_error("Bible-Vorschläge konnten nicht umgehängt werden", e))?;
+    transaction.execute("UPDATE provisional_entity_mentions SET canonical_entity_id=?2 WHERE job_id=?3 AND project_id=?4 AND resolved_provisional_entity_id=?1", params![old_id, canonical_id, input.job_id, input.project_id]).map_err(|e| sql_error("Entitätserwähnungen konnten nicht verknüpft werden", e))?;
+    transaction.execute("UPDATE provisional_relations SET canonical_source_entity_id=CASE WHEN source_provisional_entity_id=?1 THEN ?2 ELSE canonical_source_entity_id END, canonical_target_entity_id=CASE WHEN target_provisional_entity_id=?1 THEN ?2 ELSE canonical_target_entity_id END WHERE job_id=?3 AND project_id=?4", params![old_id, canonical_id, input.job_id, input.project_id]).map_err(|e| sql_error("Beziehungen konnten nicht kanonisch verknüpft werden", e))?;
+    let provisional_events: Vec<(String, String)> = transaction
+        .prepare("SELECT id,participant_entity_ids_json FROM provisional_events WHERE job_id=?1 AND project_id=?2")
+        .map_err(|e| sql_error("Provisorische Ereignisse konnten nicht gelesen werden", e))?
+        .query_map(params![input.job_id, input.project_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|e| sql_error("Provisorische Ereignisse konnten nicht gelesen werden", e))?
+        .collect::<SqlResult<Vec<_>>>()
+        .map_err(|e| sql_error("Provisorische Ereignisse konnten nicht gelesen werden", e))?;
+    for (event_id, participant_ids) in provisional_events {
+        let canonical_participants =
+            replace_json_array_entity_id(&participant_ids, old_id, &canonical_id);
         transaction
-            .execute(
-                &format!("UPDATE {table} SET {column}=REPLACE({column},?1,?2) WHERE project_id=?3"),
-                params![old_id, canonical_id, input.project_id],
-            )
-            .map_err(|e| sql_error("Ereignisbeteiligte konnten nicht umgehängt werden", e))?;
+            .execute("UPDATE provisional_events SET canonical_participant_entity_ids_json=?1 WHERE id=?2", params![canonical_participants, event_id])
+            .map_err(|e| sql_error("Provisorische Ereignisbeteiligte konnten nicht verknüpft werden", e))?;
     }
+    transaction.execute("UPDATE manuscript_timeline_events SET participating_entity_ids_json=REPLACE(participating_entity_ids_json,?1,?2) WHERE project_id=?3", params![old_id, canonical_id, input.project_id]).map_err(|e| sql_error("Ereignisbeteiligte konnten nicht umgehängt werden", e))?;
     transaction.execute("UPDATE story_graph_edges SET source_entity_id=CASE WHEN source_entity_id=?1 THEN ?2 ELSE source_entity_id END, target_entity_id=CASE WHEN target_entity_id=?1 THEN ?2 ELSE target_entity_id END, source_reference_ids_json=REPLACE(source_reference_ids_json,?1,?2) WHERE project_id=?3", params![old_id, canonical_id, input.project_id]).map_err(|e| sql_error("Graph-Kanten konnten nicht umgehängt werden", e))?;
     transaction.execute("UPDATE character_memory_proposals SET subject_character_id=CASE WHEN subject_character_id=?1 THEN ?2 ELSE subject_character_id END, related_character_id=CASE WHEN related_character_id=?1 THEN ?2 ELSE related_character_id END, target_entity_id=CASE WHEN target_entity_id=?1 THEN ?2 ELSE target_entity_id END, payload_json=REPLACE(payload_json,?1,?2) WHERE project_id=?3", params![old_id, canonical_id, input.project_id]).map_err(|e| sql_error("Character-Memory-Verweise konnten nicht umgehängt werden", e))?;
     transaction.execute("UPDATE manuscript_analysis_draft_ledger SET entity_id=CASE WHEN entity_id=?1 THEN ?2 ELSE entity_id END, related_entity_id=CASE WHEN related_entity_id=?1 THEN ?2 ELSE related_entity_id END WHERE job_id=?3 AND project_id=?4", params![old_id, canonical_id, input.job_id, input.project_id]).map_err(|e| sql_error("Draft-Zustände konnten nicht umgehängt werden", e))?;
@@ -6292,7 +6340,7 @@ pub fn list_provisional_entity_mentions(
 ) -> Result<Vec<ProvisionalEntityMention>, String> {
     let db = lock_db(&state)?;
     let job = load_manuscript_analysis_job(&db, &job_id)?;
-    let mut statement = db.prepare("SELECT id,job_id,project_id,passage_unit_id,chapter_id,scene_id,start_offset,end_offset,excerpt,mention_text,resolved_provisional_entity_id,alternative_entity_ids_json,confidence,resolution_reason,created_at FROM provisional_entity_mentions WHERE job_id=?1 AND project_id=?2 ORDER BY chapter_id,start_offset").map_err(|e| sql_error("Erwähnungen konnten nicht geladen werden", e))?;
+    let mut statement = db.prepare("SELECT id,job_id,project_id,passage_unit_id,chapter_id,scene_id,start_offset,end_offset,excerpt,mention_text,resolved_provisional_entity_id,canonical_entity_id,alternative_entity_ids_json,confidence,resolution_reason,created_at FROM provisional_entity_mentions WHERE job_id=?1 AND project_id=?2 ORDER BY chapter_id,start_offset").map_err(|e| sql_error("Erwähnungen konnten nicht geladen werden", e))?;
     let result = statement
         .query_map(
             params![job_id, job.project_id],
@@ -6330,7 +6378,7 @@ pub fn save_provisional_mentions(
         let id = input.id.unwrap_or_else(new_id);
         let alternatives =
             serde_json::to_string(&input.alternative_entity_ids).unwrap_or_else(|_| "[]".into());
-        transaction.execute("INSERT INTO provisional_entity_mentions(id,job_id,project_id,passage_unit_id,chapter_id,scene_id,start_offset,end_offset,excerpt,mention_text,resolved_provisional_entity_id,alternative_entity_ids_json,confidence,resolution_reason,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)", params![id,input.job_id,input.project_id,input.passage_unit_id,input.chapter_id,input.scene_id,input.start_offset,input.end_offset,input.excerpt,input.mention_text,input.resolved_provisional_entity_id,alternatives,input.confidence,input.resolution_reason,now()]).map_err(|e| sql_error("Provisorische Erwähnung konnte nicht gespeichert werden", e))?;
+        transaction.execute("INSERT INTO provisional_entity_mentions(id,job_id,project_id,passage_unit_id,chapter_id,scene_id,start_offset,end_offset,excerpt,mention_text,resolved_provisional_entity_id,canonical_entity_id,alternative_entity_ids_json,confidence,resolution_reason,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,NULL,?12,?13,?14,?15)", params![id,input.job_id,input.project_id,input.passage_unit_id,input.chapter_id,input.scene_id,input.start_offset,input.end_offset,input.excerpt,input.mention_text,input.resolved_provisional_entity_id,alternatives,input.confidence,input.resolution_reason,now()]).map_err(|e| sql_error("Provisorische Erwähnung konnte nicht gespeichert werden", e))?;
     }
     transaction
         .commit()
@@ -6380,13 +6428,15 @@ fn provisional_relation_from_row(row: &rusqlite::Row<'_>) -> SqlResult<Provision
         project_id: row.get(2)?,
         source_provisional_entity_id: row.get(3)?,
         target_provisional_entity_id: row.get(4)?,
-        relation_type: row.get(5)?,
-        label: row.get(6)?,
-        confidence: row.get(7)?,
-        review_status: row.get(8)?,
-        source_reference_id: row.get(9)?,
-        created_at: row.get(10)?,
-        updated_at: row.get(11)?,
+        canonical_source_entity_id: row.get(5)?,
+        canonical_target_entity_id: row.get(6)?,
+        relation_type: row.get(7)?,
+        label: row.get(8)?,
+        confidence: row.get(9)?,
+        review_status: row.get(10)?,
+        source_reference_id: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
     })
 }
 fn provisional_event_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ProvisionalEvent> {
@@ -6400,12 +6450,14 @@ fn provisional_event_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ProvisionalE
         title: row.get(6)?,
         summary: row.get(7)?,
         participant_entity_ids: serde_json::from_str(&row.get::<_, String>(8)?).unwrap_or_default(),
-        start_offset: row.get(9)?,
-        end_offset: row.get(10)?,
-        confidence: row.get(11)?,
-        review_status: row.get(12)?,
-        source_reference_id: row.get(13)?,
-        created_at: row.get(14)?,
+        canonical_participant_entity_ids: serde_json::from_str(&row.get::<_, String>(9)?)
+            .unwrap_or_default(),
+        start_offset: row.get(10)?,
+        end_offset: row.get(11)?,
+        confidence: row.get(12)?,
+        review_status: row.get(13)?,
+        source_reference_id: row.get(14)?,
+        created_at: row.get(15)?,
     })
 }
 
@@ -6421,8 +6473,8 @@ pub fn save_provisional_relation(
     }
     let id = input.id.unwrap_or_else(new_id);
     let stamp = now();
-    db.execute("INSERT INTO provisional_relations(id,job_id,project_id,source_provisional_entity_id,target_provisional_entity_id,relation_type,label,confidence,review_status,source_reference_id,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,COALESCE(?9,'proposed'),?10,?11,?11) ON CONFLICT(id) DO UPDATE SET label=excluded.label,confidence=excluded.confidence,review_status=excluded.review_status,updated_at=excluded.updated_at", params![id,input.job_id,input.project_id,input.source_provisional_entity_id,input.target_provisional_entity_id,input.relation_type,input.label,input.confidence,input.review_status,input.source_reference_id,stamp]).map_err(|e| sql_error("Provisorische Beziehung konnte nicht gespeichert werden", e))?;
-    db.query_row("SELECT id,job_id,project_id,source_provisional_entity_id,target_provisional_entity_id,relation_type,label,confidence,review_status,source_reference_id,created_at,updated_at FROM provisional_relations WHERE id=?1", params![id], provisional_relation_from_row).map_err(|e| sql_error("Provisorische Beziehung konnte nicht geladen werden", e))
+    db.execute("INSERT INTO provisional_relations(id,job_id,project_id,source_provisional_entity_id,target_provisional_entity_id,canonical_source_entity_id,canonical_target_entity_id,relation_type,label,confidence,review_status,source_reference_id,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,NULL,NULL,?6,?7,?8,COALESCE(?9,'proposed'),?10,?11,?11) ON CONFLICT(id) DO UPDATE SET label=excluded.label,confidence=excluded.confidence,review_status=excluded.review_status,updated_at=excluded.updated_at", params![id,input.job_id,input.project_id,input.source_provisional_entity_id,input.target_provisional_entity_id,input.relation_type,input.label,input.confidence,input.review_status,input.source_reference_id,stamp]).map_err(|e| sql_error("Provisorische Beziehung konnte nicht gespeichert werden", e))?;
+    db.query_row("SELECT id,job_id,project_id,source_provisional_entity_id,target_provisional_entity_id,canonical_source_entity_id,canonical_target_entity_id,relation_type,label,confidence,review_status,source_reference_id,created_at,updated_at FROM provisional_relations WHERE id=?1", params![id], provisional_relation_from_row).map_err(|e| sql_error("Provisorische Beziehung konnte nicht geladen werden", e))
 }
 
 #[tauri::command]
@@ -6443,8 +6495,8 @@ pub fn save_provisional_event(
     let participants =
         serde_json::to_string(&input.participant_entity_ids).unwrap_or_else(|_| "[]".into());
     let stamp = now();
-    db.execute("INSERT INTO provisional_events(id,job_id,project_id,passage_unit_id,chapter_id,scene_id,title,summary,participant_entity_ids_json,start_offset,end_offset,confidence,review_status,source_reference_id,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,COALESCE(?13,'proposed'),?14,?15)", params![id,input.job_id,input.project_id,input.passage_unit_id,input.chapter_id,input.scene_id,input.title,input.summary,participants,input.start_offset,input.end_offset,input.confidence,input.review_status,input.source_reference_id,stamp]).map_err(|e| sql_error("Provisorisches Ereignis konnte nicht gespeichert werden", e))?;
-    db.query_row("SELECT id,job_id,project_id,passage_unit_id,chapter_id,scene_id,title,summary,participant_entity_ids_json,start_offset,end_offset,confidence,review_status,source_reference_id,created_at FROM provisional_events WHERE id=?1", params![id], provisional_event_from_row).map_err(|e| sql_error("Provisorisches Ereignis konnte nicht geladen werden", e))
+    db.execute("INSERT INTO provisional_events(id,job_id,project_id,passage_unit_id,chapter_id,scene_id,title,summary,participant_entity_ids_json,canonical_participant_entity_ids_json,start_offset,end_offset,confidence,review_status,source_reference_id,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'[]',?10,?11,?12,COALESCE(?13,'proposed'),?14,?15)", params![id,input.job_id,input.project_id,input.passage_unit_id,input.chapter_id,input.scene_id,input.title,input.summary,participants,input.start_offset,input.end_offset,input.confidence,input.review_status,input.source_reference_id,stamp]).map_err(|e| sql_error("Provisorisches Ereignis konnte nicht gespeichert werden", e))?;
+    db.query_row("SELECT id,job_id,project_id,passage_unit_id,chapter_id,scene_id,title,summary,participant_entity_ids_json,canonical_participant_entity_ids_json,start_offset,end_offset,confidence,review_status,source_reference_id,created_at FROM provisional_events WHERE id=?1", params![id], provisional_event_from_row).map_err(|e| sql_error("Provisorisches Ereignis konnte nicht geladen werden", e))
 }
 
 fn timeline_event_from_row(row: &rusqlite::Row<'_>) -> SqlResult<PersistentTimelineEvent> {
@@ -9624,6 +9676,199 @@ mod tests {
     }
 
     #[test]
+    fn materializing_provisional_entity_preserves_provisional_graph_and_is_idempotent() {
+        let (path, db) = connection("provisional-materialization");
+        db.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        let imported = create_manuscript_import_in_db(
+            &db,
+            CreateManuscriptImportInput {
+                project_id: "project-zugestellt".into(),
+                book_id: "book-1".into(),
+                original_text: "Marek hält den Brief.".into(),
+                original_content_hash: "provisional-materialization-hash".into(),
+                file_name: "materialization.txt".into(),
+                source_kind: "external_text".into(),
+                chapters: vec![CreateManuscriptImportChapterInput {
+                    title: "Materialisierung".into(),
+                    content: "Marek hält den Brief.".into(),
+                    page_markers: Vec::new(),
+                    units: vec![ManuscriptImportUnitInput {
+                        page_number: None,
+                        start_offset: 0,
+                        end_offset: "Marek hält den Brief.".chars().count() as i64,
+                        content: "Marek hält den Brief.".into(),
+                        content_hash: "provisional-unit-hash".into(),
+                    }],
+                }],
+                page_markers: Vec::new(),
+                provider_id: "fake-provider".into(),
+                new_version: true,
+                onboarding: None,
+            },
+        )
+        .unwrap();
+        let job_id = imported.analysis_job.id;
+        let chapter_id = imported.import_version.id.clone();
+        let chapter_id: String = db
+            .query_row(
+                "SELECT id FROM chapters WHERE import_version_id=?1",
+                params![chapter_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let scene_id: String = db
+            .query_row(
+                "SELECT id FROM scenes WHERE chapter_id=?1",
+                params![chapter_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let unit_id: String = db
+            .query_row(
+                "SELECT id FROM manuscript_analysis_units WHERE job_id=?1",
+                params![job_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        for id in ["prov-marek", "prov-brief"] {
+            db.execute(
+                "INSERT INTO provisional_entities(id,job_id,project_id,entity_type,canonical_name,aliases_json,description,confidence,review_status) VALUES(?1,?2,'project-zugestellt','character',?3,'[]','',0.8,'proposed')",
+                params![id, job_id, if id == "prov-marek" { "Marek" } else { "Brief" }],
+            )
+            .unwrap();
+        }
+        db.execute(
+            "INSERT INTO provisional_entity_mentions(id,job_id,project_id,passage_unit_id,chapter_id,scene_id,start_offset,end_offset,excerpt,mention_text,resolved_provisional_entity_id,alternative_entity_ids_json,confidence,resolution_reason) VALUES('mention-1',?1,'project-zugestellt',?2,?3,?4,0,5,'Marek','Marek','prov-marek','[\"prov-brief\"]',0.9,'')",
+            params![job_id, unit_id, chapter_id, scene_id],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO provisional_relations(id,job_id,project_id,source_provisional_entity_id,target_provisional_entity_id,relation_type,label,confidence,review_status) VALUES('relation-1',?1,'project-zugestellt','prov-marek','prov-brief','knows','kennt',0.7,'proposed')",
+            params![job_id],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO provisional_events(id,job_id,project_id,passage_unit_id,chapter_id,scene_id,title,summary,participant_entity_ids_json,start_offset,end_offset,confidence,review_status) VALUES('event-1',?1,'project-zugestellt',?2,?3,?4,'Halten','Marek hält den Brief.','[\"prov-marek\",\"prov-brief\"]',0,21,0.8,'proposed')",
+            params![job_id, unit_id, chapter_id, scene_id],
+        )
+        .unwrap();
+
+        let canonical_id = {
+            let tx = db.unchecked_transaction().unwrap();
+            let id = materialize_provisional_entity_in_transaction(
+                &tx,
+                &MaterializeProvisionalEntityInput {
+                    project_id: "project-zugestellt".into(),
+                    job_id: job_id.clone(),
+                    provisional_entity_id: "prov-marek".into(),
+                    existing_entity_id: None,
+                    decision: "accept".into(),
+                },
+            )
+            .unwrap();
+            tx.commit().unwrap();
+            id
+        };
+        assert_ne!(canonical_id, "prov-marek");
+        assert_eq!(
+            db.query_row(
+                "SELECT resolved_provisional_entity_id,canonical_entity_id,alternative_entity_ids_json FROM provisional_entity_mentions WHERE id='mention-1'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+            )
+            .unwrap(),
+            ("prov-marek".into(), canonical_id.clone(), "[\"prov-brief\"]".into())
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT source_provisional_entity_id,target_provisional_entity_id,canonical_source_entity_id FROM provisional_relations WHERE id='relation-1'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+            )
+            .unwrap(),
+            ("prov-marek".into(), "prov-brief".into(), canonical_id.clone())
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT participant_entity_ids_json,canonical_participant_entity_ids_json FROM provisional_events WHERE id='event-1'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .unwrap(),
+            ("[\"prov-marek\",\"prov-brief\"]".into(), format!("[\"{canonical_id}\",\"prov-brief\"]"))
+        );
+        let second = {
+            let tx = db.unchecked_transaction().unwrap();
+            let id = materialize_provisional_entity_in_transaction(
+                &tx,
+                &MaterializeProvisionalEntityInput {
+                    project_id: "project-zugestellt".into(),
+                    job_id: job_id.clone(),
+                    provisional_entity_id: "prov-marek".into(),
+                    existing_entity_id: None,
+                    decision: "accept".into(),
+                },
+            )
+            .unwrap();
+            tx.commit().unwrap();
+            id
+        };
+        assert_eq!(second, canonical_id);
+
+        let merged_id = {
+            let tx = db.unchecked_transaction().unwrap();
+            let id = materialize_provisional_entity_in_transaction(
+                &tx,
+                &MaterializeProvisionalEntityInput {
+                    project_id: "project-zugestellt".into(),
+                    job_id: job_id.clone(),
+                    provisional_entity_id: "prov-brief".into(),
+                    existing_entity_id: Some("entity-lena".into()),
+                    decision: "merge".into(),
+                },
+            )
+            .unwrap();
+            tx.commit().unwrap();
+            id
+        };
+        assert_eq!(merged_id, "entity-lena");
+        assert_eq!(
+            db.query_row(
+                "SELECT source_provisional_entity_id,target_provisional_entity_id,canonical_target_entity_id FROM provisional_relations WHERE id='relation-1'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+            )
+            .unwrap(),
+            ("prov-marek".into(), "prov-brief".into(), "entity-lena".into())
+        );
+
+        let before: i64 = db
+            .query_row("SELECT COUNT(*) FROM story_entities", [], |row| row.get(0))
+            .unwrap();
+        let tx = db.unchecked_transaction().unwrap();
+        assert!(materialize_provisional_entity_in_transaction(
+            &tx,
+            &MaterializeProvisionalEntityInput {
+                project_id: "project-zugestellt".into(),
+                job_id,
+                provisional_entity_id: "prov-brief".into(),
+                existing_entity_id: Some("missing-project-entity".into()),
+                decision: "merge".into(),
+            },
+        )
+        .is_err());
+        drop(tx);
+        assert_eq!(
+            db.query_row("SELECT COUNT(*) FROM story_entities", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            before
+        );
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn transactional_manuscript_import_persists_version_job_units_and_resume() {
         let (path, db) = connection("transactional-manuscript-import");
         let chapter = CreateManuscriptImportChapterInput {
@@ -10360,7 +10605,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            35
+            36
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);

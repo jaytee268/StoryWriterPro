@@ -699,6 +699,17 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
         ))?;
         connection.execute("INSERT INTO schema_migrations (version) VALUES (35)", [])?;
     }
+    let has_provisional_canonical_links: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 36",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_provisional_canonical_links == 0 {
+        connection.execute_batch(include_str!(
+            "../../../migrations/036_provisional_canonical_links.sql"
+        ))?;
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (36)", [])?;
+    }
     Ok(())
 }
 
@@ -854,7 +865,7 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            35
+            36
         );
         assert_eq!(
             connection
@@ -1182,7 +1193,7 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                35
+                36
             );
             // Running startup migrations again must not change the assignment
             // or fail on the ALTER TABLE statement.
