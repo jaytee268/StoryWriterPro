@@ -33,6 +33,19 @@ describe('jobgebundenes Manuskript-Importreview', () => {
     expect((await repository.getManuscriptAnalysisJob(job.id)).status).toBe('completed');
   });
 
+  it('schließt optionale Genre-Ergebnisse normal ab und weist sie im Bericht sichtbar aus', async () => {
+    const repository = new BrowserDemoRepository(); const workspace = await repository.loadWorkspace();
+    const job = await repository.createManuscriptAnalysisJob({ projectId: workspace.project.id, bookId: workspace.books[0]!.id, importReference: 'review-optional-genre', providerId: 'local-prototype', units: [] });
+    await repository.saveManuscriptAnalysisArtifacts(job.id, [{ jobId: job.id, projectId: workspace.project.id, phase: 'book_end_state', artifactType: 'genre_detection', artifactId: job.bookId, reviewStatus: 'pending', explicitlySkipped: false }]);
+    await repository.updateManuscriptAnalysisJob({ id: job.id, status: 'awaiting_user_review', currentPhase: 'user_review' });
+
+    await new ManuscriptAnalysisController(repository, job.id).completeUserReview();
+
+    expect((await repository.getManuscriptAnalysisJob(job.id)).status).toBe('completed');
+    expect((await repository.listManuscriptAnalysisArtifacts(job.id))[0]).toMatchObject({ artifactType: 'genre_detection', reviewStatus: 'pending', explicitlySkipped: false });
+    expect((await repository.getManuscriptAnalysisCompletionReport(job.id))?.payload.openOptionalResults).toEqual([expect.objectContaining({ artifactType: 'genre_detection', reviewStatus: 'pending' })]);
+  });
+
   it('verknüpft eine Bestätigung mit dem echten Domänenobjekt', async () => {
     const repository = new BrowserDemoRepository(); const workspace = await repository.loadWorkspace();
     const job = await repository.createManuscriptAnalysisJob({ projectId: workspace.project.id, bookId: workspace.books[0]!.id, importReference: 'review-domain', providerId: 'local-prototype', units: [] });

@@ -6135,17 +6135,33 @@ pub fn save_provisional_entity(
     db.query_row("SELECT id,job_id,project_id,entity_type,canonical_name,aliases_json,description,first_source_reference_id,last_source_reference_id,confidence,review_status,existing_entity_id,created_at,updated_at FROM provisional_entities WHERE id=?1", params![id], provisional_entity_from_row).map_err(|e| sql_error("Provisorische Entität konnte nicht geladen werden", e))
 }
 
-fn replace_json_array_entity_id(json: &str, old_id: &str, canonical_id: &str) -> String {
+fn canonicalize_provisional_participants(
+    transaction: &rusqlite::Transaction<'_>,
+    json: &str,
+    job_id: &str,
+    project_id: &str,
+) -> Result<String, String> {
     let mut value = serde_json::from_str::<serde_json::Value>(json)
         .unwrap_or_else(|_| serde_json::Value::Array(Vec::new()));
     if let serde_json::Value::Array(items) = &mut value {
         for item in items {
-            if item.as_str() == Some(old_id) {
-                *item = serde_json::Value::String(canonical_id.to_owned());
+            if let Some(provisional_id) = item.as_str() {
+                let canonical_id: Option<String> = transaction
+                    .query_row(
+                        "SELECT existing_entity_id FROM provisional_entities WHERE id=?1 AND job_id=?2 AND project_id=?3",
+                        params![provisional_id, job_id, project_id],
+                        |row| row.get::<_, Option<String>>(0),
+                    )
+                    .optional()
+                    .map_err(|e| sql_error("Provisorische Ereignisbeteiligte konnten nicht aufgelöst werden", e))?
+                    .flatten();
+                if let Some(canonical_id) = canonical_id {
+                    *item = serde_json::Value::String(canonical_id);
+                }
             }
         }
     }
-    serde_json::to_string(&value).unwrap_or_else(|_| "[]".into())
+    Ok(serde_json::to_string(&value).unwrap_or_else(|_| "[]".into()))
 }
 
 fn materialize_provisional_entity_in_transaction(
@@ -6192,6 +6208,7 @@ fn materialize_provisional_entity_in_transaction(
             }
         }
     }
+    let was_already_materialized = already_materialized_id.is_some();
     let canonical_id = if let Some(existing_id) = already_materialized_id {
         existing_id
     } else if let Some(existing_id) = target_id.clone() {
@@ -6236,6 +6253,14 @@ fn materialize_provisional_entity_in_transaction(
         .map_err(|e| sql_error("Bible-Vorschläge konnten nicht umgehängt werden", e))?;
     transaction.execute("UPDATE provisional_entity_mentions SET canonical_entity_id=?2 WHERE job_id=?3 AND project_id=?4 AND resolved_provisional_entity_id=?1", params![old_id, canonical_id, input.job_id, input.project_id]).map_err(|e| sql_error("Entitätserwähnungen konnten nicht verknüpft werden", e))?;
     transaction.execute("UPDATE provisional_relations SET canonical_source_entity_id=CASE WHEN source_provisional_entity_id=?1 THEN ?2 ELSE canonical_source_entity_id END, canonical_target_entity_id=CASE WHEN target_provisional_entity_id=?1 THEN ?2 ELSE canonical_target_entity_id END WHERE job_id=?3 AND project_id=?4", params![old_id, canonical_id, input.job_id, input.project_id]).map_err(|e| sql_error("Beziehungen konnten nicht kanonisch verknüpft werden", e))?;
+    let materialized_status = if was_already_materialized {
+        provisional.6.as_str()
+    } else if target_id.is_some() {
+        "merged"
+    } else {
+        "accepted"
+    };
+    transaction.execute("UPDATE provisional_entities SET existing_entity_id=?2, review_status=?3, updated_at=?4 WHERE id=?1 AND job_id=?5 AND project_id=?6", params![old_id, canonical_id, materialized_status, now(), input.job_id, input.project_id]).map_err(|e| sql_error("Materialisierungsstatus konnte nicht gespeichert werden", e))?;
     let provisional_events: Vec<(String, String)> = transaction
         .prepare("SELECT id,participant_entity_ids_json FROM provisional_events WHERE job_id=?1 AND project_id=?2")
         .map_err(|e| sql_error("Provisorische Ereignisse konnten nicht gelesen werden", e))?
@@ -6244,8 +6269,12 @@ fn materialize_provisional_entity_in_transaction(
         .collect::<SqlResult<Vec<_>>>()
         .map_err(|e| sql_error("Provisorische Ereignisse konnten nicht gelesen werden", e))?;
     for (event_id, participant_ids) in provisional_events {
-        let canonical_participants =
-            replace_json_array_entity_id(&participant_ids, old_id, &canonical_id);
+        let canonical_participants = canonicalize_provisional_participants(
+            transaction,
+            &participant_ids,
+            &input.job_id,
+            &input.project_id,
+        )?;
         transaction
             .execute("UPDATE provisional_events SET canonical_participant_entity_ids_json=?1 WHERE id=?2", params![canonical_participants, event_id])
             .map_err(|e| sql_error("Provisorische Ereignisbeteiligte konnten nicht verknüpft werden", e))?;
@@ -6254,7 +6283,6 @@ fn materialize_provisional_entity_in_transaction(
     transaction.execute("UPDATE story_graph_edges SET source_entity_id=CASE WHEN source_entity_id=?1 THEN ?2 ELSE source_entity_id END, target_entity_id=CASE WHEN target_entity_id=?1 THEN ?2 ELSE target_entity_id END, source_reference_ids_json=REPLACE(source_reference_ids_json,?1,?2) WHERE project_id=?3", params![old_id, canonical_id, input.project_id]).map_err(|e| sql_error("Graph-Kanten konnten nicht umgehängt werden", e))?;
     transaction.execute("UPDATE character_memory_proposals SET subject_character_id=CASE WHEN subject_character_id=?1 THEN ?2 ELSE subject_character_id END, related_character_id=CASE WHEN related_character_id=?1 THEN ?2 ELSE related_character_id END, target_entity_id=CASE WHEN target_entity_id=?1 THEN ?2 ELSE target_entity_id END, payload_json=REPLACE(payload_json,?1,?2) WHERE project_id=?3", params![old_id, canonical_id, input.project_id]).map_err(|e| sql_error("Character-Memory-Verweise konnten nicht umgehängt werden", e))?;
     transaction.execute("UPDATE manuscript_analysis_draft_ledger SET entity_id=CASE WHEN entity_id=?1 THEN ?2 ELSE entity_id END, related_entity_id=CASE WHEN related_entity_id=?1 THEN ?2 ELSE related_entity_id END WHERE job_id=?3 AND project_id=?4", params![old_id, canonical_id, input.job_id, input.project_id]).map_err(|e| sql_error("Draft-Zustände konnten nicht umgehängt werden", e))?;
-    transaction.execute("UPDATE provisional_entities SET existing_entity_id=?2, review_status=?3, updated_at=?4 WHERE id=?1 AND job_id=?5 AND project_id=?6", params![old_id, canonical_id, if target_id.is_some() { "merged" } else { "accepted" }, now(), input.job_id, input.project_id]).map_err(|e| sql_error("Materialisierungsstatus konnte nicht gespeichert werden", e))?;
     Ok(canonical_id)
 }
 
@@ -9730,10 +9758,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        for id in ["prov-marek", "prov-brief"] {
+        for id in ["prov-marek", "prov-brief", "prov-third"] {
             db.execute(
                 "INSERT INTO provisional_entities(id,job_id,project_id,entity_type,canonical_name,aliases_json,description,confidence,review_status) VALUES(?1,?2,'project-zugestellt','character',?3,'[]','',0.8,'proposed')",
-                params![id, job_id, if id == "prov-marek" { "Marek" } else { "Brief" }],
+                params![id, job_id, match id { "prov-marek" => "Marek", "prov-brief" => "Brief", _ => "Dritte Figur" }],
             )
             .unwrap();
         }
@@ -9748,7 +9776,7 @@ mod tests {
         )
         .unwrap();
         db.execute(
-            "INSERT INTO provisional_events(id,job_id,project_id,passage_unit_id,chapter_id,scene_id,title,summary,participant_entity_ids_json,start_offset,end_offset,confidence,review_status) VALUES('event-1',?1,'project-zugestellt',?2,?3,?4,'Halten','Marek hält den Brief.','[\"prov-marek\",\"prov-brief\"]',0,21,0.8,'proposed')",
+            "INSERT INTO provisional_events(id,job_id,project_id,passage_unit_id,chapter_id,scene_id,title,summary,participant_entity_ids_json,start_offset,end_offset,confidence,review_status) VALUES('event-1',?1,'project-zugestellt',?2,?3,?4,'Halten','Marek hält den Brief.','[\"prov-marek\",\"prov-brief\",\"prov-third\"]',0,21,0.8,'proposed')",
             params![job_id, unit_id, chapter_id, scene_id],
         )
         .unwrap();
@@ -9795,7 +9823,7 @@ mod tests {
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
             .unwrap(),
-            ("[\"prov-marek\",\"prov-brief\"]".into(), format!("[\"{canonical_id}\",\"prov-brief\"]"))
+            ("[\"prov-marek\",\"prov-brief\",\"prov-third\"]".into(), format!("[\"{canonical_id}\",\"prov-brief\",\"prov-third\"]"))
         );
         let second = {
             let tx = db.unchecked_transaction().unwrap();
@@ -9840,6 +9868,41 @@ mod tests {
             )
             .unwrap(),
             ("prov-marek".into(), "prov-brief".into(), "entity-lena".into())
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT canonical_participant_entity_ids_json FROM provisional_events WHERE id='event-1'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            format!("[\"{canonical_id}\",\"entity-lena\",\"prov-third\"]")
+        );
+        let merged_third = {
+            let tx = db.unchecked_transaction().unwrap();
+            let id = materialize_provisional_entity_in_transaction(
+                &tx,
+                &MaterializeProvisionalEntityInput {
+                    project_id: "project-zugestellt".into(),
+                    job_id: job_id.clone(),
+                    provisional_entity_id: "prov-third".into(),
+                    existing_entity_id: Some("entity-marek".into()),
+                    decision: "merge".into(),
+                },
+            )
+            .unwrap();
+            tx.commit().unwrap();
+            id
+        };
+        assert_eq!(merged_third, "entity-marek");
+        assert_eq!(
+            db.query_row(
+                "SELECT canonical_participant_entity_ids_json FROM provisional_events WHERE id='event-1'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            format!("[\"{canonical_id}\",\"entity-lena\",\"entity-marek\"]")
         );
 
         let before: i64 = db
@@ -10098,6 +10161,384 @@ mod tests {
                 )
                 .unwrap(),
             54
+        );
+        drop(reopened);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn sqlite_reviewed_manuscript_workflow_is_complete_resumable_and_temporally_safe() {
+        let (path, db) = connection("sqlite-reviewed-manuscript-workflow");
+        db.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        let project = create_project_in_db(
+            &db,
+            CreateProjectInput {
+                title: "Leeres Analyseprojekt".into(),
+                author: "".into(),
+                description: "Deterministischer SQLite-Gesamttest".into(),
+                volume_title: "Leeres Analyseprojekt".into(),
+                volume: 1,
+            },
+        )
+        .unwrap();
+        let book_id: String = db
+            .query_row(
+                "SELECT id FROM books WHERE project_id=?1",
+                params![project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT COUNT(*) FROM story_entities WHERE project_id=?1",
+                params![project.id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            0
+        );
+
+        let first_text = "😀 Noa trägt ein e\u{301}xemplarisches Kuvert.";
+        let second_text = "Später findet Noa das Kuvert wieder.";
+        let imported = create_manuscript_import_in_db(
+            &db,
+            CreateManuscriptImportInput {
+                project_id: project.id.clone(),
+                book_id: book_id.clone(),
+                original_text: format!("{first_text}\n\n{second_text}"),
+                original_content_hash: "reviewed-workflow-input-v1".into(),
+                file_name: "synthetic-unicode.txt".into(),
+                source_kind: "external_text".into(),
+                chapters: vec![
+                    CreateManuscriptImportChapterInput {
+                        title: "Erstes Kapitel".into(),
+                        content: first_text.into(),
+                        page_markers: vec![ManuscriptImportPageMarkerInput {
+                            page_number: 1,
+                            label: "Seite 1".into(),
+                            source_offset: 0,
+                            text_offset: 0,
+                        }],
+                        units: vec![ManuscriptImportUnitInput {
+                            page_number: Some(1),
+                            start_offset: 0,
+                            end_offset: first_text.chars().count() as i64,
+                            content: first_text.into(),
+                            content_hash: "unit-1-v1".into(),
+                        }],
+                    },
+                    CreateManuscriptImportChapterInput {
+                        title: "Zweites Kapitel".into(),
+                        content: second_text.into(),
+                        page_markers: vec![ManuscriptImportPageMarkerInput {
+                            page_number: 2,
+                            label: "Seite 2".into(),
+                            source_offset: first_text.chars().count() as i64 + 2,
+                            text_offset: 0,
+                        }],
+                        units: vec![ManuscriptImportUnitInput {
+                            page_number: Some(2),
+                            start_offset: 0,
+                            end_offset: second_text.chars().count() as i64,
+                            content: second_text.into(),
+                            content_hash: "unit-2-v1".into(),
+                        }],
+                    },
+                ],
+                page_markers: Vec::new(),
+                provider_id: "fake-provider-v1".into(),
+                new_version: true,
+                onboarding: None,
+            },
+        )
+        .unwrap();
+        let job_id = imported.analysis_job.id.clone();
+        let chapter_ids: Vec<String> = imported
+            .import
+            .chapters
+            .iter()
+            .map(|chapter| chapter.id.clone())
+            .collect();
+        let scene_ids: Vec<String> = imported
+            .import
+            .scenes
+            .iter()
+            .map(|scene| scene.id.clone())
+            .collect();
+        assert_eq!(chapter_ids.len(), 2);
+        assert!(imported.import.scenes.iter().all(|scene| scene.is_implicit));
+        let unit_ids: Vec<String> = db
+            .prepare(
+                "SELECT id FROM manuscript_analysis_units WHERE job_id=?1 ORDER BY order_index",
+            )
+            .unwrap()
+            .query_map(params![job_id], |row| row.get(0))
+            .unwrap()
+            .collect::<SqlResult<Vec<_>>>()
+            .unwrap();
+        assert_eq!(unit_ids.len(), 2);
+        for (unit_id, expected) in unit_ids.iter().zip([first_text, second_text]) {
+            let (content, start, end): (String, i64, i64) = db
+                .query_row(
+                    "SELECT content,start_offset,end_offset FROM manuscript_analysis_units WHERE id=?1",
+                    params![unit_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(content, expected);
+            assert_eq!(end - start, expected.chars().count() as i64);
+        }
+
+        // Deterministic fake-provider output: provisional graph, Bible, memory,
+        // timeline, graph and continuity all point back to this import job.
+        for (id, name) in [("prov-noa", "Noa"), ("prov-kuvert", "Kuvert")] {
+            db.execute(
+                "INSERT INTO provisional_entities(id,job_id,project_id,entity_type,canonical_name,aliases_json,description,confidence,review_status) VALUES(?1,?2,?3,'character',?4,'[]','',0.9,'proposed')",
+                params![id, job_id, project.id, name],
+            )
+            .unwrap();
+        }
+        db.execute(
+            "INSERT INTO provisional_events(id,job_id,project_id,passage_unit_id,chapter_id,scene_id,title,summary,participant_entity_ids_json,start_offset,end_offset,confidence,review_status) VALUES('workflow-event',?1,?2,?3,?4,?5,'Übergabe','Noa trägt das Kuvert.','[\"prov-noa\",\"prov-kuvert\"]',0,10,0.9,'proposed')",
+            params![job_id, project.id, unit_ids[0], chapter_ids[0], scene_ids[0]],
+        )
+        .unwrap();
+        let canonical_ids: Vec<String> = ["prov-noa", "prov-kuvert"]
+            .iter()
+            .map(|provisional_id| {
+                let tx = db.unchecked_transaction().unwrap();
+                let canonical_id = materialize_provisional_entity_in_transaction(
+                    &tx,
+                    &MaterializeProvisionalEntityInput {
+                        project_id: project.id.clone(),
+                        job_id: job_id.clone(),
+                        provisional_entity_id: (*provisional_id).into(),
+                        existing_entity_id: None,
+                        decision: "accept".into(),
+                    },
+                )
+                .unwrap();
+                tx.commit().unwrap();
+                canonical_id
+            })
+            .collect();
+        assert_eq!(
+            db.query_row(
+                "SELECT canonical_participant_entity_ids_json FROM provisional_events WHERE id='workflow-event'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            format!("[\"{}\",\"{}\"]", canonical_ids[0], canonical_ids[1])
+        );
+
+        db.execute(
+            "INSERT INTO bible_update_runs(id,project_id,scene_id,scene_updated_at,content_hash,extractor_id,analyzed_content,status,completed_at) VALUES('workflow-bible-run',?1,?2,'now','bible-hash','fake-provider',?3,'completed','now')",
+            params![project.id, scene_ids[0], first_text],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO bible_proposals(id,run_id,project_id,scene_id,target_entity_id,proposal_action,entity_type,candidate_name,candidate_description,candidate_status,confidence,classification,evidence_excerpt,start_offset,end_offset,reason,review_status) VALUES('workflow-bible-proposal','workflow-bible-run',?1,?2,?3,'update_entity','character','Noa','Noa trägt das Kuvert.','proposed',0.9,'observable_fact',?4,0,?5,'Fake-Provider-Vorschlag','pending')",
+            params![project.id, scene_ids[0], canonical_ids[0], first_text, first_text.chars().count() as i64],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO story_source_references(id,project_id,entity_id,proposal_id,chapter_id,scene_id,excerpt,start_offset,end_offset) VALUES('workflow-source-1',?1,?2,'workflow-bible-proposal',?3,?4,?5,0,?6)",
+            params![project.id, canonical_ids[0], chapter_ids[0], scene_ids[0], first_text, first_text.chars().count() as i64],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO character_memory_update_runs(id,project_id,scene_id,content_hash,extractor_id,manuscript_job_id,analyzed_content,status,completed_at) VALUES('workflow-memory-run',?1,?2,'memory-hash','fake-provider',?3,?4,'completed','now')",
+            params![project.id, scene_ids[0], job_id, first_text],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO character_memory_proposals(id,run_id,project_id,scene_id,proposal_kind,subject_character_id,payload_json,classification,confidence,evidence_excerpt,start_offset,end_offset,reason,review_status,analyzed_content_hash) VALUES('workflow-memory-proposal','workflow-memory-run',?1,?2,'experience',?3,?4,'observable',0.8,?5,0,?6,'Fake-Provider-Vorschlag','pending','memory-hash')",
+            params![project.id, scene_ids[0], canonical_ids[0], serde_json::json!({"subjectCharacterId": canonical_ids[0], "title": "Das Kuvert", "objectiveSummary": "Noa trägt das Kuvert."}).to_string(), first_text, first_text.chars().count() as i64],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO manuscript_timeline_events(id,project_id,book_id,chapter_id,scene_id,passage_unit_id,title,summary,temporal_order,time_certainty,participating_entity_ids_json,state_changes_json,source_reference_ids_json,confidence,status,author_confirmed,origin) VALUES('workflow-timeline',?1,?2,?3,?4,?5,'Übergabe','Noa trägt das Kuvert.',1,'unknown',?6,'[]','[\"workflow-source-1\"]',0.8,'proposed',0,'manuscript_analysis')",
+            params![project.id, book_id, chapter_ids[0], scene_ids[0], unit_ids[0], serde_json::json!(canonical_ids).to_string()],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO story_graph_edges(id,project_id,source_entity_id,target_entity_id,relation_type,label,source_reference_ids_json,confidence,status,author_confirmed,origin) VALUES('workflow-edge',?1,?2,?3,'connected_to','trägt','[\"workflow-source-1\"]',0.8,'proposed',0,'manuscript_analysis')",
+            params![project.id, canonical_ids[0], canonical_ids[1]],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO continuity_review_runs(id,project_id,chapter_id,scene_id,source_kind,content_hash,start_offset,end_offset,provider_id,status,completed_at) VALUES('workflow-continuity-run',?1,?2,?3,'bible_update','continuity-hash',0,?4,'fake-provider','completed','now')",
+            params![project.id, chapter_ids[1], scene_ids[1], second_text.chars().count() as i64],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO continuity_review_findings(id,run_id,project_id,chapter_id,scene_id,finding_type,severity,subject_entity_id,objective_conflict,evidence_excerpt,source_reference_id,start_offset,end_offset,reason,review_status) VALUES('workflow-finding','workflow-continuity-run',?1,?2,?3,'probable_contradiction','warning',?4,'Kuvert ohne vorherige Erklärung wiedergefunden',?5,'workflow-source-1',0,?6,'Fake-Provider-Gegenprüfung','open')",
+            params![project.id, chapter_ids[1], scene_ids[1], canonical_ids[1], second_text, second_text.chars().count() as i64],
+        )
+        .unwrap();
+
+        for (id, phase, kind, payload) in [
+            (
+                "phase-narrative",
+                "narrative_summaries",
+                "narrative_summary",
+                serde_json::json!({"summary":"Noa trägt und findet das Kuvert wieder.","warnings":[]}),
+            ),
+            (
+                "phase-plot",
+                "plot_thread_synthesis",
+                "plot_thread_lifecycle_proposal",
+                serde_json::json!({"proposals":[{"proposedStatus":"closure_candidate"}]}),
+            ),
+            (
+                "phase-end",
+                "book_end_state",
+                "book_end_state_proposals",
+                serde_json::json!({"characters":[{"entityId":canonical_ids[0],"knowledge":"unknown"}],"items":[{"entityId":canonical_ids[1]}]}),
+            ),
+            (
+                "phase-counter",
+                "global_countercheck",
+                "global_countercheck_findings",
+                serde_json::json!({"findings":[{"findingId":"workflow-finding","severity":"warning"}]}),
+            ),
+        ] {
+            db.execute(
+                "INSERT INTO manuscript_analysis_phase_results(id,job_id,project_id,phase,result_kind,payload_json,content_hash,provider_id,prompt_version,review_status) VALUES(?1,?2,?3,?4,?5,?6,?7,'fake-provider','test-v1','pending')",
+                params![id, job_id, project.id, phase, kind, payload.to_string(), format!("{id}-hash")],
+            )
+            .unwrap();
+        }
+        let artifact_rows = [
+            (
+                "artifact-bible",
+                "bible_extraction",
+                "bible_proposal",
+                "workflow-bible-proposal",
+            ),
+            (
+                "artifact-memory",
+                "character_memory",
+                "character_memory_proposal",
+                "workflow-memory-proposal",
+            ),
+            (
+                "artifact-finding",
+                "global_countercheck",
+                "global_countercheck_finding",
+                "workflow-finding",
+            ),
+            (
+                "artifact-event",
+                "passage_continuity",
+                "timeline_event",
+                "workflow-timeline",
+            ),
+            (
+                "artifact-edge",
+                "passage_continuity",
+                "story_graph_edge",
+                "workflow-edge",
+            ),
+            (
+                "artifact-end",
+                "book_end_state",
+                "book_end_state_proposal",
+                "phase-end",
+            ),
+            (
+                "artifact-plot",
+                "plot_thread_synthesis",
+                "plot_thread_proposal",
+                "phase-plot",
+            ),
+            (
+                "artifact-summary",
+                "narrative_summaries",
+                "narrative_summary",
+                "phase-narrative",
+            ),
+        ];
+        for (id, phase, artifact_type, artifact_id) in artifact_rows {
+            db.execute(
+                "INSERT INTO manuscript_analysis_artifacts(id,job_id,project_id,phase,unit_id,artifact_type,artifact_id,review_status,explicitly_skipped) VALUES(?1,?2,?3,?4,NULL,?5,?6,'pending',0)",
+                params![id, job_id, project.id, phase, artifact_type, artifact_id],
+            )
+            .unwrap();
+        }
+        // Page 1's provisional state is visible to page 2; page 2 must never
+        // become context for page 1 or duplicate a completed provider run.
+        db.execute(
+            "INSERT INTO manuscript_analysis_draft_ledger(id,job_id,unit_id,project_id,entity_id,state_kind,previous_state,new_state,chapter_id,scene_id,source_excerpt,confidence,status) VALUES('workflow-draft',?1,?2,?3,?4,'ownership','','bei Noa',?5,?6,?7,0.9,'proposed')",
+            params![job_id, unit_ids[0], project.id, canonical_ids[1], chapter_ids[0], scene_ids[0], first_text],
+        )
+        .unwrap();
+        let past_context_count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM manuscript_analysis_draft_ledger d JOIN manuscript_analysis_units u ON u.id=d.unit_id WHERE d.job_id=?1 AND u.order_index < (SELECT order_index FROM manuscript_analysis_units WHERE id=?2)",
+                params![job_id, unit_ids[1]],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let future_context_count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM manuscript_analysis_draft_ledger d JOIN manuscript_analysis_units u ON u.id=d.unit_id WHERE d.job_id=?1 AND u.order_index > (SELECT order_index FROM manuscript_analysis_units WHERE id=?2)",
+                params![job_id, unit_ids[1]],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(past_context_count, 1);
+        assert_eq!(future_context_count, 0);
+
+        db.execute(
+            "INSERT INTO book_genre_detection_runs(id,job_id,project_id,book_id,confidence,reasoning,provider_id,prompt_version,review_status,detected_at) VALUES('workflow-genre',?1,?2,?3,0.4,'Optionaler Testvorschlag','fake-provider','test-v1','pending','now')",
+            params![job_id, project.id, book_id],
+        )
+        .unwrap();
+        db.execute("UPDATE manuscript_analysis_jobs SET status='awaiting_user_review',current_phase='user_review' WHERE id=?1", params![job_id]).unwrap();
+        drop(db);
+
+        // Resume after a process restart and review all mandatory artifacts;
+        // the optional genre result remains pending and visible.
+        let reopened = database_path_for_test(&path).unwrap();
+        assert_eq!(
+            reopened
+                .query_row(
+                    "SELECT status,current_phase FROM manuscript_analysis_jobs WHERE id=?1",
+                    params![job_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                )
+                .unwrap(),
+            ("awaiting_user_review".into(), "user_review".into())
+        );
+        reopened.execute("UPDATE manuscript_analysis_artifacts SET review_status='confirmed' WHERE job_id=?1", params![job_id]).unwrap();
+        reopened.execute("INSERT INTO manuscript_analysis_review_audits(id,job_id,project_id,action,artifact_ids_json,artifact_types_json,note) VALUES('workflow-complete-audit',?1,?2,'complete_review','[\"artifact-bible\",\"artifact-memory\",\"artifact-finding\",\"artifact-event\",\"artifact-edge\",\"artifact-end\",\"artifact-plot\",\"artifact-summary\"]','[\"bible_proposal\"]','Normaler Reviewabschluss ohne Bulk-Skip')", params![job_id, project.id]).unwrap();
+        reopened.execute("INSERT INTO manuscript_analysis_completion_reports(id,job_id,project_id,content_hash,payload_json) VALUES('workflow-report',?1,?2,'workflow-complete-hash',?3)", params![job_id, project.id, serde_json::json!({"openOptionalResults":["workflow-genre"],"skippedResults":[],"providers":["fake-provider"]}).to_string()]).unwrap();
+        reopened.execute("UPDATE manuscript_analysis_jobs SET status='completed',current_phase='completed',completed_at='now' WHERE id=?1", params![job_id]).unwrap();
+
+        assert_eq!(reopened.query_row("SELECT COUNT(*) FROM bible_update_runs WHERE project_id=?1 AND scene_id=?2 AND content_hash='bible-hash'", params![project.id, scene_ids[0]], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(reopened.query_row("SELECT COUNT(*) FROM character_memory_update_runs WHERE project_id=?1 AND manuscript_job_id=?2 AND content_hash='memory-hash'", params![project.id, job_id], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(
+            reopened
+                .query_row(
+                    "SELECT review_status FROM book_genre_detection_runs WHERE id='workflow-genre'",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            "pending"
+        );
+        assert_eq!(reopened.query_row("SELECT COUNT(*) FROM manuscript_analysis_review_audits WHERE job_id=?1 AND action='skip_open_artifacts'", params![job_id], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(reopened.query_row("SELECT COUNT(*) FROM provisional_entities WHERE job_id=?1 AND existing_entity_id IS NOT NULL AND review_status IN ('accepted','merged')", params![job_id], |row| row.get::<_, i64>(0)).unwrap(), 2);
+        assert_eq!(reopened.query_row("SELECT COUNT(*) FROM story_source_references WHERE id='workflow-source-1' AND start_offset=0 AND end_offset=?1 AND excerpt=?2", params![first_text.chars().count() as i64, first_text], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(
+            reopened
+                .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
         );
         drop(reopened);
         let _ = fs::remove_file(path);
