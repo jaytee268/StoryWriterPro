@@ -10,6 +10,10 @@ describe('optionaler Manuskript-Genre Finder', () => {
 
   it('liefert einen ausreichend breiten statischen Katalog und speichert manuelle Auswahl', async () => {
     expect(GENRE_CATALOG.length).toBeGreaterThanOrEqual(60);
+    expect(GENRE_CATALOG.every((entry) => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(entry.id))).toBe(true);
+    expect(GENRE_CATALOG.find((entry) => entry.id === 'fantasy')?.category).toBe('Fantasy');
+    expect(GENRE_CATALOG.filter((entry) => ['space-opera', 'cyberpunk', 'near-future', 'speculative-fiction', 'techno-thriller'].includes(entry.id)).every((entry) => entry.category === 'Science-Fiction')).toBe(true);
+    expect(GENRE_CATALOG.find((entry) => entry.id === 'magical-realism')?.category).toBe('Gegenwart und Gesellschaft');
     const repository = new BrowserDemoRepository();
     const workspace = await repository.loadWorkspace();
     const book = workspace.books[0]!;
@@ -25,5 +29,15 @@ describe('optionaler Manuskript-Genre Finder', () => {
     await repository.saveBookGenres({ bookId: book.id, projectId: workspace.project.id, primaryGenreId: 'crime', secondaryGenreIds: [], customGenreNames: [], genreSource: 'manual', genreAuthorConfirmed: true });
     const unchanged = await repository.saveBookGenres({ bookId: book.id, projectId: workspace.project.id, primaryGenreId: 'fantasy', secondaryGenreIds: [], customGenreNames: [], genreSource: 'ai_detected', genreAuthorConfirmed: false, genreConfidence: 0.9 });
     expect(unchanged).toMatchObject({ primaryGenreId: 'crime', genreSource: 'manual', genreAuthorConfirmed: true });
+  });
+
+  it('bewahrt die vollständigen AI-Signale und lässt den Vorschlag offen', async () => {
+    const repository = new BrowserDemoRepository();
+    const workspace = await repository.loadWorkspace();
+    const book = workspace.books[0]!;
+    const saved = await repository.saveBookGenres({ bookId: book.id, projectId: workspace.project.id, primaryGenreId: 'science-fiction', secondaryGenreIds: ['cyberpunk'], customGenreNames: [], genreSource: 'ai_detected', genreConfidence: 0.74, genreReason: 'Technische Zukunft und Machtkonflikt.', genreAuthorConfirmed: false, genreSupportingSignals: ['autonome Systeme'], genreContradictingSignals: ['Gegenwartsnahe Nebenhandlung'], genreAlternatives: [{ genreId: 'techno-thriller', reason: 'Technik als Spannungsträger' }], genreAudienceNotes: ['Erwachsene Leserschaft'], genreWarnings: ['Noch nicht bestätigt'], genrePromptVersion: 'storymemory-genre-v1' });
+    expect(saved.genreAuthorConfirmed).toBe(false);
+    expect(saved.genreSupportingSignals).toEqual(['autonome Systeme']);
+    expect(saved.genreAlternatives?.[0]?.genreId).toBe('techno-thriller');
   });
 });

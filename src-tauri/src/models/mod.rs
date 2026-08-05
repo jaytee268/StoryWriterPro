@@ -1471,6 +1471,12 @@ pub struct Book {
     pub genre_reason: Option<String>,
     pub genre_author_confirmed: bool,
     pub genre_detected_at: Option<String>,
+    pub genre_supporting_signals: Vec<String>,
+    pub genre_contradicting_signals: Vec<String>,
+    pub genre_alternatives: Vec<serde_json::Value>,
+    pub genre_audience_notes: Vec<String>,
+    pub genre_warnings: Vec<String>,
+    pub genre_prompt_version: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -1490,6 +1496,21 @@ pub struct SaveBookGenresInput {
     pub genre_reason: Option<String>,
     pub genre_author_confirmed: bool,
     pub genre_detected_at: Option<String>,
+    #[serde(default)]
+    pub genre_supporting_signals: Vec<String>,
+    #[serde(default)]
+    pub genre_contradicting_signals: Vec<String>,
+    #[serde(default)]
+    pub genre_alternatives: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub genre_audience_notes: Vec<String>,
+    #[serde(default)]
+    pub genre_warnings: Vec<String>,
+    pub genre_prompt_version: Option<String>,
+    #[serde(default)]
+    pub analysis_job_id: Option<String>,
+    #[serde(default)]
+    pub provider_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

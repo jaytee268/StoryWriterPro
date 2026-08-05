@@ -89,6 +89,21 @@ fn now() -> String {
     Utc::now().to_rfc3339()
 }
 
+fn genre_catalog_has(id: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(include_str!(
+        "../../../src/data/genreCatalog.shared.json"
+    ))
+    .ok()
+    .and_then(|catalog| catalog.get("entries").cloned())
+    .and_then(|entries| entries.as_array().cloned())
+    .is_some_and(|entries| {
+        entries.iter().any(|entry| {
+            entry.get("id").and_then(|value| value.as_str()) == Some(id)
+                && entry.get("active").and_then(|value| value.as_bool()) == Some(true)
+        })
+    })
+}
+
 fn canonical_editor_text(content: &str) -> String {
     let mut output = String::with_capacity(content.len());
     let mut inside_tag = false;
@@ -187,8 +202,14 @@ fn book_from_row(row: &rusqlite::Row<'_>) -> SqlResult<Book> {
         genre_reason: row.get(9)?,
         genre_author_confirmed: row.get::<_, i64>(10)? != 0,
         genre_detected_at: row.get(11)?,
-        created_at: row.get(12)?,
-        updated_at: row.get(13)?,
+        genre_supporting_signals: vec_from_json(&row.get::<_, String>(12)?),
+        genre_contradicting_signals: vec_from_json(&row.get::<_, String>(13)?),
+        genre_alternatives: serde_json::from_str(&row.get::<_, String>(14)?).unwrap_or_default(),
+        genre_audience_notes: vec_from_json(&row.get::<_, String>(15)?),
+        genre_warnings: vec_from_json(&row.get::<_, String>(16)?),
+        genre_prompt_version: row.get(17)?,
+        created_at: row.get(18)?,
+        updated_at: row.get(19)?,
     })
 }
 
@@ -390,7 +411,7 @@ fn load_chapter(db: &Connection, chapter_id: &str) -> Result<Chapter, String> {
 }
 
 fn load_books(db: &Connection, project_id: &str) -> Result<Vec<Book>, String> {
-    let mut statement = db.prepare("SELECT id, project_id, title, volume, primary_genre_id, secondary_genre_ids_json, custom_genre_names_json, genre_source, genre_confidence, genre_reason, genre_author_confirmed, genre_detected_at, created_at, updated_at FROM books WHERE project_id=?1 ORDER BY volume, created_at").map_err(|error| sql_error("Bücher konnten nicht geladen werden", error))?;
+    let mut statement = db.prepare("SELECT id, project_id, title, volume, primary_genre_id, secondary_genre_ids_json, custom_genre_names_json, genre_source, genre_confidence, genre_reason, genre_author_confirmed, genre_detected_at, genre_supporting_signals_json, genre_contradicting_signals_json, genre_alternatives_json, genre_audience_notes_json, genre_warnings_json, genre_prompt_version, created_at, updated_at FROM books WHERE project_id=?1 ORDER BY volume, created_at").map_err(|error| sql_error("Bücher konnten nicht geladen werden", error))?;
     let result = statement
         .query_map(params![project_id], book_from_row)
         .map_err(|error| sql_error("Bücher konnten nicht geladen werden", error))?
@@ -415,6 +436,14 @@ pub fn save_book_genres(
             .primary_genre_id
             .as_deref()
             .is_some_and(|id| id.trim().is_empty())
+        || input
+            .primary_genre_id
+            .as_deref()
+            .is_some_and(|id| !genre_catalog_has(id))
+        || input
+            .secondary_genre_ids
+            .iter()
+            .any(|id| !genre_catalog_has(id))
     {
         return Err("Ungültige Buchgenre-Daten.".into());
     }
@@ -435,14 +464,30 @@ pub fn save_book_genres(
         .map_err(|error| sql_error("Buchgenre konnte nicht geprüft werden", error))?
         != 0;
     if current_confirmed && input.genre_source.as_deref() == Some("ai_detected") {
-        return db.query_row("SELECT id, project_id, title, volume, primary_genre_id, secondary_genre_ids_json, custom_genre_names_json, genre_source, genre_confidence, genre_reason, genre_author_confirmed, genre_detected_at, created_at, updated_at FROM books WHERE id=?1 AND project_id=?2", params![input.book_id, input.project_id], book_from_row).map_err(|error| sql_error("Buchgenre konnte nicht geladen werden", error));
+        return db.query_row("SELECT id, project_id, title, volume, primary_genre_id, secondary_genre_ids_json, custom_genre_names_json, genre_source, genre_confidence, genre_reason, genre_author_confirmed, genre_detected_at, genre_supporting_signals_json, genre_contradicting_signals_json, genre_alternatives_json, genre_audience_notes_json, genre_warnings_json, genre_prompt_version, created_at, updated_at FROM books WHERE id=?1 AND project_id=?2", params![input.book_id, input.project_id], book_from_row).map_err(|error| sql_error("Buchgenre konnte nicht geladen werden", error));
     }
     let secondary = serde_json::to_string(&input.secondary_genre_ids)
         .map_err(|error| format!("Nebengenres konnten nicht gespeichert werden: {error}"))?;
     let custom = serde_json::to_string(&input.custom_genre_names)
         .map_err(|error| format!("Eigene Genres konnten nicht gespeichert werden: {error}"))?;
-    db.execute("UPDATE books SET primary_genre_id=?1, secondary_genre_ids_json=?2, custom_genre_names_json=?3, genre_source=?4, genre_confidence=?5, genre_reason=?6, genre_author_confirmed=?7, genre_detected_at=?8, updated_at=?9 WHERE id=?10 AND project_id=?11", params![input.primary_genre_id, secondary, custom, input.genre_source, input.genre_confidence, input.genre_reason, input.genre_author_confirmed as i64, input.genre_detected_at, now(), input.book_id, input.project_id]).map_err(|error| sql_error("Buchgenre konnte nicht gespeichert werden", error))?;
-    db.query_row("SELECT id, project_id, title, volume, primary_genre_id, secondary_genre_ids_json, custom_genre_names_json, genre_source, genre_confidence, genre_reason, genre_author_confirmed, genre_detected_at, created_at, updated_at FROM books WHERE id=?1 AND project_id=?2", params![input.book_id, input.project_id], book_from_row).map_err(|error| sql_error("Buchgenre konnte nicht geladen werden", error))
+    let supporting =
+        serde_json::to_string(&input.genre_supporting_signals).unwrap_or_else(|_| "[]".into());
+    let contradicting =
+        serde_json::to_string(&input.genre_contradicting_signals).unwrap_or_else(|_| "[]".into());
+    let alternatives =
+        serde_json::to_string(&input.genre_alternatives).unwrap_or_else(|_| "[]".into());
+    let audience =
+        serde_json::to_string(&input.genre_audience_notes).unwrap_or_else(|_| "[]".into());
+    let warnings = serde_json::to_string(&input.genre_warnings).unwrap_or_else(|_| "[]".into());
+    db.execute("UPDATE books SET primary_genre_id=?1, secondary_genre_ids_json=?2, custom_genre_names_json=?3, genre_source=?4, genre_confidence=?5, genre_reason=?6, genre_author_confirmed=?7, genre_detected_at=?8, genre_supporting_signals_json=?9, genre_contradicting_signals_json=?10, genre_alternatives_json=?11, genre_audience_notes_json=?12, genre_warnings_json=?13, genre_prompt_version=?14, updated_at=?15 WHERE id=?16 AND project_id=?17", params![input.primary_genre_id, secondary, custom, input.genre_source, input.genre_confidence, input.genre_reason, input.genre_author_confirmed as i64, input.genre_detected_at, supporting, contradicting, alternatives, audience, warnings, input.genre_prompt_version, now(), input.book_id, input.project_id]).map_err(|error| sql_error("Buchgenre konnte nicht gespeichert werden", error))?;
+    if let Some(job_id) = input.analysis_job_id.as_deref() {
+        let job_matches: i64 = db.query_row("SELECT COUNT(*) FROM manuscript_analysis_jobs WHERE id=?1 AND project_id=?2 AND book_id=?3", params![job_id, input.project_id, input.book_id], |row| row.get(0)).map_err(|error| sql_error("Genre-Analysejob konnte nicht geprüft werden", error))?;
+        if job_matches == 0 {
+            return Err("Der Genre-Analysejob gehört nicht zum Projekt und Buch.".into());
+        }
+        db.execute("INSERT INTO book_genre_detection_runs (id,job_id,project_id,book_id,primary_genre_id,custom_primary_genre,secondary_genre_ids_json,custom_secondary_genres_json,confidence,reasoning,supporting_signals_json,contradicting_signals_json,alternative_genres_json,audience_notes_json,warnings_json,provider_id,prompt_version,detected_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)", params![new_id(), job_id, input.project_id, input.book_id, input.primary_genre_id, input.custom_genre_names.first(), secondary, serde_json::to_string(&input.custom_genre_names.iter().skip(1).collect::<Vec<_>>()).unwrap_or_else(|_| "[]".into()), input.genre_confidence.unwrap_or(0.0), input.genre_reason.clone().unwrap_or_default(), supporting, contradicting, alternatives, audience, warnings, input.provider_id.clone().unwrap_or_else(|| input.genre_source.clone().unwrap_or_else(|| "unknown".into())), input.genre_prompt_version.clone().unwrap_or_else(|| "storymemory-genre-v1".into()), input.genre_detected_at.clone().unwrap_or_else(now)]).map_err(|error| sql_error("Genre-Ergebnis konnte nicht jobgebunden gespeichert werden", error))?;
+    }
+    db.query_row("SELECT id, project_id, title, volume, primary_genre_id, secondary_genre_ids_json, custom_genre_names_json, genre_source, genre_confidence, genre_reason, genre_author_confirmed, genre_detected_at, genre_supporting_signals_json, genre_contradicting_signals_json, genre_alternatives_json, genre_audience_notes_json, genre_warnings_json, genre_prompt_version, created_at, updated_at FROM books WHERE id=?1 AND project_id=?2", params![input.book_id, input.project_id], book_from_row).map_err(|error| sql_error("Buchgenre konnte nicht geladen werden", error))
 }
 
 fn load_chapters(db: &Connection, books: &[Book]) -> Result<Vec<Chapter>, String> {
@@ -10162,7 +10207,7 @@ mod tests {
             db.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            34
+            35
         );
         assert!(has_column(&db, "bible_update_runs", "analyzed_content").unwrap());
         drop(db);

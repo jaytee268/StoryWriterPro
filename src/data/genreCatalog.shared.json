@@ -1,0 +1,814 @@
+{
+  "version": "2026-08-05",
+  "entries": [
+    {
+      "id": "fantasy",
+      "name": "Fantasy",
+      "englishName": "Fantasy",
+      "category": "Fantasy",
+      "description": "Welt mit spekulativen Regeln und ungewöhnlichen Möglichkeiten.",
+      "searchTerms": [
+        "fantasy",
+        "fantastisch",
+        "welt"
+      ],
+      "active": true
+    },
+    {
+      "id": "high-fantasy",
+      "name": "High Fantasy",
+      "englishName": "High Fantasy",
+      "category": "Fantasy",
+      "description": "Eigenständige umfassende fantastische Welt.",
+      "searchTerms": [
+        "high fantasy",
+        "episch",
+        "welt"
+      ],
+      "active": true
+    },
+    {
+      "id": "dark-fantasy",
+      "name": "Dark Fantasy",
+      "englishName": "Dark Fantasy",
+      "category": "Fantasy",
+      "description": "Fantasy mit düsterer Atmosphäre und moralischer Härte.",
+      "searchTerms": [
+        "dark fantasy",
+        "dunkel"
+      ],
+      "active": true
+    },
+    {
+      "id": "urban-fantasy",
+      "name": "Urban Fantasy",
+      "englishName": "Urban Fantasy",
+      "category": "Fantasy",
+      "description": "Fantastische Elemente in einer modernen Alltagswelt.",
+      "searchTerms": [
+        "urban fantasy",
+        "stadt",
+        "modern"
+      ],
+      "active": true
+    },
+    {
+      "id": "portal-fantasy",
+      "name": "Portal Fantasy",
+      "englishName": "Portal Fantasy",
+      "category": "Fantasy",
+      "description": "Eine Figur gelangt in eine andere Welt.",
+      "searchTerms": [
+        "portal fantasy",
+        "andere",
+        "welt"
+      ],
+      "active": true
+    },
+    {
+      "id": "romantasy",
+      "name": "Romantasy",
+      "englishName": "Romantasy",
+      "category": "Fantasy",
+      "description": "Fantasy mit zentraler romantischer Handlung.",
+      "searchTerms": [
+        "romantasy",
+        "romance",
+        "liebe"
+      ],
+      "active": true
+    },
+    {
+      "id": "science-fiction",
+      "name": "Science-Fiction",
+      "englishName": "Science-Fiction",
+      "category": "Science-Fiction",
+      "description": "Spekulative Technik, Wissenschaft oder Zukunftswelten.",
+      "searchTerms": [
+        "science-fiction",
+        "zukunft",
+        "wissenschaft"
+      ],
+      "active": true
+    },
+    {
+      "id": "space-opera",
+      "name": "Space Opera",
+      "englishName": "Space Opera",
+      "category": "Science-Fiction",
+      "description": "Große Konflikte über mehrere Welten oder Zivilisationen.",
+      "searchTerms": [
+        "space opera",
+        "raumfahrt",
+        "episch"
+      ],
+      "active": true
+    },
+    {
+      "id": "cyberpunk",
+      "name": "Cyberpunk",
+      "englishName": "Cyberpunk",
+      "category": "Science-Fiction",
+      "description": "Technologisch geprägte Gesellschaft mit Macht- und Kontrollkonflikten.",
+      "searchTerms": [
+        "cyberpunk",
+        "technik",
+        "konzern"
+      ],
+      "active": true
+    },
+    {
+      "id": "near-future",
+      "name": "Near Future",
+      "englishName": "Near Future",
+      "category": "Science-Fiction",
+      "description": "Nahe Zukunft mit plausiblen gesellschaftlichen Veränderungen.",
+      "searchTerms": [
+        "near future",
+        "nah",
+        "zukunft"
+      ],
+      "active": true
+    },
+    {
+      "id": "techno-thriller",
+      "name": "Techno-Thriller",
+      "englishName": "Techno-Thriller",
+      "category": "Science-Fiction",
+      "description": "Spannung aus Technik, Forschung und Bedrohung.",
+      "searchTerms": [
+        "techno-thriller",
+        "technik",
+        "spannung"
+      ],
+      "active": true
+    },
+    {
+      "id": "speculative-fiction",
+      "name": "Speculative Fiction",
+      "englishName": "Speculative Fiction",
+      "category": "Science-Fiction",
+      "description": "Erzählung über mögliche alternative Wirklichkeiten.",
+      "searchTerms": [
+        "speculative fiction",
+        "spekulativ"
+      ],
+      "active": true
+    },
+    {
+      "id": "crime",
+      "name": "Krimi",
+      "englishName": "Krimi",
+      "category": "Krimi und Thriller",
+      "description": "Ermittlung eines Verbrechens und seiner Hintergründe.",
+      "searchTerms": [
+        "krimi",
+        "ermittlung",
+        "verbrechen"
+      ],
+      "active": true
+    },
+    {
+      "id": "crime-thriller",
+      "name": "Crime Thriller",
+      "englishName": "Crime Thriller",
+      "category": "Krimi und Thriller",
+      "description": "Kriminalhandlung mit hohem Tempo und Gefahr.",
+      "searchTerms": [
+        "crime thriller",
+        "verbrechen",
+        "tempo"
+      ],
+      "active": true
+    },
+    {
+      "id": "cozy-crime",
+      "name": "Cozy Crime",
+      "englishName": "Cozy Crime",
+      "category": "Krimi und Thriller",
+      "description": "Krimi mit geschütztem Umfeld und zugänglicher Ermittlungsfigur.",
+      "searchTerms": [
+        "cozy crime",
+        "gemütlich",
+        "ermittlung"
+      ],
+      "active": true
+    },
+    {
+      "id": "psychological-thriller",
+      "name": "Psychological Thriller",
+      "englishName": "Psychological Thriller",
+      "category": "Krimi und Thriller",
+      "description": "Bedrohung und Spannung aus Wahrnehmung und Psyche.",
+      "searchTerms": [
+        "psychological thriller",
+        "psyche",
+        "spannung"
+      ],
+      "active": true
+    },
+    {
+      "id": "conspiracy-thriller",
+      "name": "Conspiracy Thriller",
+      "englishName": "Conspiracy Thriller",
+      "category": "Krimi und Thriller",
+      "description": "Eine verdeckte Verschwörung wird aufgedeckt.",
+      "searchTerms": [
+        "conspiracy thriller",
+        "verschwörung",
+        "geheimnis"
+      ],
+      "active": true
+    },
+    {
+      "id": "mystery",
+      "name": "Mystery",
+      "englishName": "Mystery",
+      "category": "Krimi und Thriller",
+      "description": "Rätsel und unerklärte Zusammenhänge stehen im Zentrum.",
+      "searchTerms": [
+        "mystery",
+        "rätsel",
+        "geheimnis"
+      ],
+      "active": true
+    },
+    {
+      "id": "horror",
+      "name": "Horror",
+      "englishName": "Horror",
+      "category": "Horror",
+      "description": "Angst, Bedrohung und Kontrollverlust als zentrale Wirkung.",
+      "searchTerms": [
+        "horror",
+        "angst"
+      ],
+      "active": true
+    },
+    {
+      "id": "folk-horror",
+      "name": "Folk Horror",
+      "englishName": "Folk Horror",
+      "category": "Horror",
+      "description": "Horror aus Bräuchen, Gemeinschaften und überlieferten Regeln.",
+      "searchTerms": [
+        "folk horror",
+        "brauch",
+        "dorf"
+      ],
+      "active": true
+    },
+    {
+      "id": "cosmic-horror",
+      "name": "Cosmic Horror",
+      "englishName": "Cosmic Horror",
+      "category": "Horror",
+      "description": "Unbegreifliche Kräfte stellen menschliche Gewissheiten infrage.",
+      "searchTerms": [
+        "cosmic horror",
+        "kosmisch"
+      ],
+      "active": true
+    },
+    {
+      "id": "body-horror",
+      "name": "Body Horror",
+      "englishName": "Body Horror",
+      "category": "Horror",
+      "description": "Körperliche Veränderung oder Verletzlichkeit erzeugt Schrecken.",
+      "searchTerms": [
+        "body horror",
+        "körper"
+      ],
+      "active": true
+    },
+    {
+      "id": "supernatural-horror",
+      "name": "Supernatural Horror",
+      "englishName": "Supernatural Horror",
+      "category": "Horror",
+      "description": "Übernatürliche Bedrohung prägt die Handlung.",
+      "searchTerms": [
+        "supernatural horror",
+        "übernatürlich"
+      ],
+      "active": true
+    },
+    {
+      "id": "romance",
+      "name": "Romance",
+      "englishName": "Romance",
+      "category": "Romance",
+      "description": "Eine romantische Beziehung bildet den zentralen Handlungsbogen.",
+      "searchTerms": [
+        "romance",
+        "liebe",
+        "beziehung"
+      ],
+      "active": true
+    },
+    {
+      "id": "paranormal-romance",
+      "name": "Paranormal Romance",
+      "englishName": "Paranormal Romance",
+      "category": "Romance",
+      "description": "Romantische Handlung mit spekulativen oder übernatürlichen Elementen.",
+      "searchTerms": [
+        "paranormal romance",
+        "liebe",
+        "paranormal"
+      ],
+      "active": true
+    },
+    {
+      "id": "historical-romance",
+      "name": "Historical Romance",
+      "englishName": "Historical Romance",
+      "category": "Romance",
+      "description": "Romantische Handlung in einem historischen Umfeld.",
+      "searchTerms": [
+        "historical romance",
+        "liebe",
+        "historisch"
+      ],
+      "active": true
+    },
+    {
+      "id": "romantic-suspense",
+      "name": "Romantic Suspense",
+      "englishName": "Romantic Suspense",
+      "category": "Fantasy",
+      "description": "Romantik verbindet sich mit Gefahr und Spannung.",
+      "searchTerms": [
+        "romantic suspense",
+        "liebe",
+        "thriller"
+      ],
+      "active": true
+    },
+    {
+      "id": "new-adult",
+      "name": "New Adult",
+      "englishName": "New Adult",
+      "category": "Romance",
+      "description": "Beziehungen und Selbstständigkeit im Übergang zum Erwachsenenleben.",
+      "searchTerms": [
+        "new adult",
+        "beziehung",
+        "erwachsen"
+      ],
+      "active": true
+    },
+    {
+      "id": "historical",
+      "name": "Historischer Roman",
+      "englishName": "Historischer Roman",
+      "category": "Historisch",
+      "description": "Erzählung in einer vergangenen Epoche mit historischem Umfeld.",
+      "searchTerms": [
+        "historischer roman",
+        "geschichte",
+        "epoche"
+      ],
+      "active": true
+    },
+    {
+      "id": "alternate-history",
+      "name": "Alternate History",
+      "englishName": "Alternate History",
+      "category": "Historisch",
+      "description": "Eine historische Entwicklung nimmt einen anderen Verlauf.",
+      "searchTerms": [
+        "alternate history",
+        "alternative",
+        "geschichte"
+      ],
+      "active": true
+    },
+    {
+      "id": "historical-adventure",
+      "name": "Historischer Abenteuerroman",
+      "englishName": "Historischer Abenteuerroman",
+      "category": "Historisch",
+      "description": "Abenteuerhandlung in einem historischen Setting.",
+      "searchTerms": [
+        "historischer abenteuerroman",
+        "geschichte",
+        "abenteuer"
+      ],
+      "active": true
+    },
+    {
+      "id": "period-drama",
+      "name": "Period Drama",
+      "englishName": "Period Drama",
+      "category": "Historisch",
+      "description": "Gesellschaftliches Drama in einer bestimmten Epoche.",
+      "searchTerms": [
+        "period drama",
+        "gesellschaft",
+        "epoche"
+      ],
+      "active": true
+    },
+    {
+      "id": "contemporary",
+      "name": "Gegenwartsroman",
+      "englishName": "Gegenwartsroman",
+      "category": "Gegenwart und Gesellschaft",
+      "description": "Erzählung in der zeitgenössischen Lebenswelt.",
+      "searchTerms": [
+        "gegenwartsroman",
+        "heute",
+        "alltag"
+      ],
+      "active": true
+    },
+    {
+      "id": "social-drama",
+      "name": "Soziales Drama",
+      "englishName": "Soziales Drama",
+      "category": "Drama",
+      "description": "Gesellschaftliche Konflikte und ihre Auswirkungen auf Figuren.",
+      "searchTerms": [
+        "soziales drama",
+        "gesellschaft",
+        "konflikt"
+      ],
+      "active": true
+    },
+    {
+      "id": "family-saga",
+      "name": "Familiensaga",
+      "englishName": "Familiensaga",
+      "category": "Gegenwart und Gesellschaft",
+      "description": "Mehrere Generationen und ihre miteinander verknüpften Lebenswege.",
+      "searchTerms": [
+        "familiensaga",
+        "familie",
+        "generation"
+      ],
+      "active": true
+    },
+    {
+      "id": "political-fiction",
+      "name": "Politischer Roman",
+      "englishName": "Politischer Roman",
+      "category": "Gegenwart und Gesellschaft",
+      "description": "Politische Macht, Institutionen und Entscheidungen stehen im Zentrum.",
+      "searchTerms": [
+        "politischer roman",
+        "politik",
+        "macht"
+      ],
+      "active": true
+    },
+    {
+      "id": "adventure",
+      "name": "Abenteuerroman",
+      "englishName": "Abenteuerroman",
+      "category": "Abenteuer",
+      "description": "Eine Reise oder riskante Unternehmung treibt die Handlung.",
+      "searchTerms": [
+        "abenteuerroman",
+        "reise",
+        "risiko"
+      ],
+      "active": true
+    },
+    {
+      "id": "road-novel",
+      "name": "Road Novel",
+      "englishName": "Road Novel",
+      "category": "Abenteuer",
+      "description": "Eine Reise verändert Figuren und ihre Beziehungen.",
+      "searchTerms": [
+        "road novel",
+        "reise",
+        "unterwegs"
+      ],
+      "active": true
+    },
+    {
+      "id": "expedition",
+      "name": "Expeditionsroman",
+      "englishName": "Expeditionsroman",
+      "category": "Abenteuer",
+      "description": "Erkundung eines unbekannten Ortes oder Gebiets.",
+      "searchTerms": [
+        "expeditionsroman",
+        "erkundung",
+        "forschung"
+      ],
+      "active": true
+    },
+    {
+      "id": "survival",
+      "name": "Survival",
+      "englishName": "Survival",
+      "category": "Abenteuer",
+      "description": "Figuren müssen unter extremen Bedingungen bestehen.",
+      "searchTerms": [
+        "survival",
+        "überleben"
+      ],
+      "active": true
+    },
+    {
+      "id": "dystopia",
+      "name": "Dystopie",
+      "englishName": "Dystopie",
+      "category": "Dystopie und Utopie",
+      "description": "Eine unterdrückende oder gefährliche Gesellschaftsordnung.",
+      "searchTerms": [
+        "dystopie",
+        "gesellschaft",
+        "zukunft"
+      ],
+      "active": true
+    },
+    {
+      "id": "utopia",
+      "name": "Utopie",
+      "englishName": "Utopie",
+      "category": "Dystopie und Utopie",
+      "description": "Eine idealisierte Gesellschaft wird entworfen oder geprüft.",
+      "searchTerms": [
+        "utopie",
+        "ideal",
+        "gesellschaft"
+      ],
+      "active": true
+    },
+    {
+      "id": "post-apocalyptic",
+      "name": "Postapokalypse",
+      "englishName": "Postapokalypse",
+      "category": "Dystopie und Utopie",
+      "description": "Leben nach einem grundlegenden Zusammenbruch der Ordnung.",
+      "searchTerms": [
+        "postapokalypse",
+        "katastrophe",
+        "überleben"
+      ],
+      "active": true
+    },
+    {
+      "id": "humor",
+      "name": "Humor",
+      "englishName": "Humor",
+      "category": "Humor und Satire",
+      "description": "Komische Situationen und Perspektiven prägen die Erzählung.",
+      "searchTerms": [
+        "humor",
+        "komisch"
+      ],
+      "active": true
+    },
+    {
+      "id": "satire",
+      "name": "Satire",
+      "englishName": "Satire",
+      "category": "Humor und Satire",
+      "description": "Gesellschaftliche oder politische Zustände werden zugespitzt kritisiert.",
+      "searchTerms": [
+        "satire",
+        "kritik",
+        "gesellschaft"
+      ],
+      "active": true
+    },
+    {
+      "id": "parody",
+      "name": "Parodie",
+      "englishName": "Parodie",
+      "category": "Humor und Satire",
+      "description": "Bekannte Formen oder Motive werden spielerisch nachgeahmt.",
+      "searchTerms": [
+        "parodie",
+        "spiel",
+        "nachahmung"
+      ],
+      "active": true
+    },
+    {
+      "id": "comedy-of-manners",
+      "name": "Gesellschaftskomödie",
+      "englishName": "Gesellschaftskomödie",
+      "category": "Humor und Satire",
+      "description": "Humor entsteht aus sozialen Regeln und Missverständnissen.",
+      "searchTerms": [
+        "gesellschaftskomödie",
+        "gesellschaft",
+        "humor"
+      ],
+      "active": true
+    },
+    {
+      "id": "drama",
+      "name": "Drama",
+      "englishName": "Drama",
+      "category": "Drama",
+      "description": "Innere oder zwischenmenschliche Konflikte stehen im Zentrum.",
+      "searchTerms": [
+        "drama",
+        "konflikt",
+        "gefühl"
+      ],
+      "active": true
+    },
+    {
+      "id": "literary-fiction",
+      "name": "Literary Fiction",
+      "englishName": "Literary Fiction",
+      "category": "Literatur und experimentelle Formen",
+      "description": "Sprache, Perspektive und Ambivalenz tragen die Erzählung.",
+      "searchTerms": [
+        "literary fiction",
+        "literarisch",
+        "sprache"
+      ],
+      "active": true
+    },
+    {
+      "id": "experimental",
+      "name": "Experimentelle Literatur",
+      "englishName": "Experimentelle Literatur",
+      "category": "Literatur und experimentelle Formen",
+      "description": "Ungewöhnliche Formen oder Erzählweisen sind Teil des Konzepts.",
+      "searchTerms": [
+        "experimentelle literatur",
+        "form",
+        "avantgarde"
+      ],
+      "active": true
+    },
+    {
+      "id": "psychological-drama",
+      "name": "Psychologisches Drama",
+      "englishName": "Psychologisches Drama",
+      "category": "Drama",
+      "description": "Innere Entwicklung und psychische Konflikte bestimmen die Handlung.",
+      "searchTerms": [
+        "psychologisches drama",
+        "psyche",
+        "drama"
+      ],
+      "active": true
+    },
+    {
+      "id": "coming-of-age",
+      "name": "Coming-of-Age",
+      "englishName": "Coming-of-Age",
+      "category": "Kinder- und Jugendbuch",
+      "description": "Eine Figur wächst an Erfahrungen und verändert ihr Selbstbild.",
+      "searchTerms": [
+        "coming-of-age",
+        "jugend",
+        "erwachsen"
+      ],
+      "active": true
+    },
+    {
+      "id": "young-adult",
+      "name": "Jugendroman",
+      "englishName": "Jugendroman",
+      "category": "Kinder- und Jugendbuch",
+      "description": "Themen und Konflikte richten sich an jugendliche Leserinnen und Leser.",
+      "searchTerms": [
+        "jugendroman",
+        "jugend"
+      ],
+      "active": true
+    },
+    {
+      "id": "children",
+      "name": "Kinderbuch",
+      "englishName": "Kinderbuch",
+      "category": "Kinder- und Jugendbuch",
+      "description": "Erzählung für Kinder mit altersgerechter Perspektive und Sprache.",
+      "searchTerms": [
+        "kinderbuch",
+        "kinder"
+      ],
+      "active": true
+    },
+    {
+      "id": "middle-grade",
+      "name": "Middle Grade",
+      "englishName": "Middle Grade",
+      "category": "Kinder- und Jugendbuch",
+      "description": "Abenteuer und Entwicklung für das mittlere Lesealter.",
+      "searchTerms": [
+        "middle grade",
+        "kinder",
+        "schule"
+      ],
+      "active": true
+    },
+    {
+      "id": "biographical-fiction",
+      "name": "Biografische Fiktion",
+      "englishName": "Biografische Fiktion",
+      "category": "Biografie und Sachbuch",
+      "description": "Ein Leben oder eine historische Person wird literarisch gestaltet.",
+      "searchTerms": [
+        "biografische fiktion",
+        "biografie",
+        "leben"
+      ],
+      "active": true
+    },
+    {
+      "id": "autofiction",
+      "name": "Autofiktion",
+      "englishName": "Autofiktion",
+      "category": "Biografie und Sachbuch",
+      "description": "Autobiografische Erfahrungen werden literarisch verfremdet.",
+      "searchTerms": [
+        "autofiktion",
+        "autobiografie",
+        "ich"
+      ],
+      "active": true
+    },
+    {
+      "id": "memoir",
+      "name": "Memoir",
+      "englishName": "Memoir",
+      "category": "Biografie und Sachbuch",
+      "description": "Erinnerungen und persönliche Erfahrungen bilden die Erzählbasis.",
+      "searchTerms": [
+        "memoir",
+        "erinnerung",
+        "persönlich"
+      ],
+      "active": true
+    },
+    {
+      "id": "narrative-nonfiction",
+      "name": "Erzählendes Sachbuch",
+      "englishName": "Erzählendes Sachbuch",
+      "category": "Biografie und Sachbuch",
+      "description": "Reale Informationen werden mit erzählerischen Mitteln vermittelt.",
+      "searchTerms": [
+        "erzählendes sachbuch",
+        "sachbuch",
+        "real"
+      ],
+      "active": true
+    },
+    {
+      "id": "magical-realism",
+      "name": "Magischer Realismus",
+      "englishName": "Magischer Realismus",
+      "category": "Gegenwart und Gesellschaft",
+      "description": "Ungewöhnliche Elemente erscheinen selbstverständlich in einer realistischen Welt.",
+      "searchTerms": [
+        "magischer realismus",
+        "realität",
+        "ungewöhnlich"
+      ],
+      "active": true
+    },
+    {
+      "id": "mythic-fiction",
+      "name": "Mythische Fiktion",
+      "englishName": "Mythische Fiktion",
+      "category": "Fantasy",
+      "description": "Mythen und archetypische Muster strukturieren die Erzählung.",
+      "searchTerms": [
+        "mythische fiktion",
+        "mythos",
+        "archetyp"
+      ],
+      "active": true
+    },
+    {
+      "id": "historical-mystery",
+      "name": "Historisches Mystery",
+      "englishName": "Historisches Mystery",
+      "category": "Historisch",
+      "description": "Rätselhandlung in einem historischen Umfeld.",
+      "searchTerms": [
+        "historisches mystery",
+        "rätsel",
+        "geschichte"
+      ],
+      "active": true
+    },
+    {
+      "id": "crime-drama",
+      "name": "Kriminaldrama",
+      "englishName": "Kriminaldrama",
+      "category": "Krimi und Thriller",
+      "description": "Kriminalität verbindet sich mit tiefem persönlichem oder sozialem Konflikt.",
+      "searchTerms": [
+        "kriminaldrama",
+        "verbrechen",
+        "drama"
+      ],
+      "active": true
+    }
+  ]
+}

@@ -1805,6 +1805,68 @@ fn validate_longform_result_for_task(
     Ok(value)
 }
 
+fn validate_genre_result(result: &Value, request: &Value) -> Result<Value, CodexError> {
+    let object = result.as_object().ok_or_else(|| {
+        CodexError::new(
+            "CODEX_SCHEMA_VALIDATION_FAILED",
+            "Genre-Ergebnis ist kein Objekt.",
+        )
+    })?;
+    let catalog = request
+        .pointer("/catalog")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            CodexError::new(
+                "CODEX_SCHEMA_VALIDATION_FAILED",
+                "Der Genre-Katalog fehlt im Request.",
+            )
+        })?;
+    let valid = |id: &str| {
+        catalog.iter().any(|entry| {
+            entry.get("id").and_then(Value::as_str) == Some(id)
+                && entry.get("active").and_then(Value::as_bool) == Some(true)
+        })
+    };
+    if let Some(id) = object.get("primaryGenreId").and_then(Value::as_str) {
+        if !valid(id) {
+            return Err(CodexError::new(
+                "CODEX_SCHEMA_VALIDATION_FAILED",
+                "Unbekannte Hauptgenre-ID.",
+            ));
+        }
+    }
+    for id in object
+        .get("secondaryGenreIds")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        if !valid(id) {
+            return Err(CodexError::new(
+                "CODEX_SCHEMA_VALIDATION_FAILED",
+                "Unbekannte Nebengenre-ID.",
+            ));
+        }
+    }
+    for alternative in object
+        .get("alternativeGenres")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(id) = alternative.get("genreId").and_then(Value::as_str) {
+            if !valid(id) {
+                return Err(CodexError::new(
+                    "CODEX_SCHEMA_VALIDATION_FAILED",
+                    "Unbekannte alternative Genre-ID.",
+                ));
+            }
+        }
+    }
+    Ok(result.clone())
+}
+
 pub fn validate_chat_result(result: &Value, request: &Value) -> Result<Value, CodexError> {
     let object = result.as_object().ok_or_else(|| {
         CodexError::new(
@@ -2146,6 +2208,7 @@ pub fn run_task(
         CodexTaskKind::AnalyzeContinuityPassage => {
             validate_continuity_result(&raw, &input.request_json)?
         }
+        CodexTaskKind::DetectBookGenre => validate_genre_result(&raw, &input.request_json)?,
         CodexTaskKind::AnalyzeManuscriptStructure => {
             validate_longform_result_for_task(&raw, &input.task_kind)?
         }
@@ -2162,7 +2225,6 @@ pub fn run_task(
         | CodexTaskKind::GlobalCountercheck
         | CodexTaskKind::AnalyzeLoreDraft
         | CodexTaskKind::BuildLoreSheet
-        | CodexTaskKind::DetectBookGenre
         | CodexTaskKind::PlanChapterDraft
         | CodexTaskKind::DraftChapterSection
         | CodexTaskKind::ReviewChapterSection
