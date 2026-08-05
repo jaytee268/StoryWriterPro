@@ -2452,6 +2452,7 @@ pub struct CharacterMemoryUpdateRun {
     pub scene_id: String,
     pub content_hash: String,
     pub extractor_id: String,
+    pub manuscript_job_id: Option<String>,
     pub analyzed_content: String,
     pub status: String,
     pub created_at: String,
@@ -2465,6 +2466,8 @@ pub struct CreateCharacterMemoryUpdateRunInput {
     pub scene_id: String,
     pub content_hash: String,
     pub extractor_id: String,
+    #[serde(default)]
+    pub manuscript_job_id: Option<String>,
     #[serde(default)]
     pub analyzed_content: String,
 }

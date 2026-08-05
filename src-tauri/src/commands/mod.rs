@@ -6858,6 +6858,40 @@ pub fn review_plot_thread_lifecycle_proposal(
 fn validate_character(db: &Connection, project_id: &str, character_id: &str) -> Result<(), String> {
     project_entity_exists(db, project_id, character_id, Some("character"))
 }
+fn validate_character_or_provisional(
+    db: &Connection,
+    project_id: &str,
+    job_id: Option<&str>,
+    character_id: &str,
+) -> Result<(), String> {
+    if project_entity_exists(db, project_id, character_id, Some("character")).is_ok() {
+        return Ok(());
+    }
+    if let Some(job_id) = job_id {
+        let valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM provisional_entities WHERE id=?1 AND job_id=?2 AND project_id=?3 AND entity_type='character')", params![character_id, job_id, project_id], |row| row.get(0)).map_err(|e| sql_error("Provisorische Figur konnte nicht geprüft werden", e))?;
+        if valid {
+            return Ok(());
+        }
+    }
+    Err("Die Figur gehört nicht zum Projekt oder zum Analysejob.".into())
+}
+fn validate_entity_or_provisional(
+    db: &Connection,
+    project_id: &str,
+    job_id: Option<&str>,
+    entity_id: &str,
+) -> Result<(), String> {
+    if project_entity_exists(db, project_id, entity_id, None).is_ok() {
+        return Ok(());
+    }
+    if let Some(job_id) = job_id {
+        let valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM provisional_entities WHERE id=?1 AND job_id=?2 AND project_id=?3)", params![entity_id, job_id, project_id], |row| row.get(0)).map_err(|e| sql_error("Provisorische Entität konnte nicht geprüft werden", e))?;
+        if valid {
+            return Ok(());
+        }
+    }
+    Err("Die Entität gehört nicht zum Projekt oder zum Analysejob.".into())
+}
 fn validate_scene_project(db: &Connection, project_id: &str, scene_id: &str) -> Result<(), String> {
     let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM scenes JOIN chapters ON chapters.id=scenes.chapter_id JOIN books ON books.id=chapters.book_id WHERE scenes.id=?1 AND books.project_id=?2)", params![scene_id, project_id], |row| row.get(0)).map_err(|error| sql_error("Szene konnte nicht geprüft werden", error))?;
     if exists {
@@ -6933,6 +6967,7 @@ fn validate_memory_payload_tx(
     payload: &serde_json::Value,
     subject: Option<&str>,
     related: Option<&str>,
+    job_id: Option<&str>,
 ) -> Result<(), String> {
     let subject_id = subject.or_else(|| {
         payload
@@ -6940,14 +6975,14 @@ fn validate_memory_payload_tx(
             .and_then(|value| value.as_str())
     });
     if let Some(id) = subject_id {
-        validate_character(tx, project_id, id)?;
+        validate_character_or_provisional(tx, project_id, job_id, id)?;
     }
     if let Some(id) = related.or_else(|| {
         payload
             .get("relatedCharacterId")
             .and_then(|value| value.as_str())
     }) {
-        validate_character(tx, project_id, id)?;
+        validate_character_or_provisional(tx, project_id, job_id, id)?;
     }
     match kind {
         "voice_pattern" => {
@@ -7009,7 +7044,7 @@ fn validate_memory_payload_tx(
                     .get("characterId")
                     .and_then(|v| v.as_str())
                     .ok_or("Ungültiger Dialogteilnehmer.")?;
-                validate_character(tx, project_id, id)?;
+                validate_character_or_provisional(tx, project_id, job_id, id)?;
                 let role = participant
                     .get("role")
                     .and_then(|v| v.as_str())
@@ -7042,7 +7077,7 @@ fn validate_memory_payload_tx(
                 .get("factEntityId")
                 .and_then(|v| v.as_str())
                 .ok_or("Der Wissensfakt fehlt.")?;
-            project_entity_exists(tx, project_id, fact, None)?;
+            validate_entity_or_provisional(tx, project_id, job_id, fact)?;
             validate_knowledge_state(
                 payload
                     .get("knowledgeState")
@@ -7210,11 +7245,12 @@ fn memory_run_from_row(row: &rusqlite::Row<'_>) -> SqlResult<CharacterMemoryUpda
         scene_id: row.get(2)?,
         content_hash: row.get(3)?,
         extractor_id: row.get(4)?,
-        analyzed_content: row.get(5)?,
-        status: row.get(6)?,
-        created_at: row.get(7)?,
-        completed_at: row.get(8)?,
-        error_message: row.get(9)?,
+        manuscript_job_id: row.get(5)?,
+        analyzed_content: row.get(6)?,
+        status: row.get(7)?,
+        created_at: row.get(8)?,
+        completed_at: row.get(9)?,
+        error_message: row.get(10)?,
     })
 }
 fn memory_proposal_from_row(row: &rusqlite::Row<'_>) -> SqlResult<CharacterMemoryProposal> {
@@ -7755,13 +7791,25 @@ pub fn create_character_memory_update_run(
 ) -> Result<CharacterMemoryUpdateRun, String> {
     let db = lock_db(&state)?;
     validate_scene_project(&db, &input.project_id, &input.scene_id)?;
+    if let Some(job_id) = &input.manuscript_job_id {
+        let job_project: String = db
+            .query_row(
+                "SELECT project_id FROM manuscript_analysis_jobs WHERE id=?1",
+                params![job_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| sql_error("Manuskriptanalysejob konnte nicht geprüft werden", e))?;
+        if job_project != input.project_id {
+            return Err("Character-Memory-Run gehört nicht zum Projektjob.".into());
+        }
+    }
     required(&input.content_hash, "Der Content-Hash")?;
     required(&input.extractor_id, "Der Extractor")?;
-    if let Some(existing)=db.query_row("SELECT id,project_id,scene_id,content_hash,extractor_id,analyzed_content,status,created_at,completed_at,error_message FROM character_memory_update_runs WHERE project_id=?1 AND scene_id=?2 AND content_hash=?3 AND extractor_id=?4 AND status IN ('completed','reviewed') ORDER BY created_at DESC LIMIT 1",params![input.project_id,input.scene_id,input.content_hash,input.extractor_id],memory_run_from_row).optional().map_err(|e|sql_error("Character-Memory-Run konnte nicht geprüft werden",e))? { return Ok(existing); }
+    if let Some(existing)=db.query_row("SELECT id,project_id,scene_id,content_hash,extractor_id,manuscript_job_id,analyzed_content,status,created_at,completed_at,error_message FROM character_memory_update_runs WHERE project_id=?1 AND scene_id=?2 AND content_hash=?3 AND extractor_id=?4 AND status IN ('completed','reviewed') AND (?5 IS NULL OR manuscript_job_id=?5) ORDER BY created_at DESC LIMIT 1",params![input.project_id,input.scene_id,input.content_hash,input.extractor_id,input.manuscript_job_id],memory_run_from_row).optional().map_err(|e|sql_error("Character-Memory-Run konnte nicht geprüft werden",e))? { return Ok(existing); }
     let id = new_id();
     let stamp = now();
-    db.execute("INSERT INTO character_memory_update_runs(id,project_id,scene_id,content_hash,extractor_id,analyzed_content,status,created_at) VALUES(?1,?2,?3,?4,?5,?6,'pending',?7)",params![id,input.project_id,input.scene_id,input.content_hash,input.extractor_id,input.analyzed_content,stamp]).map_err(|e|sql_error("Character-Memory-Run konnte nicht angelegt werden",e))?;
-    db.query_row("SELECT id,project_id,scene_id,content_hash,extractor_id,analyzed_content,status,created_at,completed_at,error_message FROM character_memory_update_runs WHERE id=?1",params![id],memory_run_from_row).map_err(|e|sql_error("Character-Memory-Run konnte nicht geladen werden",e))
+    db.execute("INSERT INTO character_memory_update_runs(id,project_id,scene_id,content_hash,extractor_id,manuscript_job_id,analyzed_content,status,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,'pending',?8)",params![id,input.project_id,input.scene_id,input.content_hash,input.extractor_id,input.manuscript_job_id,input.analyzed_content,stamp]).map_err(|e|sql_error("Character-Memory-Run konnte nicht angelegt werden",e))?;
+    db.query_row("SELECT id,project_id,scene_id,content_hash,extractor_id,manuscript_job_id,analyzed_content,status,created_at,completed_at,error_message FROM character_memory_update_runs WHERE id=?1",params![id],memory_run_from_row).map_err(|e|sql_error("Character-Memory-Run konnte nicht geladen werden",e))
 }
 #[tauri::command]
 pub fn list_character_memory_update_runs(
@@ -7770,7 +7818,7 @@ pub fn list_character_memory_update_runs(
     scene_id: Option<String>,
 ) -> Result<Vec<CharacterMemoryUpdateRun>, String> {
     let db = lock_db(&state)?;
-    let mut stmt=db.prepare("SELECT id,project_id,scene_id,content_hash,extractor_id,analyzed_content,status,created_at,completed_at,error_message FROM character_memory_update_runs WHERE project_id=?1 AND (?2 IS NULL OR scene_id=?2) ORDER BY created_at DESC").map_err(|e|sql_error("Character-Memory-Runs konnten nicht geladen werden",e))?;
+    let mut stmt=db.prepare("SELECT id,project_id,scene_id,content_hash,extractor_id,manuscript_job_id,analyzed_content,status,created_at,completed_at,error_message FROM character_memory_update_runs WHERE project_id=?1 AND (?2 IS NULL OR scene_id=?2) ORDER BY created_at DESC").map_err(|e|sql_error("Character-Memory-Runs konnten nicht geladen werden",e))?;
     let rows = stmt
         .query_map(params![project_id, scene_id], memory_run_from_row)
         .map_err(|e| sql_error("Character-Memory-Runs konnten nicht geladen werden", e))?
@@ -7788,11 +7836,11 @@ pub fn save_character_memory_proposals(
         return Err("Maximal 100 Charaktergedächtnis-Vorschläge pro Lauf sind erlaubt.".into());
     }
     let db = lock_db(&state)?;
-    let run: (String, String, String, String) = db
+    let run: (String, String, String, String, Option<String>) = db
         .query_row(
-            "SELECT project_id,scene_id,status,content_hash FROM character_memory_update_runs WHERE id=?1",
+            "SELECT project_id,scene_id,status,content_hash,manuscript_job_id FROM character_memory_update_runs WHERE id=?1",
             params![run_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )
         .map_err(|e| sql_error("Character-Memory-Run wurde nicht gefunden", e))?;
     let tx = db
@@ -7811,13 +7859,13 @@ pub fn save_character_memory_proposals(
             return Err("Jeder belegte Vorschlag benötigt eine Evidence-Passage.".into());
         }
         if let Some(id) = &p.subject_character_id {
-            validate_character(&tx, &run.0, id)?;
+            validate_character_or_provisional(&tx, &run.0, run.4.as_deref(), id)?;
         }
         if let Some(id) = &p.related_character_id {
-            validate_character(&tx, &run.0, id)?;
+            validate_character_or_provisional(&tx, &run.0, run.4.as_deref(), id)?;
         }
         if let Some(id) = &p.target_entity_id {
-            project_entity_exists(&tx, &run.0, id, None)?;
+            validate_entity_or_provisional(&tx, &run.0, run.4.as_deref(), id)?;
         }
         validate_memory_payload_tx(
             &tx,
@@ -7826,6 +7874,7 @@ pub fn save_character_memory_proposals(
             &p.payload,
             p.subject_character_id.as_deref(),
             p.related_character_id.as_deref(),
+            run.4.as_deref(),
         )?;
         let payload = serde_json::to_string(&p.payload)
             .map_err(|e| format!("Proposal-Payload ist ungültig: {e}"))?;
@@ -7879,6 +7928,7 @@ type CharacterMemoryReviewRow = (
     String,
     Option<i64>,
     Option<i64>,
+    Option<String>,
 );
 
 #[tauri::command]
@@ -7887,13 +7937,21 @@ pub fn review_character_memory_proposal(
     input: ReviewCharacterMemoryProposalInput,
 ) -> Result<CharacterMemoryProposal, String> {
     let db = lock_db(&state)?;
-    let current: CharacterMemoryReviewRow = db.query_row("SELECT project_id,scene_id,proposal_kind,review_status,payload_json,subject_character_id,related_character_id,target_entity_id,evidence_excerpt,analyzed_content_hash,start_offset,end_offset FROM character_memory_proposals WHERE id=?1",params![input.proposal_id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?,row.get(8)?,row.get(9)?,row.get(10)?,row.get(11)?))).map_err(|e|sql_error("Character-Memory-Proposal wurde nicht gefunden",e))?;
+    let current: CharacterMemoryReviewRow = db.query_row("SELECT p.project_id,p.scene_id,p.proposal_kind,p.review_status,p.payload_json,p.subject_character_id,p.related_character_id,p.target_entity_id,p.evidence_excerpt,p.analyzed_content_hash,p.start_offset,p.end_offset,r.manuscript_job_id FROM character_memory_proposals p JOIN character_memory_update_runs r ON r.id=p.run_id WHERE p.id=?1",params![input.proposal_id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?,row.get(8)?,row.get(9)?,row.get(10)?,row.get(11)?,row.get(12)?))).map_err(|e|sql_error("Character-Memory-Proposal wurde nicht gefunden",e))?;
     if current.3 != "pending" {
         return Err("Dieser Character-Memory-Vorschlag wurde bereits geprüft.".into());
     }
     let status = input.review_status.clone();
     if !matches!(status.as_str(), "accepted" | "edited" | "rejected") {
         return Err("Ungültiger Review-Status.".into());
+    }
+    if status != "rejected" {
+        let provisional: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM provisional_entities WHERE id IN (?1,?2,?3) AND job_id=?4 AND project_id=?5)", params![current.5, current.6, current.7, current.12, current.0], |row| row.get(0)).map_err(|e| sql_error("Provisorische Character-Memory-Referenz konnte nicht geprüft werden", e))?;
+        if provisional {
+            return Err(
+                "Materialisiere oder merge zuerst die zugehörige Figur oder Entität.".into(),
+            );
+        }
     }
     let tx = db
         .unchecked_transaction()
@@ -7915,6 +7973,7 @@ pub fn review_character_memory_proposal(
             &payload,
             current.5.as_deref(),
             current.6.as_deref(),
+            current.12.as_deref(),
         )?;
         accepted = Some(apply_memory_payload(
             &tx,
@@ -8066,7 +8125,7 @@ pub fn complete_character_memory_review(
         return Err("Bitte prüfe zuerst alle Charaktergedächtnis-Vorschläge.".into());
     }
     db.execute("UPDATE character_memory_update_runs SET status='reviewed',completed_at=COALESCE(completed_at,?1) WHERE id=?2",params![now(),run_id]).map_err(|e|sql_error("Character-Memory-Run konnte nicht abgeschlossen werden",e))?;
-    db.query_row("SELECT id,project_id,scene_id,content_hash,extractor_id,analyzed_content,status,created_at,completed_at,error_message FROM character_memory_update_runs WHERE id=?1",params![run_id],memory_run_from_row).map_err(|e|sql_error("Character-Memory-Run konnte nicht geladen werden",e))
+    db.query_row("SELECT id,project_id,scene_id,content_hash,extractor_id,manuscript_job_id,analyzed_content,status,created_at,completed_at,error_message FROM character_memory_update_runs WHERE id=?1",params![run_id],memory_run_from_row).map_err(|e|sql_error("Character-Memory-Run konnte nicht geladen werden",e))
 }
 
 fn json_array<T: serde::de::DeserializeOwned>(value: String) -> Result<Vec<T>, String> {

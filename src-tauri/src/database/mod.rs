@@ -666,6 +666,17 @@ pub fn initialize_connection(connection: &Connection) -> Result<()> {
         connection.execute_batch(include_str!("../../../migrations/032_book_genres.sql"))?;
         connection.execute("INSERT INTO schema_migrations (version) VALUES (32)", [])?;
     }
+    let has_job_bound_memory_runs: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 33",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_job_bound_memory_runs == 0 {
+        connection.execute_batch(include_str!(
+            "../../../migrations/033_job_bound_character_memory_runs.sql"
+        ))?;
+        connection.execute("INSERT INTO schema_migrations (version) VALUES (33)", [])?;
+    }
     Ok(())
 }
 

@@ -392,7 +392,7 @@ export class ManuscriptAnalysisController {
     await this.repository.updateManuscriptAnalysisUnit({ id: unit.id, status: 'running', requestedProvider: provider.id, promptVersion: PROMPT_VERSION, inputHash: contentHash(currentContent), errorMessage: undefined, errorCode: undefined });
     const contextBuilder = new DeterministicProjectContextBuilder(this.repository);
     const context = await contextBuilder.build({ projectId: workspace.project.id, currentChapterId: chapter.id, currentSceneId: scene.id, userQuestion: currentContent, includeProposedSummaries: true, passageText: currentContent, passageStartOffset: unit.startOffset, passageEndOffset: unit.endOffset });
-    const run = await this.repository.createCharacterMemoryUpdateRun({ projectId: workspace.project.id, sceneId: scene.id, contentHash: contentHash(currentContent), extractorId: provider.id, analyzedContent: currentContent });
+    const run = await this.repository.createCharacterMemoryUpdateRun({ projectId: workspace.project.id, sceneId: scene.id, manuscriptJobId: this.jobId, contentHash: contentHash(currentContent), extractorId: provider.id, analyzedContent: currentContent });
     const sources = await this.repository.listSourceReferences(workspace.project.id);
     const availableEntities = entitiesAtOrBefore(workspace.entities, sources, workspace.chapters, unit);
     const characters = availableEntities.filter((entity) => entity.type === 'character');
@@ -451,7 +451,7 @@ export class ManuscriptAnalysisController {
       const order = orderByUnit.get(mention.passageUnitId);
       if (order !== undefined && (includeCurrent ? order <= orderIndex : order < orderIndex) && mention.resolvedProvisionalEntityId && (!firstOrder.has(mention.resolvedProvisionalEntityId) || order < firstOrder.get(mention.resolvedProvisionalEntityId)!)) firstOrder.set(mention.resolvedProvisionalEntityId, order);
     }
-    return entities.filter((entity) => (firstOrder.get(entity.id) ?? Number.MAX_SAFE_INTEGER) < orderIndex).sort((a, b) => (firstOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (firstOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER)).slice(0, 160);
+    return filterProvisionalEntitiesByOrder(entities, firstOrder, orderIndex, includeCurrent);
   }
 
   private async runChapterSynthesis(job: ManuscriptAnalysisJob, workspace: Awaited<ReturnType<StoryRepository['loadWorkspace']>>, chapters: Chapter[], provider: Provider, timeout: number): Promise<void> {
@@ -529,6 +529,21 @@ export class ManuscriptAnalysisController {
 export function createManuscriptAnalysisUnits(chapters: Chapter[], unitsByChapter: Array<Array<{ text: string; startOffset: number; endOffset: number; page?: number }>>, scenes: Array<{ id: string; chapterId: string }>): CreateManuscriptAnalysisJobInput['units'] {
   let orderIndex = 0;
   return [...chapters].sort((a, b) => a.orderIndex - b.orderIndex).flatMap((chapter, chapterIndex) => { const scene = scenes.find((candidate) => candidate.chapterId === chapter.id); if (!scene) return []; return (unitsByChapter[chapterIndex] ?? []).map((unit) => ({ chapterId: chapter.id, sceneId: scene.id, orderIndex: orderIndex++, pageNumber: unit.page, startOffset: unit.startOffset, endOffset: unit.endOffset, content: unit.text, contentHash: contentHash(unit.text) })); });
+}
+
+/**
+ * Keeps the provisional entity context chronological.  The current passage
+ * is opt-in because entity resolution may publish a first mention immediately
+ * before Bible and Character Memory providers run for that same unit.
+ */
+export function filterProvisionalEntitiesByOrder(entities: ProvisionalEntity[], firstOrder: Map<string, number>, orderIndex: number, includeCurrent = false): ProvisionalEntity[] {
+  return entities
+    .filter((entity) => {
+      const first = firstOrder.get(entity.id);
+      return first !== undefined && (includeCurrent ? first <= orderIndex : first < orderIndex);
+    })
+    .sort((a, b) => (firstOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (firstOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER))
+    .slice(0, 160);
 }
 
 export async function loadManuscriptAnalysisProgress(repository: StoryRepository, jobId: string): Promise<ManuscriptAnalysisProgress> {

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserDemoRepository } from './storyRepository';
-import { ManuscriptAnalysisController, createManuscriptAnalysisUnits } from './manuscriptAnalysis';
+import { ManuscriptAnalysisController, createManuscriptAnalysisUnits, filterProvisionalEntitiesByOrder } from './manuscriptAnalysis';
 import { contentHash } from '../utils/aiText';
 import type { ContinuityAnalysisResult } from '../types/domain';
 import type { ContinuityAnalysisInput, StoryAiProvider } from './aiProviderService';
@@ -30,6 +30,30 @@ async function makeJob(repository: BrowserDemoRepository, importReference: strin
 
 describe('sequenzielle, fortsetzbare Manuskript-Continuity', () => {
   beforeEach(() => values.clear());
+
+  it('gibt die aktuelle vorläufige Figur nur im explizit inklusiven Kontext frei', () => {
+    const entities = [
+      { id: 'prior', jobId: 'job', projectId: 'project', entityType: 'character', canonicalName: 'Vorher', aliases: [], description: '', confidence: .8, reviewStatus: 'proposed', createdAt: '', updatedAt: '' },
+      { id: 'current', jobId: 'job', projectId: 'project', entityType: 'character', canonicalName: 'Jetzt', aliases: [], description: '', confidence: .8, reviewStatus: 'proposed', createdAt: '', updatedAt: '' },
+    ] as never;
+    const firstOrder = new Map([['prior', 1], ['current', 2]]);
+    expect(filterProvisionalEntitiesByOrder(entities, firstOrder, 2).map((item) => item.id)).toEqual(['prior']);
+    expect(filterProvisionalEntitiesByOrder(entities, firstOrder, 2, true).map((item) => item.id)).toEqual(['prior', 'current']);
+  });
+
+  it('speichert jobgebundene Character-Memory-Proposals mit vorläufiger Figur und verlangt Materialisierung vor Review', async () => {
+    const repository = new BrowserDemoRepository();
+    const { workspace, job } = await makeJob(repository, 'provisional-memory');
+    const provisional = await repository.saveProvisionalEntity({ jobId: job.id, projectId: workspace.project.id, entityType: 'character', canonicalName: 'Neue Figur', aliases: [], description: 'Noch nicht kanonisch', confidence: .8, reviewStatus: 'proposed' });
+    const run = await repository.createCharacterMemoryUpdateRun({ projectId: workspace.project.id, sceneId: workspace.chapters[0]!.scenes[0]!.id, manuscriptJobId: job.id, contentHash: 'memory-hash', extractorId: 'codex-cli' });
+    const [proposal] = await repository.saveCharacterMemoryProposals(run.id, [{ proposalKind: 'voice_pattern', subjectCharacterId: provisional.id, payload: { patternType: 'signature_phrase', patternText: 'Das bleibt.', description: '', contextCondition: '' }, classification: 'observable', confidence: .8, evidenceExcerpt: 'Das bleibt.', startOffset: 0, endOffset: 11, reason: 'Fake' }]);
+    await expect(repository.reviewCharacterMemoryProposal({ proposalId: proposal!.id, reviewStatus: 'accepted', decision: 'accept' })).rejects.toThrow('Materialisiere oder merge zuerst');
+    const canonical = await repository.materializeProvisionalEntity({ jobId: job.id, projectId: workspace.project.id, provisionalEntityId: provisional.id, decision: 'accept' });
+    const reviewed = await repository.reviewCharacterMemoryProposal({ proposalId: proposal!.id, reviewStatus: 'accepted', decision: 'accept' });
+    expect(reviewed.reviewStatus).toBe('accepted');
+    expect(reviewed.subjectCharacterId).toBe(canonical.id);
+    expect((await repository.listCharacterVoicePatterns(workspace.project.id, canonical.id)).length).toBe(1);
+  });
 
   it('verarbeitet Einheiten strikt nacheinander und reicht den Draft-Ledger weiter', async () => {
     const repository = new BrowserDemoRepository();
